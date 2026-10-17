@@ -1,0 +1,17 @@
+[package]
+name = "scout-index-native"
+description = "scout's native shard format: mmapped corpus bin + trigram postings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+scout-core.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

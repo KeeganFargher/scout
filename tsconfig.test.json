@@ -15,10 +15,5 @@
     "domains/*/src/**/*.test.ts",
     "packages/*/src/**/*.test.ts"
   ],
-  "references": [
-    { "path": "./packages/kernel" },
-    { "path": "./domains/indexing" },
-    { "path": "./domains/search" },
-    { "path": "./apps/cli" }
-  ]
+  "references": [{ "path": "./packages/kernel" }]
 }

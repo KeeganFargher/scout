@@ -1,0 +1,4 @@
+# Matches the hand-written style the crates started with: wide lines, short
+# expressions kept on one line.
+max_width = 120
+use_small_heuristics = "Max"

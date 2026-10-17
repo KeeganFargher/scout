@@ -1,30 +1,77 @@
 # scout
 
-A codebase search tool. Yarn 4 workspaces, TypeScript 7, oxlint + oxfmt.
+Index many repos once, then grep all of them in milliseconds. Output matches ripgrep's
+(`rg --no-heading --with-filename`). By default results are never stale: files that changed
+since indexing are searched from disk.
 
-## Commands
+```bash
+scout add ~/source/*
+scout index
+scout search -n useLayoutEffect
+scout search --repo api -w 'fn\s+parse_\w+'
+```
 
-| Command                               | What it does                                                   |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `yarn check`                          | Format check, lint, typecheck, tests — run before every commit |
-| `yarn lint` / `yarn lint:fix`         | oxlint (type-aware), warnings fail the run                     |
-| `yarn format` / `yarn format:check`   | oxfmt                                                          |
-| `yarn typecheck`                      | `tsc --build` across all workspaces and tests                  |
-| `yarn test`                           | `node --test` over every `src/**/*.test.ts`                    |
-| `yarn workspace @scout/app-cli start` | Run the CLI                                                    |
+The index lives in `--index-dir`, defaulting to `$SCOUT_INDEX_DIR`, else the platform data
+directory. Search flags follow rg (`-i -S -F -w -n -l -c -m`). Scout adds:
 
-There is no build step for running: Node 24 executes the `.ts` sources directly
-(type stripping), which is why only erasable TS syntax is allowed and relative
-imports use the `.ts` extension.
+- `--freshness strict|off`: `strict` (the default) checks the file tree against the index
+  on every search; `off` trusts the index.
+- `--change-detection journal|scan`: how strict mode finds changes. `journal` reads the
+  NTFS change journal where there is one; `scan` re-lists every indexed directory.
+- `--repo NAME` (repeatable) limits the search to the named repos, and `--stats` prints
+  timings and candidate counts to stderr.
+
+How it works and why: [docs/design.md](docs/design.md). Every optimisation, with numbers:
+[docs/experiments.md](docs/experiments.md).
 
 ## Layout
 
 ```
-packages/kernel      @scout/kernel           shared primitives (bottom layer)
-domains/indexing     @scout/domain-indexing  codebase -> index
-domains/search       @scout/domain-search    query -> results against an index
-apps/cli             @scout/app-cli          composition root, all real I/O
+crates/scout-core          domain model, ports, query planner, search pipeline (no I/O)
+crates/scout-index-native  mmap shard format (corpus bin + unit trigram postings)
+crates/scout-index-sqlite  the same contract on SQLite
+crates/scout-source-fs     local repos: rg-identical walking, snapshots, change journal
+crates/scout-store-fs      shards, snapshots and the catalog in a local directory
+crates/scout-cli           the `scout` binary (composition root)
+crates/scout-bench         benchmark and parity gate against rg
+vendor/ripgrep             upstream ripgrep (git subtree)
+packages/kernel            TypeScript scaffold, reserved for the MCP server
 ```
+
+## Commands
+
+| Command                                           | What it does                                                         |
+| ------------------------------------------------- | -------------------------------------------------------------------- |
+| `cargo clippy --workspace --all-targets --release` | Lints (pedantic, no `unwrap`, `unsafe` only in `win.rs`); must be clean |
+| `cargo test --workspace --release`                | Unit and end-to-end tests                                            |
+| `cargo build --release`                           | Builds `scout` and `scout-bench`                                     |
+| `yarn check`                                      | Format, lint, typecheck and test the TypeScript workspaces           |
+
+### Benchmark
+
+```bash
+target/release/scout-bench --scout target/release/scout --index-dir <dir> --queries bench/queries.tsv --runs 100 --rg-runs 1 --scout-flags="--freshness strict" --label E7-strict --json bench/results/E7-strict.json
+```
+
+For each query it reports the median, p90 and p99 wall time, rg's time, candidates, peak
+memory, and a parity check of scout's output against rg's. Tails are reported only with
+`--runs` of 100 or more. Reindex before benchmarking `--freshness off`: files edited since
+indexing make parity fail, as they should.
+
+## TypeScript workspaces
+
+Yarn 4 workspaces, TypeScript 7, oxlint + oxfmt, reserved for the MCP server, which will
+call the same core as the CLI. Node 24 runs the `.ts` sources directly (type stripping), so
+only erasable TS syntax is allowed and relative imports use the `.ts` extension. Only
+`packages/kernel` exists today; the layer rules below apply as `domains/*` and `apps/*`
+workspaces are added.
+
+| Command                             | What it does                                    |
+| ----------------------------------- | ----------------------------------------------- |
+| `yarn lint` / `yarn lint:fix`       | oxlint (type-aware), warnings fail the run      |
+| `yarn format` / `yarn format:check` | oxfmt                                           |
+| `yarn typecheck`                    | `tsc --build` across all workspaces and tests   |
+| `yarn test`                         | `node --test` over every `src/**/*.test.ts`     |
 
 ## Dependency rules
 

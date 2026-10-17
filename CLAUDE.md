@@ -1,10 +1,22 @@
 # scout
 
-See README.md for layout, commands and the dependency rules between layers.
+See README.md for layout and commands, docs/design.md for the architecture, and
+docs/experiments.md for every performance change and its numbers.
 
-- Run `yarn check` before declaring work done (format, lint, typecheck, tests); it must
-  pass with zero warnings.
+## Rust (crates/)
+
+- `cargo clippy --workspace --all-targets --release` and `cargo test --workspace --release`
+  must both pass before work is declared done.
+- `unsafe` lives only in `crates/scout-source-fs/src/win.rs`, and every block there has a
+  SAFETY comment.
+- A performance change is an experiment. Benchmark it with `scout-bench` (`--runs 100` for
+  p99), keep it only if it wins, and log it in docs/experiments.md either way.
+- The bench parity gate (scout output == rg output) must stay green.
+
+## TypeScript (packages/, future domains/ and apps/)
+
+- Run `yarn check` (format, lint, typecheck, tests); it must pass with zero warnings.
 - Never import across layers against the rules in README.md, and never deep-import a
-  workspace — fix the design (port, kernel, or app wiring) instead of disabling the lint.
+  workspace. Fix the design (port, kernel, or app wiring) instead of disabling the lint.
 - Relative imports use the `.ts` extension; only erasable TS syntax (no enums, namespaces,
   parameter properties).

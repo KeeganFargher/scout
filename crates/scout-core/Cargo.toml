@@ -1,0 +1,22 @@
+[package]
+name = "scout-core"
+description = "Domain model, ports and search engine for scout: indexed multi-repo grep."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+grep-matcher.workspace = true
+grep-printer.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+memchr.workspace = true
+regex-syntax.workspace = true
+serde.workspace = true
+termcolor = "1.4"
+thiserror.workspace = true
+xxhash-rust.workspace = true
+
+[lints]
+workspace = true

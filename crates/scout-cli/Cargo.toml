@@ -1,0 +1,32 @@
+[package]
+name = "scout-cli"
+description = "scout: index many repos once, grep them all in milliseconds."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "scout"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+scout-core.workspace = true
+scout-index-native.workspace = true
+scout-index-sqlite.workspace = true
+scout-source-fs.workspace = true
+scout-store-fs.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,21 @@
+# name<TAB>flags<TAB>pattern. Query classes from docs/design.md.
+literal_rare	-F	useLayoutEffect
+literal_common	-F	function
+literal_none	-F	zqxjvbnm_nothing_here
+literal_long	-F	Licensed under the Apache License
+ident_regex		class \w+Controller
+alternation		TODO|FIXME|HACK
+case_insensitive	-i	todo
+smart_case	-S	import react
+word	-w	main
+short_unindexable		if
+anchored		^import .* from 'react';?$
+date_regex		\d{4}-\d{2}-\d{2}
+email_regex		[\w.]+@[\w]+\.com
+count_mode	-c -F	console.log
+files_mode	-l	useState\(
+rare_regex		fn\s+parse_\w+
+selective_one	-F	SCOUTNI2
+selective_long	-F	FSCTL_READ_UNPRIVILEGED_USN_JOURNAL
+selective_vendored	-F	useSyncExternalStoreWithSelector
+selective_common_trigrams	-F	release_repos

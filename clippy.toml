@@ -1,0 +1,3 @@
+# Tests should panic loudly on unexpected errors.
+allow-unwrap-in-tests = true
+doc-valid-idents = ["SQLite", ".."]
