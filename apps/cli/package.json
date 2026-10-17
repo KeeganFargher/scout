@@ -1,0 +1,17 @@
+{
+  "name": "@scout/app-cli",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "scout": "./src/main.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@scout/domain-indexing": "workspace:*",
+    "@scout/domain-search": "workspace:*",
+    "@scout/kernel": "workspace:*"
+  }
+}

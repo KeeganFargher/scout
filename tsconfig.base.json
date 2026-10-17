@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // Node runs our .ts sources directly via type stripping, so only erasable syntax
+    // is allowed and relative imports must carry the real `.ts` extension. We never emit
+    // JS (only .d.ts), so no `rewriteRelativeImportExtensions`.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "skipLibCheck": false,
+
+    // Composite projects give incremental `tsc --build` and per-workspace .d.ts output.
+    // Note: under TS 7 this does NOT reject imports of unreferenced workspaces; layer
+    // boundaries are enforced by oxlint (`no-restricted-imports` overrides), not tsc.
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    // Without this a failed build still writes .d.ts files, sometimes into another
+    // workspace when an import escapes the project.
+    "noEmitOnError": true,
+
+    // Default to no ambient types. Kernel and domains stay runtime-agnostic (no `node`
+    // globals); only apps opt into `@types/node`.
+    "types": []
+  }
+}

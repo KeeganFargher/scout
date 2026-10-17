@@ -1,0 +1,24 @@
+{
+  // Tests are a separate project because they need `@types/node` (node:test,
+  // node:assert), which the pure layers' own projects deliberately exclude.
+  // It is composite and referenced from the root tsconfig.json so that both
+  // `tsc --build` and oxlint's type-aware rules (which discover files through
+  // references) see test files with real types. Its .d.ts output is throwaway.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": ".tsbuild/tests",
+    "types": ["node"]
+  },
+  "include": [
+    "apps/*/src/**/*.test.ts",
+    "domains/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test.ts"
+  ],
+  "references": [
+    { "path": "./packages/kernel" },
+    { "path": "./domains/indexing" },
+    { "path": "./domains/search" },
+    { "path": "./apps/cli" }
+  ]
+}

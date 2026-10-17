@@ -1,0 +1,216 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise", "node"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "error"
+  },
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": ["**/dist/**", ".tsbuild/**", ".yarn/**"],
+  "rules": {
+    // ── Module boundaries / coupling ───────────────────────────────────────────
+    // Layer rules live in `overrides` below. This base entry only bans deep imports:
+    // a workspace's public API is its `index.ts`, nothing else.
+    "eslint/no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "regex": "^([.][.]/)+(packages|domains|apps)/|^([.][.]/){2,}[^./][^/]*/src/",
+            "message": "Relative imports must not leave the workspace. Import the other workspace by package name."
+          },
+          {
+            "group": ["@scout/*/**"],
+            "message": "Import a workspace through its public entry point only (e.g. '@scout/kernel')."
+          }
+        ]
+      }
+    ],
+    "import/no-cycle": ["error", { "ignoreTypes": false }],
+    "import/no-self-import": "error",
+    // Fan-out cap: a module needing many collaborators is usually doing too much.
+    "import/max-dependencies": ["error", { "max": 10, "ignoreTypeImports": true }],
+    "import/no-default-export": "error",
+    "import/no-mutable-exports": "error",
+    "import/no-commonjs": "error",
+    "import/no-dynamic-require": "error",
+    "import/no-absolute-path": "error",
+    "import/no-duplicates": "error",
+    "import/first": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/consistent-type-exports": "error",
+    "typescript/explicit-module-boundary-types": "error",
+    "node/no-process-env": "error",
+
+    // ── Cohesion / size ────────────────────────────────────────────────────────
+    "max-lines": ["error", { "max": 300, "skipBlankLines": true, "skipComments": true }],
+    "max-lines-per-function": [
+      "error",
+      { "max": 60, "skipBlankLines": true, "skipComments": true }
+    ],
+    "complexity": ["error", 10],
+    "max-depth": ["error", 3],
+    // Beyond three positional args, pass a named options object.
+    "max-params": ["error", 3],
+    "max-nested-callbacks": ["error", 3],
+    "max-classes-per-file": ["error", 1],
+
+    // ── Type safety ────────────────────────────────────────────────────────────
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/no-namespace": "error",
+    // `/// <reference types="node" />` would silently undo `types: []` in pure layers.
+    "typescript/triple-slash-reference": [
+      "error",
+      { "types": "never", "path": "never", "lib": "never" }
+    ],
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/return-await": ["error", "always"],
+    "typescript/switch-exhaustiveness-check": "error",
+    // Defaults allow truthiness checks on strings, numbers and nullable objects; we want
+    // every condition to be an explicit boolean so "empty" vs "missing" is never conflated.
+    "typescript/strict-boolean-expressions": [
+      "error",
+      { "allowString": false, "allowNumber": false, "allowNullableObject": false }
+    ],
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+
+    // ── Errors must surface, never be swallowed ────────────────────────────────
+    "eslint/no-empty": ["error", { "allowEmptyCatch": false }],
+    "promise/catch-or-return": "error",
+    "unicorn/prefer-type-error": "error",
+    // Set `process.exitCode` instead so pending I/O (stdout, logs) is flushed before exit.
+    "unicorn/no-process-exit": "error",
+
+    // ── General hygiene ────────────────────────────────────────────────────────
+    "eslint/eqeqeq": ["error", "always"],
+    "eslint/curly": ["error", "all"],
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+    "eslint/no-param-reassign": ["error", { "props": true }],
+    "eslint/no-nested-ternary": "error",
+    "eslint/no-else-return": "error",
+    "eslint/no-implicit-coercion": "error",
+    "eslint/no-console": "error",
+    "unicorn/filename-case": ["error", { "case": "kebabCase" }],
+    "unicorn/prefer-node-protocol": "error"
+  },
+  "overrides": [
+    {
+      // `packages/*` (the kernel and any future shared library) is the bottom layer:
+      // depends on no other workspace and no runtime, so every layer above can use it.
+      "files": ["packages/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^([.][.]/)+(packages|domains|apps)/|^([.][.]/){2,}[^./][^/]*/src/",
+                "message": "Relative imports must not leave the workspace. Import the other workspace by package name."
+              },
+              {
+                "group": ["@scout/*"],
+                "message": "Shared packages are the bottom layer and must not depend on other workspaces."
+              }
+            ]
+          }
+        ],
+        "import/no-nodejs-modules": "error"
+      }
+    },
+    {
+      // Domains are independent bounded contexts. They may use the kernel only:
+      // no sibling domains (integrate them in an app) and no apps (dependencies
+      // point inward). They stay pure — I/O is injected from the app via ports.
+      "files": ["domains/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^([.][.]/)+(packages|domains|apps)/|^([.][.]/){2,}[^./][^/]*/src/",
+                "message": "Relative imports must not leave the workspace. Import the other workspace by package name."
+              },
+              {
+                "group": ["@scout/*/**"],
+                "message": "Import a workspace through its public entry point only (e.g. '@scout/kernel')."
+              },
+              {
+                "group": ["@scout/domain-*"],
+                "message": "Domains must not depend on each other. Compose them in an app, or move the shared concept into the kernel."
+              },
+              {
+                "group": ["@scout/app-*"],
+                "message": "Domains must not depend on apps; dependencies point inward."
+              }
+            ]
+          }
+        ],
+        "import/no-nodejs-modules": "error"
+      }
+    },
+    {
+      // Apps are composition roots: they may depend on any domain and the kernel,
+      // but never on another app.
+      "files": ["apps/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^([.][.]/)+(packages|domains|apps)/|^([.][.]/){2,}[^./][^/]*/src/",
+                "message": "Relative imports must not leave the workspace. Import the other workspace by package name."
+              },
+              {
+                "group": ["@scout/*/**"],
+                "message": "Import a workspace through its public entry point only (e.g. '@scout/kernel')."
+              },
+              {
+                "group": ["@scout/app-*"],
+                "message": "Apps must not depend on other apps. Extract the shared code into a domain or the kernel."
+              }
+            ]
+          }
+        ],
+        // Apps are where config is read; domains receive values, never `process.env`.
+        "node/no-process-env": "off"
+      }
+    },
+    {
+      // Tests may use Node (node:test, node:assert, fixtures on disk) even in pure layers,
+      // and describe/it nesting naturally produces long, callback-heavy functions.
+      // node:test's test()/describe() return promises the runner already awaits.
+      "files": ["**/*.test.ts"],
+      "rules": {
+        "import/no-nodejs-modules": "off",
+        "max-lines-per-function": "off",
+        "max-nested-callbacks": ["error", 4],
+        "typescript/no-floating-promises": "off"
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/kernel"
+    },
+    {
+      "path": "./domains/indexing"
+    },
+    {
+      "path": "./domains/search"
+    },
+    {
+      "path": "./apps/cli"
+    },
+    {
+      "path": "./tsconfig.test.json"
+    }
+  ]
+}
