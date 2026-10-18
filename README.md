@@ -39,19 +39,23 @@ included), the indexing budget is a quarter of usable RAM (capped at 4 GiB; a co
 or systemd unit's cgroup memory limit counts, not the host's RAM; where scout cannot see its
 own cgroup, as in a cgroup v1 container without its own namespace, it stops and asks for
 `--memory-mb`), and the index is mmapped, so it does not have to
-fit in memory. Measured with 137 repos (54k files, 1.1 GiB index):
+fit in memory. Measured with 137 repos (54k files, a 1.0 GiB / 1.07 GB index):
 
-- **1 CPU / 2 GiB** works: indexing 16 s at a 130 MiB peak, selective searches 9–17 ms,
-  about 29 served searches a second.
-- **2–4 CPUs / 4 GiB** is the sweet spot: selective searches at
-  5–7 ms served, and at 4 CPUs a p99 of 26 ms with one client and about 85 searches a
-  second under load.
+- **1 CPU / 2 GiB** works: indexing 16 s at a 130 MiB peak, selective searches 2–7 ms
+  served (12–24 ms as a fresh CLI process), about 29 served searches a second.
+- **2–4 CPUs / 4 GiB** is the sweet spot: at 4 CPUs a p99 of 26 ms with one client and
+  about 85 searches a second under load.
 - **More cores** keep paying for broad scans and concurrent clients (8 CPUs: ~103 served
-  searches a second); selective searches are already as fast as they get.
+  searches a second); a single selective search is as fast at 4 CPUs as at 12.
 
-Keep the index (and the mirrors, for hosted sync) on local SSD or EBS gp3, and give the page
-cache room for the index: about 1.3x the size of the files it indexes (1.1 GiB for 854 MiB
-here). Full tables: [docs/design.md](docs/design.md), "Measured on small and large machines".
+Memory is the number that matters most: give the page cache room for the **whole index**
+(about 1.2x the size of the files it indexes; 1.07 GB for 854 MiB here). With the index
+cached, served searches stay at a 36–40 ms geomean at 1 CPU; with ~94% of it cached they are
+5.6x slower, with ~70% 27x. A query that finds the index cold costs 1–4 s on any CPU count,
+because it waits on one or two random disk reads per repo shard, so put the index on a disk
+with low read latency (local NVMe or EBS gp3, not a burstable instance's baseline EBS
+bandwidth). Full tables: [docs/design.md](docs/design.md), "Measured on small and large
+machines", and [docs/experiments.md](docs/experiments.md), E21.
 
 How it works and why: [docs/design.md](docs/design.md). Every optimisation, with numbers:
 [docs/experiments.md](docs/experiments.md).
@@ -60,7 +64,7 @@ How it works and why: [docs/design.md](docs/design.md). Every optimisation, with
 
 ```
 crates/scout-core          domain model, ports, query planner, search pipeline (no I/O)
-crates/scout-index-native  mmap shard format (corpus bin + unit trigram postings)
+crates/scout-index-native  mmap shard format (corpus bin, unit trigram postings, trigram filter)
 crates/scout-index-sqlite  the same contract on SQLite
 crates/scout-source-fs     local repos: rg-identical walking, snapshots, change journal
 crates/scout-store-fs      shards, snapshots and the catalog in a local directory
@@ -97,7 +101,9 @@ re-checked.
 ### Ranking evaluation
 
 `scout search --rank --top N` prints the N best files first ([docs/ranking.md](docs/ranking.md)).
-Its quality is measured against hand-labelled judgments in [bench/golden](bench/golden/README.md):
+Its quality is measured against hand-labelled judgments in `bench/golden/`, which is not
+published: its labels are paths in the author's own projects ([docs/ranking.md](docs/ranking.md),
+"Evaluation", describes the set):
 
 ```bash
 target/release/scout-rank-eval --dumps <dir> dump --scout target/release/scout --index-dir <dir>

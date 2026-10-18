@@ -160,7 +160,7 @@ Starting weights:
   - Stratify by Sadowski intent: how, what, where, why.
   - Stratify by form: single identifier, multi-term, regex, path-ish, natural-language-ish.
   - Include about 20 known-item queries ("I want file X").
-- **Pooling:** take the union of the top 20 from rg order, priors-only, BM25-only and v1, so labels are not biased toward one ranker. (Superseded: the golden set pools the top 10 of five rankers, see bench/golden/README.md.)
+- **Pooling:** take the union of the top 20 from rg order, priors-only, BM25-only and v1, so labels are not biased toward one ranker. (Superseded: the golden set pools the top 10 of five rankers, see ranking.md, "Evaluation".)
 - **Labels:** file level, 0–3 as in CodeSearchNet.
   - 3 = the target or definition, 2 = a useful usage, 1 = related, 0 = noise.
   - An LLM pre-labeller is fine if a human audits about 20% and agreement (κ) is checked.

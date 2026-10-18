@@ -16,6 +16,7 @@ use scout_core::ports::ShardStore;
 use scout_core::rank::Weights;
 use scout_core::ranked::{RankOptions, search_ranked};
 use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search};
+use scout_index_native::FilterHome;
 use scout_source_fs::{ChangeDetection, FsContext};
 use scout_store_fs::FsStore;
 use scout_sync::Token;
@@ -202,7 +203,7 @@ fn open_generation(store: &FsStore, catalog: Catalog, id: u64, threads: usize) -
     } else {
         // Off-mode searches never look at the working copy, so change detection is moot.
         let ctx = Arc::new(FsContext::new(ChangeDetection::Scan));
-        crate::open_repos(store, &catalog, &indexed, threads, false, &ctx)?
+        crate::open_repos(store, &catalog, &indexed, threads, false, &ctx, FilterHome::Heap)?
     };
     Ok(Generation { id, catalog, repos })
 }

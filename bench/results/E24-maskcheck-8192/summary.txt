@@ -1,0 +1,9 @@
+read_ahead_kb=8192
+
+## 1 CPU cold: p50 ms base -> e24 (median major faults; median MiB read)
+literal_common                  4086.2 ->    3305.4  x0.809  (180 -> 180; 987.6 -> 976.0)
+literal_none                    1665.3 ->    1609.9  x0.967  (167 -> 167; 580.4 -> 584.8)
+selective_long                  1715.9 ->    1589.8  x0.927  (166 -> 166; 578.2 -> 582.3)
+geomean 2268.6 -> 2037.6 ms, ratio 0.898
+
+parity ALL OK

@@ -1,0 +1,1 @@
+cold sequential read: 1025 MiB in 2.23 s = 460 MiB/s

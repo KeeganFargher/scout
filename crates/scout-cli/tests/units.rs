@@ -35,16 +35,18 @@ fn run(backend: &str) {
     std::fs::create_dir_all(&repo).unwrap();
     // The match sits in the second unit, so its line number must count the lines of the
     // first unit too.
-    std::fs::write(repo.join("big.txt"), format!("alpha\n{}beta needle here\n", filler())).unwrap();
-    // "needle" trigrams are split across units ("nee", "eed" | "edl", "dle"): a doc-level
-    // index would make this a candidate, a unit-level one must not.
-    std::fs::write(repo.join("spread.txt"), format!("need\n{}edle\n", filler())).unwrap();
+    std::fs::write(repo.join("big.txt"), format!("alpha\n{}beta nedl here\n", filler())).unwrap();
+    // "nedl" has two trigrams, split across units ("ned" | "edl"): a doc-level index would
+    // make this a candidate, a unit-level one must not. Both lists must be read for the
+    // split to count; with every list this short the planner's decode budget (E22) always
+    // reads them, and two trigrams leave no other pair it could pick instead.
+    std::fs::write(repo.join("spread.txt"), format!("ned\n{}edl\n", filler())).unwrap();
 
     scout(&index, &["add", repo.to_str().unwrap()]);
     scout(&index, &["index", "--backend", backend]);
-    let (out, err) = scout(&index, &["search", "-n", "--stats", "needle"]);
+    let (out, err) = scout(&index, &["search", "-n", "--stats", "nedl"]);
     let line = 2 + 1300;
-    let expected = format!("{}{}big.txt:{line}:beta needle here\n", repo.display(), std::path::MAIN_SEPARATOR);
+    let expected = format!("{}{}big.txt:{line}:beta nedl here\n", repo.display(), std::path::MAIN_SEPARATOR);
     assert_eq!(out, expected);
     assert_eq!(stat(&err, "candidates"), 1, "{err}");
 }

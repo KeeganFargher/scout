@@ -1,0 +1,49 @@
+{
+  "label": "base-mmap",
+  "repos": 137,
+  "indexed_files": 54301,
+  "content_mb": 853.8786172866821,
+  "index_mb": 1024.6357622146606,
+  "geomean_speedup": 2.194617925999434,
+  "total_scout_ms": 1572.613637,
+  "total_rg_ms": 3445.2433760000004,
+  "all_parity": true,
+  "queries": [
+    {
+      "name": "short_unindexable",
+      "scout_median_ms": 845.3119350000001,
+      "scout_min_ms": 825.26563,
+      "scout_p90_ms": null,
+      "scout_p99_ms": null,
+      "rg_median_ms": 1802.309805,
+      "speedup": 2.132123930085052,
+      "candidates": 54301,
+      "matched_files": 19430,
+      "results": 498452,
+      "parity": true,
+      "missing_in_scout": 0,
+      "extra_in_scout": 0,
+      "reverified_nul_files": 1,
+      "scout_peak_ws_mb": null,
+      "scout_peak_private_mb": null
+    },
+    {
+      "name": "date_regex",
+      "scout_median_ms": 727.301702,
+      "scout_min_ms": 703.757842,
+      "scout_p90_ms": null,
+      "scout_p99_ms": null,
+      "rg_median_ms": 1642.933571,
+      "speedup": 2.2589436632447204,
+      "candidates": 54301,
+      "matched_files": 834,
+      "results": 18106,
+      "parity": true,
+      "missing_in_scout": 0,
+      "extra_in_scout": 0,
+      "reverified_nul_files": 0,
+      "scout_peak_ws_mb": null,
+      "scout_peak_private_mb": null
+    }
+  ]
+}

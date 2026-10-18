@@ -1,13 +1,13 @@
-//! Native shard format (v3).
+//! Native shard format (v5).
 //!
 //! One file per shard, read through `mmap` so the OS decides what stays in RAM. That is
 //! what keeps scout usable on a 2 GB machine with an index far larger than memory.
 //!
 //! ```text
-//! magic    8  b"SCOUTNI3"
-//! header  80  u32 version, u32 doc_count, u32 trigram_count, u32 unit_count,
+//! magic    8  b"SCOUTNI5"
+//! header  88  u32 version, u32 doc_count, u32 trigram_count, u32 unit_count,
 //!             u64 content_off, u64 docs_off, u64 paths_off, u64 units_off, u64 keys_off,
-//!             u64 vals_off, u64 fence_off, u64 postings_off
+//!             u64 vals_off, u64 fence_off, u64 filter_off, u64 postings_off
 //! content     corpus bin: every document's bytes, concatenated
 //! docs        doc_count × 40: u64 content_off, u64 size, u64 mtime_ns,
 //!             u32 content_len, u32 path_off, u32 path_len, u32 pad
@@ -16,6 +16,7 @@
 //! keys        trigram_count × 4, sorted: u32 trigram
 //! vals        trigram_count × 12, same order: u32 unit_count, u64 postings offset
 //! fence       ceil(trigram_count / FENCE) × 4: every FENCE-th key
+//! filter      u64 words: a Bloom filter of every key (see `filter_slot`)
 //! postings    per trigram: unit ids, delta + LEB128 varint encoded
 //! ```
 //!
@@ -23,33 +24,82 @@
 //! 16-byte entries, a binary search over a shard's ~44k trigrams made ~16 probes over ~10
 //! distinct pages, and dictionary lookups cost 3–4.5 ms of a selective query's ~10 ms at
 //! 1 CPU: a fresh CLI process faults in every mmapped page it touches. Now the fence
-//! (~1.4 KiB, one or two pages, shared by every lookup) picks a block, the block's keys
-//! (512 bytes, one page or straddling two) find the trigram, and one value read finishes
-//! it. Sections are not page-aligned, so those are typical counts, not bounds.
+//! (~1.4 KiB, copied to the heap at open since E23, shared by every lookup) picks a block,
+//! the block's keys (512 bytes, one page or straddling two) find the trigram, and one
+//! value read finishes it. Sections are not page-aligned, so those are typical counts, not bounds.
+//!
+//! The filter (E24) answers "does this shard lack the trigram?" without the dictionary:
+//! the planner asks it for every trigram of a query first, so a shard that lacks one is
+//! skipped without reading its dictionary or postings, which is what a cold query mostly
+//! waits on. It sits right after the fence, which every open reads, so a cold open fetches
+//! both in one read-around for a typical shard. Where an opened shard keeps it is the
+//! backend's [`FilterHome`].
 //!
 //! Content comes first so the writer can stream it straight to disk; everything else is
-//! small enough to buffer and append in `finish`. All integers are little-endian.
+//! small enough to buffer and append in `finish`, so every section starts where the one
+//! before it ends. All integers are little-endian.
+//!
+//! v4 was E20's positional-mask format, rejected but built: its shards still exist (bench
+//! indexes), so E24's layout took v5, and such a shard is refused as an old format with a
+//! "rebuild" message instead of being misparsed as this one.
 
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Shard, ShardWriter, UnitId};
+use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId};
 use scout_core::trigram::Trigram;
 use scout_core::{Error, Result};
 
-const MAGIC: &[u8; 8] = b"SCOUTNI3";
-const VERSION: u32 = 3;
-const HEADER_LEN: u64 = 8 + 80;
+const MAGIC: &[u8; 8] = b"SCOUTNI5";
+const VERSION: u32 = 5;
+const HEADER_LEN: u64 = 8 + 88;
 const DOC_LEN: usize = 40;
 const VAL_LEN: usize = 12;
 /// Keys per fence block: 128 × 4 bytes is one short cache-friendly run (usually within one
 /// page), and the fence of a 44k-trigram shard is ~350 keys, ~1.4 KiB.
 const FENCE: usize = 128;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NativeBackend;
+/// Bits of filter per dictionary key, and how many of its word's bits each key sets (E24).
+/// Simulated on the bench index's 6.06M keys over the literal bench queries, 6 and 4 let
+/// 619 shard-queries through where an exact set lets 617 (4 bits: 632; 8 bits: 618), for
+/// 0.75 bytes a key. The reader takes the word count from the section, so the bits per key
+/// can change without a format change; the hash and `FILTER_K` cannot (a test pins them:
+/// changed, every existing index would reject trigrams it holds and silently lose matches).
+const FILTER_BITS_PER_KEY: usize = 6;
+const FILTER_K: u64 = 4;
+// A key's bits come from the hash's low 6·K bits and its word from the high 32: overlapping,
+// the two choices would correlate and the false-positive rate would rise.
+const _: () = assert!(6 * FILTER_K <= 32);
+
+/// Where an opened shard keeps its trigram filter (E24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterHome {
+    /// Copied to the heap at open. A long-running server probes every shard's filter on
+    /// every query; on the heap the page cache cannot drop it, so after the index's pages
+    /// are evicted (a restart, or memory pressure) a query still skips the shards it
+    /// rejects without reading them. Costs 0.75 bytes per dictionary key.
+    Heap,
+    /// Probed in place through the map, so a probe reads a page of the filter (one a cold
+    /// open has usually just read with the fence beside it). A process per query (the CLI)
+    /// would otherwise copy every shard's filter on each start, about 4 MiB for the bench
+    /// index, more than one query's probes cost.
+    Map,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NativeBackend {
+    filter: FilterHome,
+}
+
+impl NativeBackend {
+    /// Writing does not depend on `filter`; only shards this backend opens do.
+    #[must_use]
+    pub const fn new(filter: FilterHome) -> Self {
+        Self { filter }
+    }
+}
 
 impl IndexBackend for NativeBackend {
     fn name(&self) -> &'static str {
@@ -61,7 +111,7 @@ impl IndexBackend for NativeBackend {
     }
 
     fn open(&self, path: &Path) -> Result<Box<dyn Shard>> {
-        Ok(Box::new(NativeShard::open(path)?))
+        Ok(Box::new(NativeShard::open(path, self.filter)?))
     }
 }
 
@@ -162,9 +212,11 @@ impl ShardWriter for NativeWriter {
         self.pairs.sort_unstable();
         let (keys, vals, postings) = encode_postings(&self.pairs);
         let fence: Vec<u8> = keys.chunks(FENCE * 4).flat_map(|block| block[..4].to_vec()).collect();
+        let filter = build_filter(&keys);
         let vals_off = keys_off + keys.len() as u64;
         let fence_off = vals_off + vals.len() as u64;
-        let postings_off = fence_off + fence.len() as u64;
+        let filter_off = fence_off + fence.len() as u64;
+        let postings_off = filter_off + filter.len() as u64;
         let trigram_count = to_u32(keys.len() / 4, "trigram count")?;
 
         let mut header = Vec::with_capacity(HEADER_LEN as usize);
@@ -173,7 +225,8 @@ impl ShardWriter for NativeWriter {
         header.extend_from_slice(&to_u32(self.docs.len(), "doc count")?.to_le_bytes());
         header.extend_from_slice(&trigram_count.to_le_bytes());
         header.extend_from_slice(&to_u32(self.units.len(), "unit count")?.to_le_bytes());
-        for off in [HEADER_LEN, docs_off, paths_off, units_off, keys_off, vals_off, fence_off, postings_off] {
+        for off in [HEADER_LEN, docs_off, paths_off, units_off, keys_off, vals_off, fence_off, filter_off, postings_off]
+        {
             header.extend_from_slice(&off.to_le_bytes());
         }
 
@@ -185,6 +238,7 @@ impl ShardWriter for NativeWriter {
         self.out.write_all(&keys).map_err(io)?;
         self.out.write_all(&vals).map_err(io)?;
         self.out.write_all(&fence).map_err(io)?;
+        self.out.write_all(&filter).map_err(io)?;
         self.out.write_all(&postings).map_err(io)?;
         let mut file = self.out.into_inner().map_err(|e| Error::io(&path, e.into_error()))?;
         file.seek(SeekFrom::Start(0)).map_err(io)?;
@@ -219,6 +273,37 @@ fn encode_postings(pairs: &[u64]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     (keys, vals, postings)
 }
 
+/// The filter section for the dictionary `keys` (little-endian u32s): at least one word,
+/// so a shard without trigrams still has a filter, one that rejects every trigram.
+fn build_filter(keys: &[u8]) -> Vec<u8> {
+    let n = keys.len() / 4;
+    let mut words = vec![0u64; (n * FILTER_BITS_PER_KEY).div_ceil(64).max(1)];
+    for key in keys.chunks_exact(4) {
+        let (word, bits) = filter_slot(le_u32(key, 0), words.len());
+        words[word] |= bits;
+    }
+    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// The word of a `words`-word filter that holds `key`, and the bits of it the key sets.
+/// All of a key's bits share one word, so a probe is one memory access (one page when the
+/// filter is read through the map) at a slightly higher false-positive rate than spreading
+/// them; at 6 bits a key that rate is ~7%, and a shard lacking several of a query's
+/// trigrams is let through only if all of them are false positives.
+fn filter_slot(key: u32, words: usize) -> (usize, u64) {
+    // splitmix64's finaliser: trigram keys are small, dense integers, so they need a full
+    // mix before their bits can pick anything.
+    let mut z = u64::from(key).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    // The high 32 bits pick the word (multiply-shift: uniform without a division), the
+    // low 24 pick the bits, so the two choices do not correlate.
+    let word = (((z >> 32) * words as u64) >> 32) as usize;
+    let bits = (0..FILTER_K).fold(0u64, |bits, i| bits | 1 << ((z >> (6 * i)) & 63));
+    (word, bits)
+}
+
 fn write_varint(out: &mut Vec<u8>, mut v: u32) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
@@ -239,8 +324,21 @@ pub struct NativeShard {
     units_off: usize,
     keys_off: usize,
     vals_off: usize,
-    fence_off: usize,
     postings_off: usize,
+    /// Every FENCE-th key, copied out of the map at open (E23): every lookup reads it, and
+    /// on the heap the page cache cannot drop it (~1.4 KiB per shard).
+    fence: Vec<u32>,
+    filter: Filter,
+    /// Words in the filter, at least one.
+    filter_words: usize,
+    markers: Markers,
+}
+
+/// A shard's trigram filter, where its [`FilterHome`] says.
+enum Filter {
+    Heap(Vec<u64>),
+    /// The section's offset in the map.
+    Map(usize),
 }
 
 fn le_u32(b: &[u8], at: usize) -> u32 {
@@ -256,7 +354,7 @@ fn le_u64(b: &[u8], at: usize) -> u64 {
 }
 
 impl NativeShard {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path, home: FilterHome) -> Result<Self> {
         let file = File::open(path).map_err(|e| Error::io(path, e))?;
         // SAFETY: shards are immutable once published (the store replaces them by
         // rename, never in place), so the mapping cannot change underneath us. A user
@@ -281,7 +379,8 @@ impl NativeShard {
             return Err(corrupt("unsupported version"));
         }
         let off = |i: usize| usize::try_from(le_u64(&map, 24 + i * 8)).map_err(|_| corrupt("offset overflow"));
-        let shard = Self {
+        let (fence_off, filter_off) = (off(6)?, off(7)?);
+        let mut shard = Self {
             doc_count: le_u32(&map, 12),
             trigram_count: le_u32(&map, 16),
             unit_count: le_u32(&map, 20),
@@ -291,27 +390,57 @@ impl NativeShard {
             units_off: off(3)?,
             keys_off: off(4)?,
             vals_off: off(5)?,
-            fence_off: off(6)?,
-            postings_off: off(7)?,
+            postings_off: off(8)?,
+            fence: Vec::new(),
+            filter: Filter::Map(filter_off),
+            filter_words: 0,
+            markers: Markers::default(),
             name: name.clone(),
             map,
         };
-        let docs_end = shard.docs_off + shard.doc_count as usize * DOC_LEN;
-        let units_end = shard.units_off + shard.unit_count as usize * 4;
+        // The writer appends every section where the one before ends, so the reader demands
+        // exactly that of the fixed-size ones (only content, paths and postings vary): a bad
+        // offset fails here instead of as a slice out of bounds mid-query. Checked, because
+        // release builds wrap: an offset near u64::MAX would wrap past every comparison.
+        let end = |start: usize, count: usize, len: usize| {
+            count
+                .checked_mul(len)
+                .and_then(|n| start.checked_add(n))
+                .ok_or_else(|| corrupt("section offsets out of bounds"))
+        };
         let n = shard.trigram_count as usize;
-        let keys_end = shard.keys_off + n * 4;
-        let vals_end = shard.vals_off + n * VAL_LEN;
-        let fence_end = shard.fence_off + n.div_ceil(FENCE) * 4;
-        if docs_end > shard.paths_off
-            || shard.paths_off > shard.units_off
-            || units_end > shard.keys_off
-            || keys_end > shard.vals_off
-            || vals_end > shard.fence_off
-            || fence_end > shard.postings_off
+        let docs_end = end(shard.docs_off, shard.doc_count as usize, DOC_LEN)?;
+        let units_end = end(shard.units_off, shard.unit_count as usize, 4)?;
+        let keys_end = end(shard.keys_off, n, 4)?;
+        let vals_end = end(shard.vals_off, n, VAL_LEN)?;
+        let fence_end = end(fence_off, n.div_ceil(FENCE), 4)?;
+        if shard.content_off != HEADER_LEN as usize
+            || shard.docs_off < shard.content_off
+            || docs_end != shard.paths_off
+            || shard.units_off < shard.paths_off
+            || units_end != shard.keys_off
+            || keys_end != shard.vals_off
+            || vals_end != fence_off
+            || fence_end != filter_off
+            || shard.postings_off < filter_off
             || shard.postings_off > shard.map.len()
         {
             return Err(corrupt("section offsets out of bounds"));
         }
+        let filter_len = shard.postings_off - filter_off;
+        if filter_len == 0 {
+            return Err(corrupt("empty filter"));
+        }
+        if !filter_len.is_multiple_of(8) {
+            return Err(corrupt("filter is not a whole number of words"));
+        }
+        shard.filter_words = filter_len / 8;
+        shard.fence = (fence_off..fence_end).step_by(4).map(|at| le_u32(&shard.map, at)).collect();
+        if home == FilterHome::Heap {
+            shard.filter =
+                Filter::Heap((filter_off..shard.postings_off).step_by(8).map(|at| le_u64(&shard.map, at)).collect());
+        }
+        shard.markers = Markers::load(&shard)?;
         Ok(shard)
     }
 
@@ -330,18 +459,8 @@ impl NativeShard {
     /// hold it, a binary search of that block's keys finds it.
     fn dict_entry(&self, tri: Trigram) -> Option<(u32, usize)> {
         let n = self.trigram_count as usize;
-        let fences = n.div_ceil(FENCE);
         // The last block whose first key is <= tri.
-        let (mut lo, mut hi) = (0usize, fences);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if le_u32(&self.map, self.fence_off + mid * 4) <= tri.0 {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let block = lo.checked_sub(1)?;
+        let block = self.fence.partition_point(|&k| k <= tri.0).checked_sub(1)?;
         let (mut lo, mut hi) = (block * FENCE, ((block + 1) * FENCE).min(n));
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
@@ -401,6 +520,23 @@ impl Shard for NativeShard {
         Ok(out)
     }
 
+    fn count(&self, tri: Trigram) -> Result<u32> {
+        Ok(self.dict_entry(tri).map_or(0, |(count, _)| count))
+    }
+
+    fn may_contain(&self, tri: Trigram) -> bool {
+        let (word, bits) = filter_slot(tri.0, self.filter_words);
+        let w = match &self.filter {
+            Filter::Heap(words) => words[word],
+            Filter::Map(off) => le_u64(&self.map, off + word * 8),
+        };
+        w & bits == bits
+    }
+
+    fn markers(&self) -> &Markers {
+        &self.markers
+    }
+
     fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
         if unit >= self.unit_count {
             return Err(self.corrupt("unit id out of range"));
@@ -414,9 +550,14 @@ impl Shard for NativeShard {
 
     fn content(&self, doc: DocId) -> Result<Cow<'_, [u8]>> {
         let r = self.row(doc)?;
-        let start = self.content_off + le_u64(&self.map, r) as usize;
-        let end = start + le_u32(&self.map, r + 24) as usize;
-        self.map.get(start..end).map(Cow::Borrowed).ok_or_else(|| self.corrupt("content out of bounds"))
+        // Checked and held to the content section: a corrupt row's u64 offset could wrap into
+        // a valid range of the map and return some other bytes as this document.
+        let start = usize::try_from(le_u64(&self.map, r)).ok().and_then(|o| self.content_off.checked_add(o));
+        let end = start.and_then(|s| s.checked_add(le_u32(&self.map, r + 24) as usize));
+        match (start, end) {
+            (Some(start), Some(end)) if end <= self.docs_off => Ok(Cow::Borrowed(&self.map[start..end])),
+            _ => Err(self.corrupt("content out of bounds")),
+        }
     }
 }
 
@@ -427,6 +568,9 @@ mod tests {
 
     /// `(path, content, unit blocks)`.
     type Doc<'a> = (&'a str, &'a [u8], &'a [&'a [u8]]);
+
+    const MAPPED: NativeBackend = NativeBackend::new(FilterHome::Map);
+    const HEAP: NativeBackend = NativeBackend::new(FilterHome::Heap);
 
     #[test]
     fn round_trips_docs_content_and_postings() {
@@ -439,7 +583,7 @@ mod tests {
             ("c.txt", b"nothing", &[b"nothing"]),
         ];
         let mut ex = TrigramExtractor::default();
-        let mut w = NativeBackend.create(&path).unwrap();
+        let mut w = MAPPED.create(&path).unwrap();
         for (i, (p, c, blocks)) in docs.iter().enumerate() {
             let meta = FileMeta { path: (*p).to_string(), size: c.len() as u64, mtime_ns: i as u64 * 10 };
             let units: Vec<Vec<Trigram>> = blocks.iter().map(|b| ex.extract(b).to_vec()).collect();
@@ -448,7 +592,7 @@ mod tests {
         assert!(w.add(&FileMeta { path: "empty".into(), size: 0, mtime_ns: 0 }, b"", &[]).is_err());
         w.finish().unwrap();
 
-        let s = NativeBackend.open(&path).unwrap();
+        let s = MAPPED.open(&path).unwrap();
         assert_eq!(s.doc_count(), 3);
         assert_eq!(s.meta(1).unwrap().path, "dir/b.rs");
         assert_eq!(s.meta(2).unwrap().mtime_ns, 20);
@@ -460,6 +604,39 @@ mod tests {
         assert!(s.postings(Trigram::from_bytes(b'z', b'z', b'z')).unwrap().is_empty());
         assert_eq!([0, 1, 2, 3].map(|u| s.unit_doc(u).unwrap()), [0, 1, 1, 2]);
         assert!(s.unit_doc(4).is_err());
+        // `count` is what the planner orders by, so it must agree with the decoded list; and
+        // a filter that rejected a trigram the shard holds would lose matches.
+        for (_, c, _) in &docs {
+            for &t in ex.extract(c) {
+                assert_eq!(s.count(t).unwrap() as usize, s.postings(t).unwrap().len(), "{t:?}");
+                assert!(s.may_contain(t), "{t:?}");
+            }
+        }
+        assert!(s.markers().always_search.is_empty() && s.markers().reader_mode.is_empty());
+    }
+
+    #[test]
+    fn loads_marker_docs_at_open() {
+        use scout_core::trigram::{ALWAYS_SEARCH, READER_MODE};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.native");
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        // Doc 1 has two units that both carry READER_MODE: it must be listed once. Doc 2 is
+        // marked both ways, the way the indexer marks UTF-16.
+        let docs: [(&str, Vec<Vec<Trigram>>); 3] = [
+            ("plain", vec![vec![t(b"abc")]]),
+            ("bom", vec![vec![t(b"abc"), READER_MODE], vec![t(b"xyz"), READER_MODE]]),
+            ("utf16", vec![vec![READER_MODE, ALWAYS_SEARCH]]),
+        ];
+        let mut w = MAPPED.create(&path).unwrap();
+        for (p, units) in &docs {
+            w.add(&FileMeta { path: (*p).to_string(), size: 3, mtime_ns: 0 }, b"abc", units).unwrap();
+        }
+        w.finish().unwrap();
+        let s = MAPPED.open(&path).unwrap();
+        assert_eq!(s.markers().reader_mode, vec![1, 2]);
+        assert_eq!(s.markers().always_search, vec![2]);
+        assert!(s.may_contain(READER_MODE) && s.may_contain(ALWAYS_SEARCH));
     }
 
     #[test]
@@ -470,7 +647,7 @@ mod tests {
         for n in [FENCE * 3 + 17, FENCE * 3, 1, 0].map(|n| n as u32) {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("s.native");
-            let mut w = NativeBackend.create(&path).unwrap();
+            let mut w = MAPPED.create(&path).unwrap();
             // Even keys only, so the odd ones in between must miss.
             let key = |k: u32| Trigram(0x10_0000 + k * 2);
             for k in 0..n {
@@ -481,13 +658,120 @@ mod tests {
                 w.add(&FileMeta { path: "ab".into(), size: 2, mtime_ns: 0 }, b"ab", &[vec![]]).unwrap();
             }
             w.finish().unwrap();
-            let s = NativeBackend.open(&path).unwrap();
+            let s = MAPPED.open(&path).unwrap();
+            // The filter holds every key and, at 6 bits a key (~7% false positives),
+            // rejects most of the misses in between; with no keys it rejects everything.
+            assert!((0..n).all(|k| s.may_contain(key(k))), "{n} keys: a key the filter rejects");
+            let rejected = (0..n).filter(|&k| !s.may_contain(Trigram(key(k).0 + 1))).count();
+            assert!(rejected * 10 >= n as usize * 8, "{n} keys: only {rejected} misses rejected");
+            if n == 0 {
+                assert!(
+                    (0..1 << 16).all(|t| !s.may_contain(Trigram(t))),
+                    "an empty shard's filter lets a trigram through"
+                );
+            }
             for k in 0..n {
                 assert_eq!(s.postings(key(k)).unwrap(), vec![k], "{n} keys: trigram {k}");
+                assert_eq!(s.count(key(k)).unwrap(), 1, "{n} keys: count of {k}");
                 assert!(s.postings(Trigram(key(k).0 + 1)).unwrap().is_empty(), "{n} keys: after {k}");
+                assert_eq!(s.count(Trigram(key(k).0 + 1)).unwrap(), 0, "{n} keys: count after {k}");
             }
             assert!(s.postings(Trigram(0x0f_ffff)).unwrap().is_empty(), "{n} keys: below the first");
             assert!(s.postings(Trigram(key(n).0 + 4)).unwrap().is_empty(), "{n} keys: past the last");
+        }
+    }
+
+    /// A shard with a few hundred distinct trigrams from real text.
+    fn text_shard(path: &Path) {
+        let mut ex = TrigramExtractor::default();
+        let mut w = MAPPED.create(path).unwrap();
+        for (i, line) in [
+            "fn parse_header(input: &[u8]) -> Result<Header>",
+            "let fence = keys.chunks(FENCE * 4);",
+            "Licensed under the Apache License, Version 2.0",
+            "useLayoutEffect(() => { window.scrollTo(0, 0) })",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let meta = FileMeta { path: format!("f{i}"), size: line.len() as u64, mtime_ns: 0 };
+            w.add(&meta, line.as_bytes(), &[ex.extract(line.as_bytes()).to_vec()]).unwrap();
+        }
+        w.finish().unwrap();
+    }
+
+    #[test]
+    fn heap_and_mapped_filters_answer_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.native");
+        text_shard(&path);
+        let (mapped, heap) = (MAPPED.open(&path).unwrap(), HEAP.open(&path).unwrap());
+        // Every printable-ASCII trigram: the shard's own and a few hundred thousand misses.
+        for t in (0x20_2020u32..0x7f_7f7f).filter(|t| t.to_le_bytes()[..3].iter().all(|b| (0x20..0x7f).contains(b))) {
+            assert_eq!(mapped.may_contain(Trigram(t)), heap.may_contain(Trigram(t)), "{t:#x}");
+        }
+    }
+
+    /// The filter's hash is part of the format: a reader hashing differently from the writer
+    /// of an index would reject trigrams its shards hold and silently lose matches, and
+    /// nothing in the header would say so. The values come from an independent copy of the
+    /// hash in Python (`mix` in bench/harness/filtercheck.py), which E24 checked against
+    /// `scout search --stats` on the bench index.
+    #[test]
+    fn the_filter_hash_is_pinned() {
+        assert_eq!(filter_slot(0x0061_6263, 1000), (830, 0x0240_0204_0000_0000));
+        assert_eq!(filter_slot(0x007a_6562, 54321), (44414, 0x0800_0020_0020_0080));
+        assert_eq!(filter_slot(u32::MAX, 7), (3, 0x1000_0000_0100_0081));
+        assert_eq!(filter_slot(u32::MAX - 1, 7), (0, 0x8800_0104_0000_0000));
+        assert_eq!(filter_slot(0, 1), (0, 0x0040_8000_1000_0080));
+    }
+
+    /// `good` with header offset `i` (0 = content, 7 = filter, 8 = postings) set to `to`.
+    fn with_offset(good: &[u8], i: usize, to: u64) -> Vec<u8> {
+        let mut bad = good.to_vec();
+        bad[24 + i * 8..32 + i * 8].copy_from_slice(&to.to_le_bytes());
+        bad
+    }
+
+    #[test]
+    fn rejects_sections_that_do_not_follow_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.native");
+        text_shard(&path);
+        let good = std::fs::read(&path).unwrap();
+        let offset = |i: usize| u64::from_le_bytes(good[24 + i * 8..32 + i * 8].try_into().unwrap());
+        let (filter_off, postings_off) = (offset(7), offset(8));
+        let cases = [
+            (with_offset(&good, 8, postings_off - 4), "filter is not a whole number of words"),
+            (with_offset(&good, 8, filter_off), "empty filter"),
+            // A gap between the fence and the filter: the writer never leaves one.
+            (with_offset(&good, 7, filter_off + 8), "section offsets out of bounds"),
+            (with_offset(&good, 0, 0), "section offsets out of bounds"),
+            // keys_off + keys would wrap in a release build and pass every comparison.
+            (with_offset(&good, 4, u64::MAX - 3), "section offsets out of bounds"),
+        ];
+        for (bad, want) in cases {
+            std::fs::write(&path, &bad).unwrap();
+            let err = MAPPED.open(&path).err().unwrap().to_string();
+            assert!(err.contains(want), "want {want:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn rejects_content_outside_the_content_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.native");
+        text_shard(&path);
+        let good = std::fs::read(&path).unwrap();
+        let docs_off = u64::from_le_bytes(good[24 + 8..32 + 8].try_into().unwrap()) as usize;
+        // Doc 0's row starts with its u64 content offset: one that wraps, and one that runs
+        // into the docs table.
+        for content_off in [u64::MAX - 1, docs_off as u64 - HEADER_LEN] {
+            let mut bad = good.clone();
+            bad[docs_off..docs_off + 8].copy_from_slice(&content_off.to_le_bytes());
+            std::fs::write(&path, &bad).unwrap();
+            let s = MAPPED.open(&path).unwrap();
+            assert!(s.content(0).err().unwrap().to_string().contains("content out of bounds"), "{content_off}");
         }
     }
 
@@ -496,10 +780,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad");
         std::fs::write(&path, b"not a shard at all, definitely not").unwrap();
-        assert!(NativeBackend.open(&path).is_err());
-        // An older format names the fix instead of claiming corruption.
-        std::fs::write(&path, b"SCOUTNI2 and the rest of an old shard").unwrap();
-        let err = NativeBackend.open(&path).err().unwrap().to_string();
+        assert!(MAPPED.open(&path).is_err());
+        // An older format names the fix instead of claiming corruption; v4 is E20's rejected
+        // layout, of which bench indexes still exist.
+        std::fs::write(&path, b"SCOUTNI4 and the rest of an old shard").unwrap();
+        let err = MAPPED.open(&path).err().unwrap().to_string();
         assert!(err.contains("rebuild the index"), "{err}");
     }
 }

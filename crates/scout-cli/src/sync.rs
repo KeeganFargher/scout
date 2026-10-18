@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use scout_core::catalog::{Catalog, RepoEntry, now_unix};
 use scout_core::ports::ShardStore;
 use scout_core::snapshots::SnapshotPack;
-use scout_index_native::NativeBackend;
 use scout_store_fs::FsStore;
 use scout_sync::config::Config;
 use scout_sync::git::{Git, LOCK_NAME, MARKER_NAME, Synced, remove_working_copy};
@@ -97,7 +96,7 @@ pub fn run_cycle(
         .filter(|j| catalog.find(&j.repo.name).is_none())
         .map(|j| (j.repo.name.clone(), j.repo.clone()))
         .collect();
-    let outcomes = ingest::index_repos(store, &held, &jobs, &NativeBackend, budget)?;
+    let outcomes = ingest::index_repos(store, &held, &jobs, &crate::NATIVE, budget)?;
     let mut reindexed = Vec::new();
     for o in &outcomes {
         match &o.result {

@@ -21,7 +21,7 @@ use scout_core::rank::Weights;
 use scout_core::ranked::{RankOptions, search_ranked};
 use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search};
 use scout_core::snapshots::SnapshotPack;
-use scout_index_native::NativeBackend;
+use scout_index_native::{FilterHome, NativeBackend};
 use scout_index_sqlite::SqliteBackend;
 use scout_source_fs::{ChangeDetection, FsContext, FsSource};
 use scout_store_fs::FsStore;
@@ -166,9 +166,20 @@ enum DetectionArg {
     Scan,
 }
 
-fn backend_by_name(name: &str) -> anyhow::Result<&'static dyn IndexBackend> {
+/// The native backend for a process per query: its shards probe their trigram filters in
+/// place (E24). Indexing uses it too, since writing does not depend on where they are kept.
+pub(crate) static NATIVE: NativeBackend = NativeBackend::new(FilterHome::Map);
+/// The native backend for `serve`, which keeps every shard's filter on the heap (E24).
+static NATIVE_SERVER: NativeBackend = NativeBackend::new(FilterHome::Heap);
+
+/// `filter` says where native shards keep their trigram filters: [`FilterHome::Map`] for a
+/// process per query, [`FilterHome::Heap`] for `serve`.
+fn backend_by_name(name: &str, filter: FilterHome) -> anyhow::Result<&'static dyn IndexBackend> {
     match name {
-        "native" => Ok(&NativeBackend),
+        "native" => Ok(match filter {
+            FilterHome::Map => &NATIVE,
+            FilterHome::Heap => &NATIVE_SERVER,
+        }),
         "sqlite" => Ok(&SqliteBackend),
         other => bail!("unknown index backend {other:?} in catalog"),
     }
@@ -321,7 +332,7 @@ fn cmd_index(
     memory_mb: Option<u64>,
 ) -> anyhow::Result<ExitCode> {
     let backend: &dyn IndexBackend = match backend {
-        Backend::Native => &NativeBackend,
+        Backend::Native => &NATIVE,
         Backend::Sqlite => &SqliteBackend,
     };
     let held = store.lock_writer()?;
@@ -360,7 +371,8 @@ fn cmd_index(
 }
 
 /// `with_snapshots`: only strict freshness reads snapshots, so other modes skip the file
-/// reads (about 2.5 MB across the bench corpus).
+/// reads (about 2.5 MB across the bench corpus). `filter` is where native shards keep their
+/// trigram filters (see [`backend_by_name`]).
 fn open_repos(
     store: &FsStore,
     catalog: &Catalog,
@@ -368,6 +380,7 @@ fn open_repos(
     walk_threads: usize,
     with_snapshots: bool,
     ctx: &Arc<FsContext>,
+    filter: FilterHome,
 ) -> anyhow::Result<Vec<RepoHandle>> {
     for n in only {
         if catalog.find(n).is_none() {
@@ -381,7 +394,7 @@ fn open_repos(
     }
     let open_one = |r: &RepoEntry| -> anyhow::Result<RepoHandle> {
         let idx = r.index.as_ref().context("checked above")?;
-        let backend = backend_by_name(&idx.backend)?;
+        let backend = backend_by_name(&idx.backend, filter)?;
         let shards = idx
             .shards
             .iter()
@@ -476,7 +489,15 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         DetectionArg::Journal => ChangeDetection::Journal,
         DetectionArg::Scan => ChangeDetection::Scan,
     }));
-    let repos = open_repos(store, &catalog, &a.repos, threads, matches!(a.freshness, FreshnessArg::Strict), &ctx)?;
+    let repos = open_repos(
+        store,
+        &catalog,
+        &a.repos,
+        threads,
+        matches!(a.freshness, FreshnessArg::Strict),
+        &ctx,
+        FilterHome::Map,
+    )?;
     let opened = started.elapsed();
     let opts = SearchOptions {
         pattern: a.pattern.clone(),
@@ -538,9 +559,10 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
     persist_snapshots(store, &selected, report.snapshots)?;
     if a.stats {
         err_line(&format!(
-            "scout-stats repos={} shards={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
+            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
             stats.repos,
             stats.shards,
+            stats.shards_filtered,
             stats.docs,
             stats.candidates,
             stats.matched_files,

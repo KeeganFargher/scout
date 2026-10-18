@@ -1,0 +1,6 @@
+done in 9.2s
+index_wall_s=9.26 maxrss_kib=422992
+1.1G	/home/keegan/small/idx-e20-12cpu-infinity
+1.1G	/home/keegan/small/idx-e24-12cpu-infinity
+same: 139 shards in 137 repos, 6,056,069 keys, every key passes its filter, filters 4.33 MiB (6.00 bits a key)
+serve copy: 138 repos, bench index 137

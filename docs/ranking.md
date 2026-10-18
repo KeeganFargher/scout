@@ -110,10 +110,12 @@ of a file the agent has already read stops taking a top-10 slot (experiment R2).
 
 ## Evaluation
 
-The protocol, rubric and harness are in [bench/golden/README.md](../bench/golden/README.md),
-and the numbers are in [docs/experiments.md](experiments.md) (R1–R4).
+The set lives in `bench/golden/` (a README with the protocol and rubric, `queries.tsv` and
+`labels.tsv`) and is not in the public repository: its queries come from the author's own
+agent transcripts, and its labels are paths in the author's own projects. The numbers are
+in [docs/experiments.md](experiments.md) (R1–R4).
 
-- **Queries** ([bench/golden/queries.tsv](../bench/golden/queries.tsv)): 79 in total.
+- **Queries** (`queries.tsv`): 79 in total.
   - 62 are real Grep patterns that agents ran in six of the indexed projects, taken from
     Claude Code transcripts and stratified by pattern class.
   - 17 are known-item queries: an identifier that its project defines in exactly one
@@ -125,7 +127,7 @@ and the numbers are in [docs/experiments.md](experiments.md) (R1–R4).
   query: unranked (path order), noise-only, BM25-only, the scorer, and the scorer with
   copies collapsed. A labeller sees paths and matching lines, never scores, sizes or noise
   classes.
-- **Labels** ([bench/golden/labels.tsv](../bench/golden/labels.tsv)): 1,556 judgments, graded
+- **Labels** (`labels.tsv`): 1,556 judgments, graded
   0–3 by hand by labelling agents that never saw the scorer. Known-item targets and their
   identical copies are graded 3 automatically. Labels assigned by path-rule scripts were
   thrown away. They would have copied the scorer's own noise rules and made the

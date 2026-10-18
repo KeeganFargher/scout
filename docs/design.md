@@ -76,11 +76,24 @@ Each repo becomes one or more shards. A shard holds:
 - **Trigram postings**: for every 3-byte sequence (ASCII case-folded), the sorted list of
   _units_ that contain it, delta + varint encoded. Lookup goes through a fence of every
   128th key to one 128-key block of the sorted trigram keys, so it usually touches about
-  three pages (sections are not page-aligned, so a block can straddle two) (E19). A doc is a candidate only if one of its units holds every trigram of an
-  AND. That is sound because matches are line-oriented and units end at newlines. Native
-  format v3 (`SCOUTNI3`): header, content, docs, paths, units, dictionary keys, values and
-  fence, postings. A shard in another format version is refused with a message to rebuild
-  the index with `scout index`.
+  three pages (sections are not page-aligned, so a block can straddle two) (E19); the fence
+  itself is copied to the heap when the shard opens (E23). A doc can match only if one of
+  its units holds every trigram of an AND; that is sound because matches are
+  line-oriented and units end at newlines. The planner may stop short of reading every
+  trigram's list (below), so candidates are a superset of those docs, never a subset.
+  The marker lists (docs searched for every query, and docs rg must read through its
+  reader) are decoded once at open, not per query (E23).
+- **Trigram filter**: a register-blocked Bloom filter over the shard's trigram keys. Each
+  key sets 4 bits inside one 64-bit word, and there are 6 bits of filter per key. A query
+  that needs a trigram the shard lacks skips the shard without reading its dictionary or
+  postings (E24). `serve` copies the filters to the heap at startup. The CLI probes them in
+  place through the map, so a short-lived process reads only the filter words its query
+  probes instead of copying every filter.
+
+Native format v5 (`SCOUTNI5`): header, content, docs, paths, units, dictionary keys,
+values and fence, trigram filter, postings. Every section starts where the one before it
+ends. A shard in another format version is refused with a message to rebuild the index
+with `scout index`.
 
 Big repos are split into several shards by a size cap. The cap comes from the memory
 budget: building a shard keeps its (trigram, unit) pairs in RAM, so the cap bounds
@@ -99,8 +112,14 @@ the search falls back to scanning the corpus bins, which is still faster than wa
 
 1. Plan the query once.
 2. Plan every repo in parallel on a thread pool sized to the machine
-   (`available_parallelism`, overridable with `--threads`): per shard, intersect/union
-   postings → candidate docs, cut into chunks of ~4 MiB of candidates.
+   (`available_parallelism`, overridable with `--threads`). Per shard, the query is first
+   checked against the trigram filter. A shard where it cannot match is skipped, though
+   its always-searched docs are still verified, and an OR branch the filter rejects is
+   dropped (E24). Then intersect/union postings → candidate docs, cut into chunks of
+   ~4 MiB of candidates. For an AND, every
+   trigram's unit count is read from the dictionary first (a zero empties it without
+   decoding anything); lists are then decoded rarest first, and only while decoding the
+   next costs less than verifying the candidates already left (E22).
 3. Verify the chunks on up to that many threads (fewer when there are fewer chunks): run
    `grep-searcher` + `grep-regex` on each candidate's content slice, with `grep-printer`
    producing rg-style output. Chunks cross repo boundaries, so a few large repos no longer
@@ -128,7 +147,7 @@ the search falls back to scanning the corpus bins, which is still faster than wa
 Linux (WSL2 Ubuntu), each profile a cgroup: `systemd-run --user --scope` with
 `MemoryMax`, no swap and `CPUQuota`, plus `taskset`. The page cache for the mmapped
 shards is charged to the same cgroup, as on a real VM. Corpus: the 137 bench repos
-mirrored onto the Linux disk (54k files, 854 MiB of content, 1.1 GiB index). The harness
+mirrored onto the Linux disk (54k files, 854 MiB of content, 1.0 GiB index). The harness
 scripts are described in `docs/experiments.md` (E13–E17).
 
 | profile           | index (warm) | index peak RSS | selective p50 | broad sweep p50 (`date_regex`) | 20-query p50 total |
@@ -162,6 +181,21 @@ What does not scale with cores: one file is searched by one thread, so a query w
 output comes mostly from one huge file (two CSVs of 20 and 24 MB print 60% of
 `literal_common`) stays at ~435 ms (CLI bench) to ~475 ms (E16's A/B) from 4 to 12 CPUs. Throughput past one loaded
 client is set by the CPUs: a 1-CPU box serves about 29 searches a second of this mix.
+
+Cold and warm, one request at a time (E21, geomean p50 of the 20 queries; cold = the index
+evicted from the page cache before every request, checked with `mincore`):
+
+| profile           | CLI warm | CLI cold | served warm | served cold |
+| ----------------- | -------- | -------- | ----------- | ----------- |
+| 1 CPU / 2 GiB     | 72 ms    | 2232 ms  | 37 ms       | 2047 ms     |
+| 4 CPUs / 4 GiB    | 49 ms    | 1720 ms  | 22 ms       | 1527 ms     |
+| 12 CPUs, no limit | 52 ms    | 1725 ms  | 24 ms       | 1522 ms     |
+
+A cold query waits on one or two random dictionary reads per shard (146–294 major faults),
+one after another, so cold latency follows the disk's read latency and the shard count,
+not the CPUs. Warm needs the whole index in the page cache: served at 1 CPU, the geomean
+is 36–40 ms down to a 1280 MiB cgroup limit (1.07 GB index), 215 ms at 1 GiB, 1040 ms at
+768 MiB and 1594 ms at 512 MiB, never OOM-killed.
 
 ## Benchmarking & the optimisation loop
 

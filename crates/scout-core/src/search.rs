@@ -15,7 +15,7 @@ use termcolor::NoColor;
 
 use crate::ports::{DocId, RepoSource, Shard, UnitId};
 use crate::query::{PlanCase, Query, plan};
-use crate::trigram::{ALWAYS_SEARCH, READER_MODE};
+use crate::trigram::Trigram;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,9 @@ pub struct RepoHandle {
 pub struct SearchStats {
     pub repos: usize,
     pub shards: usize,
+    /// Shards whose trigram filter rejected the query, so planning read none of their
+    /// dictionary or postings (E24); their always-searched docs are still verified.
+    pub shards_filtered: usize,
     pub docs: u64,
     /// Docs that survived the trigram filter and were verified with the regex engine.
     pub candidates: u64,
@@ -106,6 +109,7 @@ pub struct SearchStats {
 impl SearchStats {
     pub(crate) fn merge(&mut self, o: &SearchStats) {
         self.shards += o.shards;
+        self.shards_filtered += o.shards_filtered;
         self.docs += o.docs;
         self.candidates += o.candidates;
         self.matched_files += o.matched_files;
@@ -632,8 +636,6 @@ pub(crate) enum Loc<'a> {
 pub(crate) struct RepoPlan {
     /// Per shard, in doc order.
     candidates: Vec<Vec<DocId>>,
-    /// Per shard, sorted: the docs rg reads through its reader (binary, BOM).
-    reader: Vec<Vec<DocId>>,
     /// Searched from the source, after every shard.
     dirty: Vec<String>,
     /// What the source wants stored for next time.
@@ -651,13 +653,16 @@ pub(crate) fn plan_repo(
         Freshness::Strict => Some(overlay(repo, stats)?),
         Freshness::Off => None,
     };
-    let mut plan = RepoPlan { candidates: Vec::new(), reader: Vec::new(), dirty: Vec::new(), snapshot: None };
+    let mut plan = RepoPlan { candidates: Vec::new(), dirty: Vec::new(), snapshot: None };
     let t = Instant::now();
     for (si, shard) in repo.shards.iter().enumerate() {
         stats.docs += u64::from(shard.doc_count());
-        let always = to_docs(shard.as_ref(), &shard.postings(ALWAYS_SEARCH)?)?;
-        let mut docs = match candidates(shard.as_ref(), query)? {
-            Some(units) => union(&to_docs(shard.as_ref(), &units)?, &always),
+        let (units, filtered) = shard_units(shard.as_ref(), query)?;
+        stats.shards_filtered += usize::from(filtered);
+        // A filtered shard still verifies its always-searched docs: their matches are not
+        // described by the shard's trigrams, so no filter can rule them out.
+        let mut docs = match units {
+            Some(units) => union(&to_docs(shard.as_ref(), &units)?, &shard.markers().always_search),
             None => (0..shard.doc_count()).collect(),
         };
         if let Some(o) = &overlay {
@@ -665,7 +670,6 @@ pub(crate) fn plan_repo(
         }
         stats.candidates += docs.len() as u64;
         plan.candidates.push(docs);
-        plan.reader.push(to_docs(shard.as_ref(), &shard.postings(READER_MODE)?)?);
     }
     stats.postings_time += t.elapsed();
     if let Some(o) = overlay {
@@ -679,7 +683,6 @@ pub(crate) fn plan_repo(
 /// whether the document matched.
 pub(crate) fn visit_docs<F>(
     repo: &RepoHandle,
-    plan: &RepoPlan,
     si: usize,
     docs: &[DocId],
     stats: &mut SearchStats,
@@ -693,7 +696,8 @@ where
     for &doc in docs {
         let meta = shard.meta(doc)?;
         let content = shard.content(doc)?;
-        let mode = if plan.reader[si].binary_search(&doc).is_ok() { Mode::Reader } else { Mode::Slice };
+        // The shard's marker list, sorted: the docs rg reads through its reader (binary, BOM).
+        let mode = if shard.markers().reader_mode.binary_search(&doc).is_ok() { Mode::Reader } else { Mode::Slice };
         let path = display_path(root, &meta.path);
         let loc = Loc::Indexed { shard: si, doc, mode };
         if visit(loc, &meta.path, Doc { path: &path, content: &content, mode })? {
@@ -732,7 +736,7 @@ pub(crate) fn walk_repo(
 ) -> Result<Option<Vec<u8>>> {
     let mut plan = plan_repo(repo, query, opts, stats)?;
     for si in 0..plan.candidates.len() {
-        visit_docs(repo, &plan, si, &plan.candidates[si], stats, &mut visit)?;
+        visit_docs(repo, si, &plan.candidates[si], stats, &mut visit)?;
     }
     visit_dirty(repo, &plan, stats, &mut visit)?;
     Ok(plan.snapshot.take())
@@ -782,7 +786,7 @@ fn search_chunk(
         };
         match part {
             Part::Docs { shard, range } => {
-                visit_docs(repo, plan, *shard, &plan.candidates[*shard][range.clone()], &mut stats, &mut visit)?;
+                visit_docs(repo, *shard, &plan.candidates[*shard][range.clone()], &mut stats, &mut visit)?;
             }
             Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut visit)?,
         }
@@ -811,14 +815,45 @@ fn to_docs(shard: &dyn Shard, units: &[UnitId]) -> Result<Vec<DocId>> {
     Ok(docs)
 }
 
-/// Evaluates `query` against a shard's units. `None` means "every unit".
-pub fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
+/// Whether the shard's trigram filter lets `query` through (E24): `false` means no unit can
+/// match, decided without reading the shard's dictionary or postings.
+fn may_match(shard: &dyn Shard, query: &Query) -> bool {
+    match query {
+        Query::All => true,
+        Query::Tri(t) => shard.may_contain(*t),
+        Query::And(parts) => parts.iter().all(|p| may_match(shard, p)),
+        Query::Or(parts) => parts.iter().any(|p| may_match(shard, p)),
+    }
+}
+
+/// A shard's candidate units for `query` (`None`: every unit), and whether its filter
+/// rejected the whole query, in which case none of its dictionary or postings was read.
+/// The filter is asked about the whole tree before anything is counted or decoded (E24):
+/// an AND's parts are read one at a time, so a part it rejects would otherwise be reached
+/// only after the ones before it had read the shard.
+fn shard_units(shard: &dyn Shard, query: &Query) -> Result<(Option<Vec<UnitId>>, bool)> {
+    if !may_match(shard, query) {
+        return Ok((Some(Vec::new()), true));
+    }
+    Ok((candidates(shard, query)?, false))
+}
+
+/// Evaluates `query` against a shard's units, once its filter has let `query` through
+/// ([`shard_units`]). `None` means "every unit".
+fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
     match query {
         Query::All => Ok(None),
         Query::Tri(t) => shard.postings(*t).map(Some),
+        // The filter let the whole AND through, so it let every part through too: nothing
+        // left to ask it here.
         Query::And(parts) => {
             let mut lists = Vec::with_capacity(parts.len());
+            let mut tris: Vec<Trigram> = Vec::new();
             for p in parts {
+                if let Query::Tri(t) = p {
+                    tris.push(*t);
+                    continue;
+                }
                 if let Some(l) = candidates(shard, p)? {
                     if l.is_empty() {
                         return Ok(Some(l));
@@ -826,16 +861,44 @@ pub fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>
                     lists.push(l);
                 }
             }
+            let Some(counted) = count_trigrams(shard, &tris)? else {
+                return Ok(Some(Vec::new()));
+            };
+            let mut rest = counted.iter();
+            let mut spent = 0u64;
+            if let Some(&(n, t)) = rest.next() {
+                lists.push(shard.postings(t)?);
+                spent = u64::from(n) + LIST_COST_POSTINGS;
+            }
             lists.sort_unstable_by_key(Vec::len);
             let mut it = lists.into_iter();
             let Some(first) = it.next() else {
                 return Ok(None);
             };
-            Ok(Some(it.fold(first, |acc, l| intersect(&acc, &l))))
+            let mut acc = it.fold(first, |acc, l| intersect(&acc, &l));
+            // Rarest first, a further list is decoded only while all decoding so far, it
+            // included, stays under the price of verifying every current candidate (E22):
+            // once few candidates remain, reading a long list to drop some of them costs
+            // more than checking them. Counts only grow along the walk and the candidates
+            // only shrink, so the first list over budget ends it.
+            for &(n, t) in rest {
+                let cost = u64::from(n) + LIST_COST_POSTINGS;
+                if acc.is_empty() || spent + cost > acc.len() as u64 * VERIFY_COST_POSTINGS {
+                    break;
+                }
+                acc = intersect(&acc, &shard.postings(t)?);
+                spent += cost;
+            }
+            Ok(Some(acc))
         }
         Query::Or(parts) => {
             let mut acc: Vec<UnitId> = Vec::new();
             for p in parts {
+                // The OR passed when one branch did; a branch the filter rejects adds no
+                // units, so it is not read.
+                if !may_match(shard, p) {
+                    continue;
+                }
                 match candidates(shard, p)? {
                     None => return Ok(None),
                     Some(l) => acc = union(&acc, &l),
@@ -844,6 +907,32 @@ pub fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>
             Ok(Some(acc))
         }
     }
+}
+
+/// Decode budget for an AND's trigram lists (E22), in postings decoded: one more candidate
+/// unit to verify is priced as `VERIFY_COST_POSTINGS` decoded and intersected postings, and
+/// every list costs `LIST_COST_POSTINGS` on top (its lookup, allocation and first page).
+/// Leaving a list out keeps the candidates a superset of the true ones, so verification
+/// keeps the result exact. The price is measured, not derived, and only two values were
+/// tried: 4096 and 16384 measured the same overall, and 4096 kept more of the
+/// selective-query win at 1 CPU (lower values are untested). A fixed two rarest lists
+/// (zoekt's rule, without its positional check) lost 4-5%.
+const VERIFY_COST_POSTINGS: u64 = 4096;
+const LIST_COST_POSTINGS: u64 = 512;
+
+/// `tris` with their unit counts, rarest first; `None` when one is absent from the shard,
+/// which empties the AND without decoding anything.
+fn count_trigrams(shard: &dyn Shard, tris: &[Trigram]) -> Result<Option<Vec<(u32, Trigram)>>> {
+    let mut counted = Vec::with_capacity(tris.len());
+    for &t in tris {
+        let n = shard.count(t)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        counted.push((n, t));
+    }
+    counted.sort_unstable();
+    Ok(Some(counted))
 }
 
 /// Set operations on sorted id lists; used for both unit and doc ids.
@@ -895,6 +984,9 @@ mod tests {
     /// alone decides what matches, which is all the chunking test needs.
     struct MemShard(Vec<(String, Vec<u8>)>);
 
+    static NO_MARKERS: crate::ports::Markers =
+        crate::ports::Markers { always_search: Vec::new(), reader_mode: Vec::new() };
+
     impl Shard for MemShard {
         fn doc_count(&self) -> u32 {
             u32::try_from(self.0.len()).unwrap()
@@ -903,8 +995,17 @@ mod tests {
             let (path, content) = &self.0[doc as usize];
             Ok(crate::ports::DocMeta { path: path.as_str().into(), size: content.len() as u64, mtime_ns: 0 })
         }
-        fn postings(&self, t: crate::trigram::Trigram) -> Result<Vec<UnitId>> {
-            if t == ALWAYS_SEARCH || t == READER_MODE { Ok(Vec::new()) } else { Ok((0..self.doc_count()).collect()) }
+        fn postings(&self, _: crate::trigram::Trigram) -> Result<Vec<UnitId>> {
+            Ok((0..self.doc_count()).collect())
+        }
+        fn count(&self, t: crate::trigram::Trigram) -> Result<u32> {
+            Ok(u32::try_from(self.postings(t)?.len()).unwrap())
+        }
+        fn may_contain(&self, _: crate::trigram::Trigram) -> bool {
+            true
+        }
+        fn markers(&self) -> &crate::ports::Markers {
+            &NO_MARKERS
         }
         fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
             Ok(unit)
@@ -1051,6 +1152,144 @@ mod tests {
             let err = search_chunked(&opts, &[&repo], &mut Vec::new(), chunk).unwrap_err();
             assert!(err.to_string().contains("fail-early"), "{threads} threads, {chunk}-byte chunks: {err}");
         }
+    }
+
+    /// Lists by trigram, recording which ones were counted and which decoded. Its filter
+    /// holds every listed trigram plus `false_positives`, as a real filter may.
+    struct ListShard {
+        lists: HashMap<Trigram, Vec<UnitId>>,
+        false_positives: Vec<Trigram>,
+        counted: Mutex<Vec<Trigram>>,
+        decoded: Mutex<Vec<Trigram>>,
+    }
+
+    impl ListShard {
+        fn new(lists: HashMap<Trigram, Vec<UnitId>>, false_positives: Vec<Trigram>) -> Self {
+            Self { lists, false_positives, counted: Mutex::new(Vec::new()), decoded: Mutex::new(Vec::new()) }
+        }
+        /// What was counted and decoded since the last call.
+        fn reads(&self) -> (Vec<Trigram>, Vec<Trigram>) {
+            (std::mem::take(&mut *self.counted.lock().unwrap()), std::mem::take(&mut *self.decoded.lock().unwrap()))
+        }
+    }
+
+    impl Shard for ListShard {
+        fn doc_count(&self) -> u32 {
+            100
+        }
+        fn meta(&self, _: DocId) -> Result<crate::ports::DocMeta<'_>> {
+            unreachable!("candidates never reads metadata")
+        }
+        fn postings(&self, t: Trigram) -> Result<Vec<UnitId>> {
+            self.decoded.lock().unwrap().push(t);
+            Ok(self.lists.get(&t).cloned().unwrap_or_default())
+        }
+        fn count(&self, t: Trigram) -> Result<u32> {
+            self.counted.lock().unwrap().push(t);
+            Ok(self.lists.get(&t).map_or(0, |l| u32::try_from(l.len()).unwrap()))
+        }
+        fn may_contain(&self, t: Trigram) -> bool {
+            self.lists.contains_key(&t) || self.false_positives.contains(&t)
+        }
+        fn markers(&self) -> &crate::ports::Markers {
+            unreachable!("candidates never reads markers")
+        }
+        fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
+            Ok(unit)
+        }
+        fn content(&self, _: DocId) -> Result<std::borrow::Cow<'_, [u8]>> {
+            unreachable!("candidates never reads content")
+        }
+    }
+
+    #[test]
+    fn an_and_stops_decoding_once_verifying_is_cheaper() {
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        let huge = 3 * VERIFY_COST_POSTINGS as u32;
+        let lists = HashMap::from([
+            (t(b"abc"), (0..huge).collect::<Vec<_>>()),
+            (t(b"bcd"), vec![3, 5, 7, 9]),
+            (t(b"cde"), (0..50).collect()),
+            (t(b"def"), vec![5, 9, 11]),
+        ]);
+        // zzz is absent but passes the filter, so only its count can rule it out.
+        let shard = ListShard::new(lists, vec![t(b"zzz")]);
+        let q = Query::And([b"abc", b"bcd", b"cde", b"def"].iter().map(|b| Query::Tri(t(b))).collect());
+        // Rarest first: def, bcd and cde fit the budget of 2-3 candidates; abc's list costs
+        // more to decode than verifying 2 candidates and is never read. 5 and 9 are in abc
+        // too, so the result equals the full intersection here.
+        assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![5, 9]));
+        assert_eq!(shard.reads().1, vec![t(b"def"), t(b"bcd"), t(b"cde")]);
+        // An absent trigram empties the AND before anything is decoded.
+        let q = Query::And(vec![Query::Tri(t(b"abc")), Query::Tri(t(b"zzz"))]);
+        assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![]));
+        assert_eq!(shard.reads(), (vec![t(b"abc"), t(b"zzz")], vec![]));
+    }
+
+    #[test]
+    fn a_trigram_the_filter_rejects_empties_its_and_before_any_read() {
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        let and = |tris: &[&[u8; 3]]| Query::And(tris.iter().map(|b| Query::Tri(t(b))).collect());
+        let lists = HashMap::from([(t(b"abc"), vec![1, 2]), (t(b"def"), vec![2, 3]), (t(b"ghi"), vec![7])]);
+        let shard = ListShard::new(lists, vec![]);
+        // xyz is rejected though it comes last: nothing before it is counted or decoded, and
+        // the shard counts as filtered.
+        assert_eq!(shard_units(&shard, &and(&[b"abc", b"def", b"xyz"])).unwrap(), (Some(vec![]), true));
+        assert_eq!(shard.reads(), (vec![], vec![]));
+        // An OR inside the AND is checked the same way: both branches rejected, no read.
+        let q = Query::And(vec![Query::Tri(t(b"abc")), Query::Or(vec![and(&[b"xyz"]), Query::Tri(t(b"uvw"))])]);
+        assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![]), true));
+        assert_eq!(shard.reads(), (vec![], vec![]));
+        // In an OR only the rejected branches are skipped; the other is still read, and the
+        // shard is not filtered.
+        let q = Query::Or(vec![and(&[b"abc", b"xyz"]), Query::Tri(t(b"ghi")), Query::Tri(t(b"uvw"))]);
+        assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
+        assert_eq!(shard.reads(), (vec![], vec![t(b"ghi")]));
+        // The same OR under an AND the filter lets through: its branches are still asked.
+        let q = Query::And(vec![Query::Tri(t(b"ghi")), q]);
+        assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
+        assert_eq!(shard.reads(), (vec![t(b"ghi")], vec![t(b"ghi"), t(b"ghi")]));
+        // What the filter lets through is planned as before.
+        assert_eq!(shard_units(&shard, &and(&[b"abc", b"def"])).unwrap(), (Some(vec![2]), false));
+        assert_eq!(shard.reads(), (vec![t(b"abc"), t(b"def")], vec![t(b"abc"), t(b"def")]));
+        // "Every unit" needs no trigram, so the filter has nothing to reject.
+        assert_eq!(shard_units(&shard, &Query::All).unwrap(), (None, false));
+    }
+
+    #[test]
+    fn a_skipped_list_leaves_a_superset_and_the_rest_of_the_and_still_applies() {
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        let huge = 3 * VERIFY_COST_POSTINGS as u32;
+        let decoded = |s: &ListShard| s.reads().1;
+        let lists = HashMap::from([
+            // Lacks 9, so the true intersection with def is [5, 11], but it is too long to read.
+            (t(b"abc"), (0..huge).filter(|&u| u != 9).collect::<Vec<_>>()),
+            (t(b"def"), vec![5, 9, 11]),
+            (t(b"ghi"), vec![1, 2]),
+            (t(b"jkl"), vec![1, 2, 3, 4]),
+            (t(b"xyz"), vec![40]),
+        ]);
+        let shard = ListShard::new(lists, vec![]);
+        let and = |tris: &[&[u8; 3]]| Query::And(tris.iter().map(|b| Query::Tri(t(b))).collect());
+        // Superset: 9 survives because abc was never decoded; verification removes it.
+        assert_eq!(candidates(&shard, &and(&[b"abc", b"def"])).unwrap(), Some(vec![5, 9, 11]));
+        assert_eq!(decoded(&shard), vec![t(b"def")]);
+        // A single trigram is decoded as is.
+        assert_eq!(candidates(&shard, &Query::Tri(t(b"def"))).unwrap(), Some(vec![5, 9, 11]));
+        decoded(&shard);
+        // Once the candidates are empty nothing more is read: ghi, then def empties it, and
+        // jkl, though cheap, is never decoded.
+        assert_eq!(candidates(&shard, &and(&[b"jkl", b"def", b"ghi"])).unwrap(), Some(vec![]));
+        assert_eq!(decoded(&shard), vec![t(b"ghi"), t(b"def")]);
+        // A non-trigram part is intersected with the trigram lists: (def | xyz) & jkl share
+        // nothing.
+        let mixed =
+            Query::And(vec![Query::Or(vec![Query::Tri(t(b"def")), Query::Tri(t(b"xyz"))]), Query::Tri(t(b"jkl"))]);
+        assert_eq!(candidates(&shard, &mixed).unwrap(), Some(vec![]));
+        let mixed =
+            Query::And(vec![Query::Or(vec![Query::Tri(t(b"def")), Query::Tri(t(b"xyz"))]), Query::Tri(t(b"abc"))]);
+        // abc is the AND's only trigram, so it is decoded however long: the rarest is always read.
+        assert_eq!(candidates(&shard, &mixed).unwrap(), Some(vec![5, 11, 40]));
     }
 
     #[test]

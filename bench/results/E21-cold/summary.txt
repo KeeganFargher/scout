@@ -1,0 +1,85 @@
+## geomean p50 ms (20 queries)
+profile | CLI warm | CLI cold | serve warm | serve cold
+1cpu | 71.9 | 2231.7 | 36.9 | 2047.2
+4cpu | 49.2 | 1719.8 | 22.1 | 1527.0
+12cpu | 51.9 | 1725.0 | 23.6 | 1521.6
+
+## 1cpu per query: p50 ms (median major faults)
+query | CLI warm | CLI cold | serve warm | serve cold
+literal_rare | 27.5 (0) | 1967.1 (182) | 9.2 (0) | 1668.8 (171)
+literal_common | 608.7 (0) | 2995.2 (181) | 972.8 (0) | 3476.2 (196)
+literal_none | 10.5 (0) | 1510.7 (168) | 1.4 (0) | 1037.6 (146)
+literal_long | 57.4 (0) | 2338.7 (202) | 30.7 (0) | 2197.6 (198)
+ident_regex | 83.8 (0) | 2455.6 (190) | 46.3 (0) | 2451.9 (205)
+alternation | 135.1 (0) | 2676.2 (183) | 137.3 (0) | 2708.0 (193)
+case_insensitive | 158.9 (0) | 2609.6 (193) | 198.0 (0) | 2679.5 (203)
+smart_case | 119.6 (0) | 2393.6 (186) | 82.4 (0) | 2436.6 (194)
+word | 252.4 (0) | 2762.3 (176) | 320.0 (0) | 2963.2 (193)
+short_unindexable | 1097.3 (0) | 3526.1 (167) | 1573.9 (0) | 4183.1 (184)
+anchored | 26.7 (0) | 1857.4 (185) | 9.8 (0) | 1532.7 (170)
+date_regex | 686.5 (0) | 3010.6 (167) | 877.2 (0) | 3430.0 (184)
+email_regex | 178.6 (0) | 2479.5 (177) | 133.8 (0) | 2513.9 (192)
+count_mode | 47.9 (0) | 2092.2 (189) | 27.9 (0) | 1966.2 (192)
+files_mode | 64.7 (0) | 2356.9 (182) | 37.1 (0) | 2275.9 (192)
+rare_regex | 37.3 (0) | 2240.3 (188) | 14.7 (0) | 2084.7 (187)
+selective_one | 12.4 (0) | 1546.0 (168) | 1.6 (0) | 1071.3 (146)
+selective_long | 12.4 (0) | 1563.9 (168) | 1.7 (0) | 1054.6 (146)
+selective_vendored | 16.4 (0) | 1583.8 (169) | 3.2 (0) | 1055.8 (147)
+selective_common_trigrams | 23.5 (0) | 1923.6 (181) | 7.3 (0) | 1599.6 (172)
+
+## 4cpu per query: p50 ms (median major faults)
+query | CLI warm | CLI cold | serve warm | serve cold
+literal_rare | 20.0 (0) | 1510.1 (183) | 5.2 (0) | 1252.0 (174)
+literal_common | 420.3 (0) | 2265.0 (202) | 666.0 (0) | 2537.4 (225)
+literal_none | 11.5 (0) | 1171.1 (168) | 1.5 (0) | 773.7 (146)
+literal_long | 40.0 (0) | 1762.0 (215) | 18.7 (0) | 1597.5 (214)
+ident_regex | 50.3 (0) | 1906.8 (204) | 24.0 (0) | 1862.7 (236)
+alternation | 85.4 (0) | 2083.0 (213) | 104.6 (0) | 2106.2 (235)
+case_insensitive | 123.1 (0) | 2063.5 (219) | 158.4 (0) | 2096.4 (236)
+smart_case | 60.9 (0) | 1905.2 (214) | 31.0 (0) | 1823.4 (234)
+word | 182.0 (0) | 2209.2 (210) | 229.7 (0) | 2305.6 (253)
+short_unindexable | 462.0 (0) | 2513.4 (210) | 833.5 (0) | 2889.1 (248)
+anchored | 20.0 (0) | 1427.5 (186) | 4.8 (0) | 1184.5 (171)
+date_regex | 255.7 (0) | 2224.9 (215) | 268.6 (0) | 2278.6 (250)
+email_regex | 94.9 (0) | 2010.1 (210) | 63.1 (0) | 1981.6 (240)
+count_mode | 27.6 (0) | 1633.8 (192) | 10.0 (0) | 1484.2 (199)
+files_mode | 38.5 (0) | 1807.7 (195) | 14.0 (0) | 1724.1 (219)
+rare_regex | 28.4 (0) | 1770.4 (199) | 10.0 (0) | 1595.4 (199)
+selective_one | 12.9 (0) | 1188.0 (168) | 1.7 (0) | 769.5 (146)
+selective_long | 12.3 (0) | 1187.0 (168) | 1.6 (0) | 773.7 (146)
+selective_vendored | 14.5 (0) | 1190.6 (169) | 2.2 (0) | 774.3 (147)
+selective_common_trigrams | 19.4 (0) | 1494.0 (187) | 5.0 (0) | 1203.0 (177)
+
+## 12cpu per query: p50 ms (median major faults)
+query | CLI warm | CLI cold | serve warm | serve cold
+literal_rare | 22.8 (0) | 1539.3 (185) | 6.2 (0) | 1234.3 (174)
+literal_common | 431.9 (0) | 2369.1 (208) | 650.4 (0) | 2648.1 (239)
+literal_none | 14.1 (0) | 1190.8 (168) | 2.3 (0) | 756.8 (146)
+literal_long | 40.6 (0) | 1755.8 (218) | 19.0 (0) | 1626.7 (214)
+ident_regex | 48.5 (0) | 1921.9 (211) | 22.2 (0) | 1857.8 (237)
+alternation | 101.7 (0) | 2125.9 (217) | 111.7 (0) | 2084.3 (241)
+case_insensitive | 134.1 (0) | 2074.1 (221) | 170.6 (0) | 2090.2 (240)
+smart_case | 53.5 (0) | 1899.6 (218) | 26.0 (0) | 1841.3 (233)
+word | 192.3 (0) | 2198.1 (218) | 245.3 (0) | 2271.5 (257)
+short_unindexable | 591.9 (0) | 2485.0 (244) | 872.9 (0) | 2891.4 (291)
+anchored | 22.1 (0) | 1431.4 (186) | 5.0 (0) | 1175.3 (171)
+date_regex | 161.5 (0) | 2165.3 (237) | 193.3 (0) | 2263.4 (290)
+email_regex | 95.2 (0) | 2003.1 (211) | 64.3 (0) | 1942.1 (243)
+count_mode | 26.4 (0) | 1666.3 (194) | 8.8 (0) | 1480.6 (197)
+files_mode | 37.6 (0) | 1806.9 (203) | 13.4 (0) | 1711.4 (221)
+rare_regex | 30.6 (0) | 1760.0 (199) | 11.1 (0) | 1585.6 (199)
+selective_one | 15.4 (0) | 1186.3 (168) | 2.4 (0) | 763.1 (146)
+selective_long | 15.3 (0) | 1176.5 (168) | 2.5 (0) | 767.8 (146)
+selective_vendored | 17.0 (0) | 1195.3 (169) | 2.7 (0) | 767.5 (147)
+selective_common_trigrams | 21.6 (0) | 1479.1 (187) | 5.5 (0) | 1203.6 (178)
+
+## memory cliff, serve at 1 CPU, warm steady state
+limit | geomean p50 ms | worst query p90 ms | median major faults/query | page cache MiB | events
+2G | 38.4 | 1733 (short_unindexable) | 0 | 1049 | low 0 high 0 max 0 oom 0 oom_kill 0 oom_group_kill 0
+1536M | 36.3 | 1435 (short_unindexable) | 0 | 1041 | low 0 high 0 max 0 oom 0 oom_kill 0 oom_group_kill 0
+1280M | 39.6 | 1429 (short_unindexable) | 0 | 1012 | low 0 high 0 max 1981 oom 0 oom_kill 0 oom_group_kill 0
+1G | 215.2 | 2878 (short_unindexable) | 64 | 963 | low 0 high 0 max 68408 oom 0 oom_kill 0 oom_group_kill 0
+768M | 1040.0 | 3354 (short_unindexable) | 142 | 709 | low 0 high 0 max 230018 oom 0 oom_kill 0 oom_group_kill 0
+512M | 1594.2 | 4050 (short_unindexable) | 202 | 456 | low 0 high 0 max 356519 oom 0 oom_kill 0 oom_group_kill 0
+
+parity ALL OK

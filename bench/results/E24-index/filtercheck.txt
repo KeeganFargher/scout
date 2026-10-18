@@ -1,0 +1,23 @@
+139 shards
+query                        exact filter  want scout
+literal_rare                    96     96    43    43
+literal_common                 128    128    11    11
+literal_none                     3      3   136   136
+literal_long                    95     95    44    44
+ident_regex                                        16
+alternation                                        19
+case_insensitive                                   27
+smart_case                                         11
+word                                                2
+short_unindexable                                   0
+anchored                                           63
+date_regex                                          0
+email_regex                                         1
+count_mode                     105    105    34    34
+files_mode                                         13
+rare_regex                                         57
+selective_one                   51     51    88    88
+selective_long                   7      7   132   132
+selective_vendored              74     75    64    64
+selective_common_trigrams       58     59    80    80
+filter gate OK

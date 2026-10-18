@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::catalog::Catalog;
-use crate::trigram::Trigram;
+use crate::trigram::{ALWAYS_SEARCH, READER_MODE, Trigram};
 
 /// Metadata of one file in a repo. `path` is relative to the repo root and always uses
 /// `/` separators, so shards are portable across operating systems.
@@ -147,10 +147,57 @@ pub trait Shard: Send + Sync {
     /// Sorted ids of units containing `tri`; empty when the trigram is absent.
     fn postings(&self, tri: Trigram) -> Result<Vec<UnitId>>;
 
+    /// How many units contain `tri`, without decoding them: the planner reads it to decode
+    /// only the rarest lists of an AND (E22).
+    fn count(&self, tri: Trigram) -> Result<u32>;
+
+    /// Whether the shard may hold `tri`, answered from a filter without reading the
+    /// shard's dictionary or postings (E24; a filter read through a map costs a page of its
+    /// own). `false` is certain, so the planner asks it for every trigram of a query before
+    /// counting or decoding any; `true` can be wrong (a false positive), but is never
+    /// `false` for a trigram the shard holds.
+    fn may_contain(&self, tri: Trigram) -> bool;
+
+    /// The marker doc lists, decoded once when the shard opens (E23): planning reads both
+    /// for every shard on every query, and once the page cache has dropped them each one
+    /// costs a random read at the end of the dictionary and of the postings, per shard.
+    fn markers(&self) -> &Markers;
+
     /// The document a unit belongs to.
     fn unit_doc(&self, unit: UnitId) -> Result<DocId>;
 
     fn content(&self, doc: DocId) -> Result<Cow<'_, [u8]>>;
+}
+
+/// Docs carrying the marker pseudo-trigrams [`ALWAYS_SEARCH`] and [`READER_MODE`].
+///
+/// `Default` (both empty) exists only so a backend can build its shard first and then
+/// [`Markers::load`] through it; an opened shard always holds the loaded lists.
+#[derive(Debug, Default, Clone)]
+pub struct Markers {
+    /// Candidates for every query, whatever its trigrams.
+    pub always_search: Vec<DocId>,
+    /// Searched through rg's reader path instead of as a raw slice.
+    pub reader_mode: Vec<DocId>,
+}
+
+impl Markers {
+    /// Decodes both lists through the shard's own postings and unit table.
+    pub fn load(shard: &dyn Shard) -> Result<Self> {
+        Ok(Self { always_search: marker_docs(shard, ALWAYS_SEARCH)?, reader_mode: marker_docs(shard, READER_MODE)? })
+    }
+}
+
+fn marker_docs(shard: &dyn Shard, marker: Trigram) -> Result<Vec<DocId>> {
+    let mut docs: Vec<DocId> = Vec::new();
+    for unit in shard.postings(marker)? {
+        let doc = shard.unit_doc(unit)?;
+        // A doc's units are contiguous and ascending, so its repeats are adjacent.
+        if docs.last() != Some(&doc) {
+            docs.push(doc);
+        }
+    }
+    Ok(docs)
 }
 
 /// Where shard files and the catalog live.

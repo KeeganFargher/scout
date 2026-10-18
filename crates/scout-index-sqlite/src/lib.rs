@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags, params};
-use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Shard, ShardWriter, UnitId};
+use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId};
 use scout_core::trigram::Trigram;
 use scout_core::{Error, Result};
 
@@ -103,7 +103,9 @@ impl IndexBackend for SqliteBackend {
             }
             unit_docs
         };
-        Ok(Box::new(SqliteShard { conn: Mutex::new(conn), metas, unit_docs }))
+        let mut shard = SqliteShard { conn: Mutex::new(conn), metas, unit_docs, markers: Markers::default() };
+        shard.markers = Markers::load(&shard)?;
+        Ok(Box::new(shard))
     }
 }
 
@@ -185,6 +187,7 @@ pub struct SqliteShard {
     /// Loaded at open so `meta` can hand out borrowed paths like the native backend.
     metas: Vec<FileMeta>,
     unit_docs: Vec<DocId>,
+    markers: Markers,
 }
 
 impl SqliteShard {
@@ -236,6 +239,37 @@ impl Shard for SqliteShard {
         Ok(out)
     }
 
+    /// The blob stores no count, so this reads it and counts the varints' last bytes:
+    /// cheaper than decoding, and SQLite is not the fast backend.
+    fn count(&self, tri: Trigram) -> Result<u32> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare_cached("SELECT units FROM postings WHERE trigram = ?1")
+            .map_err(|e| db_err("preparing postings query", e))?;
+        let blob = match stmt.query_row(params![tri.0], |r| r.get::<_, Vec<u8>>(0)) {
+            Ok(blob) => blob,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(0),
+            Err(e) => return Err(db_err("reading postings", e)),
+        };
+        // The same check as `postings`: a truncated blob would otherwise count short, and a
+        // list the planner then skips would hide the damage.
+        if blob.last().is_some_and(|b| b & 0x80 != 0) {
+            return Err(Error::Invalid(format!("postings for trigram {:#x} are truncated", tri.0)));
+        }
+        u32::try_from(blob.iter().filter(|b| *b & 0x80 == 0).count())
+            .map_err(|_| Error::Invalid(format!("trigram {:#x} has over 2^32 units", tri.0)))
+    }
+
+    /// No filter: this backend keeps none (E24 measured one for the native shards only),
+    /// so every trigram may be present and `count` decides.
+    fn may_contain(&self, _: Trigram) -> bool {
+        true
+    }
+
+    fn markers(&self) -> &Markers {
+        &self.markers
+    }
+
     fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
         self.unit_docs.get(unit as usize).copied().ok_or_else(|| Error::Invalid(format!("unit {unit} out of range")))
     }
@@ -280,5 +314,53 @@ mod tests {
         assert_eq!(s.postings(Trigram::from_bytes(b'w', b'o', b'r')).unwrap(), vec![1, 3]);
         assert_eq!([0, 1, 2, 3].map(|u| s.unit_doc(u).unwrap()), [0, 1, 2, 2]);
         assert!(s.postings(Trigram::from_bytes(b'z', b'z', b'z')).unwrap().is_empty());
+        // `count` is what the planner orders by, so it must agree with the decoded list.
+        for c in [b"fn hello() {}".as_slice(), b"hello world", split] {
+            for &t in ex.extract(c) {
+                assert_eq!(s.count(t).unwrap() as usize, s.postings(t).unwrap().len(), "{t:?}");
+            }
+        }
+        assert_eq!(s.count(Trigram::from_bytes(b'z', b'z', b'z')).unwrap(), 0);
+        assert!(s.markers().always_search.is_empty() && s.markers().reader_mode.is_empty());
+    }
+
+    #[test]
+    fn loads_marker_docs_at_open() {
+        use scout_core::trigram::{ALWAYS_SEARCH, READER_MODE};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sqlite");
+        let t = Trigram::from_bytes(b'a', b'b', b'c');
+        // Doc 1's two units both carry READER_MODE: it must be listed once.
+        let docs: [(&str, Vec<Vec<Trigram>>); 3] = [
+            ("plain", vec![vec![t]]),
+            ("bom", vec![vec![t, READER_MODE], vec![t, READER_MODE]]),
+            ("utf16", vec![vec![READER_MODE, ALWAYS_SEARCH]]),
+        ];
+        let mut w = SqliteBackend.create(&path).unwrap();
+        for (p, units) in &docs {
+            w.add(&FileMeta { path: (*p).to_string(), size: 3, mtime_ns: 0 }, b"abc", units).unwrap();
+        }
+        w.finish().unwrap();
+        let s = SqliteBackend.open(&path).unwrap();
+        assert_eq!(s.markers().reader_mode, vec![1, 2]);
+        assert_eq!(s.markers().always_search, vec![2]);
+    }
+
+    #[test]
+    fn count_rejects_a_truncated_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.sqlite");
+        let t = Trigram::from_bytes(b'a', b'b', b'c');
+        let mut w = SqliteBackend.create(&path).unwrap();
+        w.add(&FileMeta { path: "a".into(), size: 3, mtime_ns: 0 }, b"abc", &[vec![t]]).unwrap();
+        w.finish().unwrap();
+        // One complete varint, then a byte that promises more: counted naively that is 1.
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE postings SET units = x'0080' WHERE trigram = ?1", params![t.0])
+            .unwrap();
+        let s = SqliteBackend.open(&path).unwrap();
+        assert!(s.count(t).is_err());
+        assert!(s.postings(t).is_err());
     }
 }

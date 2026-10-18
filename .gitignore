@@ -7,3 +7,8 @@ dist/
 coverage/
 .tsbuild/
 target/
+# The ranking golden set stays private: its labels are paths in the author's own projects
+# and its queries come from the author's agent transcripts (docs/ranking.md, Evaluation).
+bench/golden/
+# Claude Code's local session state.
+.claude/

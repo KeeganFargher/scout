@@ -1,0 +1,71 @@
+
+## 1cpu: query | base | bud16 | bud16/base | rounds bud16 faster
+literal_rare | 33.7 | 32.3 | 0.958 | 5/5
+literal_common | 588.6 | 575.3 | 0.977 | 5/5
+literal_none | 12.2 | 11.1 | 0.904 | 5/5
+literal_long | 67.0 | 65.5 | 0.978 | 5/5
+ident_regex | 98.1 | 97.4 | 0.994 | 4/5
+alternation | 145.5 | 143.6 | 0.987 | 5/5
+case_insensitive | 140.5 | 156.5 | 1.114 | 0/5
+smart_case | 136.2 | 133.5 | 0.980 | 4/5
+word | 269.3 | 266.5 | 0.990 | 4/5
+short_unindexable | 1105.5 | 1100.9 | 0.996 | 5/5
+anchored | 32.6 | 30.4 | 0.933 | 5/5
+date_regex | 749.0 | 743.6 | 0.993 | 4/5
+email_regex | 202.0 | 200.7 | 0.993 | 5/5
+count_mode | 58.8 | 55.4 | 0.942 | 5/5
+files_mode | 79.9 | 78.4 | 0.981 | 4/5
+rare_regex | 44.4 | 43.6 | 0.982 | 5/5
+selective_one | 15.5 | 13.4 | 0.866 | 5/5
+selective_long | 14.7 | 12.2 | 0.834 | 5/5
+selective_vendored | 20.1 | 16.8 | 0.834 | 5/5
+selective_common_trigrams | 29.1 | 28.1 | 0.966 | 5/5
+geomean bud16/base: 0.958
+
+## 4cpu: query | base | bud16 | bud16/base | rounds bud16 faster
+literal_rare | 22.6 | 21.9 | 0.970 | 5/5
+literal_common | 406.8 | 412.1 | 1.013 | 2/5
+literal_none | 12.1 | 11.4 | 0.936 | 5/5
+literal_long | 42.3 | 41.5 | 0.982 | 5/5
+ident_regex | 56.1 | 53.7 | 0.957 | 5/5
+alternation | 88.4 | 86.8 | 0.981 | 3/5
+case_insensitive | 113.9 | 109.6 | 0.962 | 4/5
+smart_case | 63.4 | 63.4 | 1.001 | 3/5
+word | 196.8 | 196.5 | 0.998 | 3/5
+short_unindexable | 468.1 | 466.6 | 0.997 | 3/5
+anchored | 23.2 | 21.3 | 0.917 | 5/5
+date_regex | 249.4 | 247.0 | 0.990 | 4/5
+email_regex | 100.1 | 100.2 | 1.000 | 3/5
+count_mode | 30.4 | 30.4 | 1.000 | 3/5
+files_mode | 43.3 | 42.0 | 0.970 | 4/5
+rare_regex | 30.2 | 29.8 | 0.986 | 3/5
+selective_one | 13.7 | 12.5 | 0.913 | 5/5
+selective_long | 13.5 | 12.1 | 0.896 | 5/5
+selective_vendored | 16.2 | 14.7 | 0.912 | 5/5
+selective_common_trigrams | 20.7 | 20.1 | 0.972 | 5/5
+geomean bud16/base: 0.967
+
+## 12cpu: query | base | bud16 | bud16/base | rounds bud16 faster
+literal_rare | 24.1 | 24.5 | 1.017 | 2/5
+literal_common | 479.8 | 489.6 | 1.020 | 3/5
+literal_none | 14.7 | 14.2 | 0.964 | 3/5
+literal_long | 42.1 | 41.7 | 0.991 | 3/5
+ident_regex | 51.3 | 52.5 | 1.024 | 1/5
+alternation | 100.2 | 99.3 | 0.991 | 2/5
+case_insensitive | 127.1 | 125.0 | 0.983 | 3/5
+smart_case | 56.4 | 55.0 | 0.976 | 4/5
+word | 233.8 | 239.3 | 1.023 | 1/5
+short_unindexable | 614.7 | 610.9 | 0.994 | 4/5
+anchored | 24.2 | 22.4 | 0.925 | 5/5
+date_regex | 171.6 | 159.4 | 0.929 | 4/5
+email_regex | 99.8 | 99.1 | 0.993 | 3/5
+count_mode | 29.0 | 28.7 | 0.990 | 4/5
+files_mode | 41.0 | 39.7 | 0.969 | 4/5
+rare_regex | 32.1 | 31.1 | 0.968 | 5/5
+selective_one | 16.4 | 15.5 | 0.947 | 5/5
+selective_long | 16.2 | 14.9 | 0.917 | 5/5
+selective_vendored | 18.5 | 17.0 | 0.917 | 4/5
+selective_common_trigrams | 22.9 | 22.5 | 0.983 | 3/5
+geomean bud16/base: 0.976
+
+parity {'base-12cpu': True, 'base-1cpu': True, 'base-4cpu': True, 'bud16-12cpu': True, 'bud16-1cpu': True, 'bud16-4cpu': True}
