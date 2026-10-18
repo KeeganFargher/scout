@@ -7,7 +7,7 @@ every file.
 ## Goals
 
 1. **Correct first.** A search returns exactly what `rg` would return over the same repos.
-   The index is only a *pre-filter*: every candidate is confirmed by ripgrep's regex
+   The index is only a _pre-filter_: every candidate is confirmed by ripgrep's regex
    engine on real contents. The index can make a search faster, never different.
 2. **Fast.** A selective query over ~100k files should touch only a handful of them.
 3. **Runs on small machines.** 1 CPU / 2 GB RAM must work; 30 cores / TBs of RAM must
@@ -16,17 +16,17 @@ every file.
    files live are all swappable behind small traits. One core, many front-ends (CLI now,
    MCP later).
 
-Non-goals for now: ranking, semantic search, MCP server, remote/S3 implementations
+Non-goals for now: semantic search, MCP server, remote/S3 implementations
 (the seams exist, implementations come later).
 
 ## Decisions (agreed 2026-10-17)
 
-| Decision | Choice | Why |
-| --- | --- | --- |
-| Language | Rust core + Rust CLI | In-process use of ripgrep's crates. No process spawn per repo, mmap, no GC. |
-| ripgrep | Vendored as a git subtree in `vendor/ripgrep`, used via path deps | We own the code and can patch internals, but can still `git subtree pull` upstream. |
-| Freshness | Detect + verify | Files that changed since indexing are searched from disk, deleted files are dropped, so results are never stale. |
-| TS workspace | Kept for future thin front-ends (e.g. the MCP) | The empty TS `apps/cli` and `domains/*` placeholders are removed; the Rust crates own those domains now. |
+| Decision     | Choice                                                            | Why                                                                                                              |
+| ------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Language     | Rust core + Rust CLI                                              | In-process use of ripgrep's crates. No process spawn per repo, mmap, no GC.                                      |
+| ripgrep      | Vendored as a git subtree in `vendor/ripgrep`, used via path deps | We own the code and can patch internals, but can still `git subtree pull` upstream.                              |
+| Freshness    | Detect + verify                                                   | Files that changed since indexing are searched from disk, deleted files are dropped, so results are never stale. |
+| TS workspace | Kept for future thin front-ends (e.g. the MCP)                    | The empty TS `apps/cli` and `domains/*` placeholders are removed; the Rust crates own those domains now.         |
 
 ## Architecture
 
@@ -51,12 +51,13 @@ declares.
 
 ### Ports (the swappable seams)
 
-- **`RepoSource`**: where repo *contents* come from at index time (and for freshness
+- **`RepoSource`**: where repo _contents_ come from at index time (and for freshness
   checks). It lists files and reads bytes. Today that's the local FS (`ignore` crate, the
   same rules as rg: `.gitignore`, hidden files, binary detection). Later: git remote, S3.
-- **`IndexBackend`**: turns a stream of documents into a *shard*, and opens a shard for
-  querying (`candidates(query) -> doc ids`, `content(doc)`, `path(doc)`). Today: native
-  mmap format, SQLite.
+- **`IndexBackend`**: turns a stream of documents into a _shard_, and opens a shard for
+  querying: `postings(trigram) -> unit ids`, `unit_doc(unit)`, `meta(doc)`, `content(doc)`.
+  Query planning and candidate sets live in the core, so a backend only stores and reads.
+  Today: native mmap format, SQLite.
 - **`ShardStore`**: where shard files live (a local directory today; an object store with a
   local cache later). A remote store downloads shards to the local cache and the backend
   mmaps them. That's why the shard is self-contained.
@@ -70,22 +71,24 @@ Each repo becomes one or more shards. A shard holds:
   is a slice into an mmap, not a file open. On Windows, opening 100k files costs seconds
   (Defender, NTFS), so this is likely the biggest single win. It also makes a shard
   self-contained, which is what lets remote stores work.
-- **Units table**: large docs are split into line-aligned ~64 KiB *units*; the table
+- **Units table**: large docs are split into line-aligned ~64 KiB _units_; the table
   maps each unit to its doc. Small docs are one unit. (Experiment E4.)
 - **Trigram postings**: for every 3-byte sequence (ASCII case-folded), the sorted list of
-  *units* that contain it, delta + varint encoded. Lookup is a binary search in a sorted
-  trigram dictionary. A doc is a candidate only if one of its units holds every trigram of
-  an AND. That is sound because matches are line-oriented and units end at newlines.
-  Native format v2 (`SCOUTNI2`): header, content, docs, paths, units, dictionary,
-  postings.
+  _units_ that contain it, delta + varint encoded. Lookup goes through a fence of every
+  128th key to one 128-key block of the sorted trigram keys, so it usually touches about
+  three pages (sections are not page-aligned, so a block can straddle two) (E19). A doc is a candidate only if one of its units holds every trigram of an
+  AND. That is sound because matches are line-oriented and units end at newlines. Native
+  format v3 (`SCOUTNI3`): header, content, docs, paths, units, dictionary keys, values and
+  fence, postings. A shard in another format version is refused with a message to rebuild
+  the index with `scout index`.
 
 Big repos are split into several shards by a size cap. The cap comes from the memory
-budget: building a shard keeps its trigram map in RAM, so the cap bounds indexing memory
-on small machines.
+budget: building a shard keeps its (trigram, unit) pairs in RAM, so the cap bounds
+indexing memory on small machines.
 
 ### Query planning (regex → trigram query)
 
-Following Russ Cox's *Regular Expression Matching with a Trigram Index*: walk the
+Following Russ Cox's _Regular Expression Matching with a Trigram Index_: walk the
 `regex-syntax` HIR, computing for each node its exact/prefix/suffix literal sets and a
 boolean query. Each literal of 3+ bytes becomes an AND of its trigrams; alternations become
 ORs; anything unbounded becomes "match all". Case-insensitive queries fold the same way the
@@ -95,23 +98,70 @@ the search falls back to scanning the corpus bins, which is still faster than wa
 ### Search pipeline
 
 1. Plan the query once.
-2. Fan out over shards on a thread pool sized to the machine (`available_parallelism`,
-   overridable with `--threads`).
-3. Per shard: intersect/union postings → candidate docs → run `grep-searcher` +
-   `grep-regex` on each candidate's content slice, with `grep-printer` producing rg-style
-   output.
+2. Plan every repo in parallel on a thread pool sized to the machine
+   (`available_parallelism`, overridable with `--threads`): per shard, intersect/union
+   postings → candidate docs, cut into chunks of ~4 MiB of candidates.
+3. Verify the chunks on up to that many threads (fewer when there are fewer chunks): run
+   `grep-searcher` + `grep-regex` on each candidate's content slice, with `grep-printer`
+   producing rg-style output. Chunks cross repo boundaries, so a few large repos no longer
+   bound the search (E16); one file is still verified by one thread, as in rg. Output is
+   printed in chunk order; workers run ahead of the printer only while less than 64 MiB
+   is waiting to print (E18), and one thread verifies inline without a buffer.
 4. Freshness (default `strict`): docs whose file changed on disk are searched from disk
    instead, deleted files are dropped, new files are searched directly.
-   `--freshness off` trusts the index. See *Strict freshness* below.
+   `--freshness off` trusts the index. See _Strict freshness_ below.
 5. Stream results in a stable order. `-m`/limits stop early.
 
 ### Adaptivity to hardware
 
 - Shards are mmapped, so the OS pages them in and out and RAM use tracks the working set.
 - Threads default to the available cores.
-- The indexing memory budget defaults to a fraction of physical RAM and sets the shard
-  size cap.
+- The indexing memory budget defaults to a quarter of usable RAM (capped at 4 GiB) and sets
+  the shard size cap.
 - No component needs the whole index in memory.
+- On Linux, usable RAM is the tightest cgroup memory limit (v2 or v1) when one is set,
+  as in a container or a systemd unit, not the host's RAM (E13). Windows reads physical
+  RAM.
+
+### Measured on small and large machines
+
+Linux (WSL2 Ubuntu), each profile a cgroup: `systemd-run --user --scope` with
+`MemoryMax`, no swap and `CPUQuota`, plus `taskset`. The page cache for the mmapped
+shards is charged to the same cgroup, as on a real VM. Corpus: the 137 bench repos
+mirrored onto the Linux disk (54k files, 854 MiB of content, 1.1 GiB index). The harness
+scripts are described in `docs/experiments.md` (E13–E17).
+
+| profile           | index (warm) | index peak RSS | selective p50 | broad sweep p50 (`date_regex`) | 20-query p50 total |
+| ----------------- | ------------ | -------------- | ------------- | ------------------------------ | ------------------ |
+| 1 CPU / 2 GiB     | 16.2 s       | 130 MiB        | 9–17 ms       | 680 ms                         | 3.1 s              |
+| 2 CPUs / 4 GiB    | 11.3 s       | 183 MiB        | 9–14 ms       | 361 ms                         | 2.1 s              |
+| 4 CPUs / 4 GiB    | 7.5 s        | 273 MiB        | 9–14 ms       | 220 ms (E16: ×0.955)           | 1.9 s              |
+| 8 CPUs / 16 GiB   | 10.9 s       | 350 MiB        | 10–15 ms      | 166 ms                         | 1.9 s              |
+| 12 CPUs, no limit | 6.2 s        | 449 MiB        | 12–16 ms      | 154 ms (E16: ×0.859)           | 1.9 s              |
+
+CLI numbers (a process per query, so they include start-up and opening 140 shards);
+100 runs per query, measured before E16 (the marked ratios are E16's interleaved A/B).
+No profile was OOM-killed. Indexing memory follows the budget (workers × shard cap), not
+the corpus. A search's RSS counts the shard pages it touched, so it is an upper bound; its
+own allocations were 5–60 MiB in the Windows bench, plus buffered output, which `serve`
+caps at 16 MiB. 8 CPUs indexed slower than 4, presumably because its 4 GiB budget doubles the shard cap
+(102 vs 51 MiB), so fewer, larger shards leave cores idle at the end. One run each, not
+yet investigated.
+
+Served (`scout serve`, closed-loop clients sending a mix that is 81% selective lookups,
+E17; 60 s per cell, each profile at its default worker count, on the first E16 build, so
+1 CPU reads a few percent low), selective p50 / p99:
+
+| profile         | 1 client   | 4 clients   | 16 clients    | throughput |
+| --------------- | ---------- | ----------- | ------------- | ---------- |
+| 1 CPU / 2 GiB   | 11 / 83 ms | 97 / 530 ms | 476 / 1165 ms | ~29 req/s  |
+| 4 CPUs / 4 GiB  | 5 / 26 ms  | 35 / 119 ms | 171 / 334 ms  | ~85 req/s  |
+| 8 CPUs / 16 GiB | 5 / 24 ms  | 28 / 86 ms  | 145 / 246 ms  | ~103 req/s |
+
+What does not scale with cores: one file is searched by one thread, so a query whose
+output comes mostly from one huge file (two CSVs of 20 and 24 MB print 60% of
+`literal_common`) stays at ~435 ms (CLI bench) to ~475 ms (E16's A/B) from 4 to 12 CPUs. Throughput past one loaded
+client is set by the CPUs: a 1-CPU box serves about 29 searches a second of this mix.
 
 ## Benchmarking & the optimisation loop
 
@@ -179,13 +229,228 @@ on every search under ~1.5 ms.
 **Unchanged fast path.** The index records a 128-bit, order-independent digest of the
 listing it indexed. Each snapshot carries the digest of its own listing, in a header that
 decodes on its own. When the digests match, the watch list is unchanged, and the journal
-shows nothing under any of the repo's directories, the current listing provably *is* the
+shows nothing under any of the repo's directories, the current listing provably _is_ the
 indexed one. The repo is then searched exactly like `--freshness off`, with no map, no
 listing and no full decode. That is the common case: most repos are untouched between
 searches, so strict costs a few ms over off.
 
 Known limits, shared with git's index: a file whose content changed but whose size and
 mtime did not looks unchanged, and so does a hard link modified through another path.
+
+## Hosted sync
+
+`scout serve` runs scout as a long-lived server. It mirrors git remotes into working
+copies on its own disk, reindexes what changed on a schedule, and answers searches over
+HTTP. `scout sync` runs one cycle of the same loop and exits (for cron, CI and
+tests). The loop lives in `scout-sync` (configuration, GitHub listing, git) and
+`scout-cli` (indexing, publishing, serving), so the MCP server can later call the same
+pieces.
+
+**Configuration** is a TOML file (`--config`):
+
+```toml
+mirror_dir = "/var/lib/scout/mirrors" # one working copy per repo; scout owns it (see below)
+interval_secs = 300
+token_env = "GITHUB_TOKEN" # name of the env var, never the token itself
+fetch_jobs = 8 # optional; default clamp(2 x cores, 4, 16)
+github_api = "https://api.github.com" # optional; GitHub Enterprise, or a test fake
+git_timeout_secs = 900 # optional; hard deadline per repo per cycle
+
+[[repo]]
+url = "https://github.com/BurntSushi/ripgrep"
+name = "ripgrep" # optional; default "<owner>-<repo>"
+branch = "master" # optional; default: the remote's HEAD
+
+[[github]]
+owner = "rust-lang"
+kind = "org" # or "user"
+include_forks = false
+include_archived = false
+```
+
+`[[github]]` entries are expanded through the REST API on every cycle
+(`/orgs/{o}/repos?type=all` or `/users/{u}/repos?type=owner`, 100 per page; `owner`, because
+a user listing with `type=all` adds repos of others they merely collaborate on), so repos added to or removed from
+an org follow automatically. The token is read from the named env var once at startup.
+It goes to the API as a bearer header. It goes to git through `GIT_CONFIG_COUNT`
+environment config, as `http.https://github.com/.extraHeader =
+AUTHORIZATION: basic base64("x-access-token:" + token)`, the form `actions/checkout` uses. It is never put on a command line
+(other users could see it in the process list) or in an error message. The header is scoped
+to the git host of `github_api` (`api.github.com` → `https://github.com/`, an Enterprise
+`https://ghe.example/api/v3` → `https://ghe.example/`), so it is never sent to any other
+remote. A token over plain `http://` is refused unless the host is loopback. Remote URLs
+carrying credentials (any user part over http(s), a password on any scheme) or starting
+with `-` (option injection) are rejected at config load. Inherited `GIT_DIR`-style
+variables and git's tracing variables (`GIT_TRACE*`, `GIT_CURL_VERBOSE`, which can print
+the Authorization header into stderr and so into failure reports) are cleared, and
+prompts are disabled, so git never reads a terminal or the wrong repository.
+
+One remote is mirrored once. Remotes are compared by normalised URL (`.git`, trailing
+slash, scheme and ssh user dropped, so `git@github.com:a/r` equals `https://github.com/a/r`;
+host case ignored, path case ignored only on GitHub), and the first mention wins:
+`[[repo]]` entries come before owner listings, so an explicit entry's name and branch
+override the listing's. The same remote twice in `[[repo]]` is reported, not silently
+merged. A name already
+used by a different remote, in the config or in the catalog, is refused and reported;
+taking it over would reset that working copy onto an unrelated repo and replace its
+index. Freeing a name is an explicit `scout remove`.
+
+**Fetching shells out to `git`.** That runs the real git, which supports every protocol,
+credential helper, proxy and server quirk that users' remotes already work with. It is the
+fastest fetch implementation, and it adds no C build dependency (a cross-build already trips
+on bundled SQLite). gix is pure Rust, but its checkout/reset of a working tree is less
+complete. libgit2 lags git on protocol v2 and partial clone, and adds a C toolchain
+requirement. The cost is a runtime dependency on `git` ≥ 2.31 (for `GIT_CONFIG_COUNT`),
+checked at startup.
+
+- **First cycle:** `git clone --depth 1 --single-branch [--branch B]`. The index needs the
+  tree, not the history, so a shallow clone is the cheapest way to get it.
+- **Later cycles:** `git fetch --depth 1 origin <B or HEAD>`, then
+  `git reset --hard FETCH_HEAD` only when `FETCH_HEAD` differs from `HEAD`.
+- **Only sync writes there:** nothing else writes to the working copies, so there is
+  nothing to merge or clean.
+- **Parallelism:** fetches are network-bound, so they run on their own pool. It defaults
+  to `clamp(2 × cores, 4, 16)` and is independent of the indexing workers.
+- **Stalls:** each repo's sync has one hard deadline (`git_timeout_secs`) across all its
+  git commands. Past it, git and the helpers it spawned (`git-remote-https`, `ssh`) are
+  killed: on Unix git runs in its own process group and the group is killed (reaching
+  `git-remote-https` → `fetch-pack` → `index-pack` too), on Windows `taskkill /T` kills
+  the tree; git itself is always killed and reaped even if reaching the helpers fails.
+  Every `*.lock` a killed git leaves in `.git` and `.git/refs` is cleared before the
+  repo's next sync, under the mirror lock. `http.lowSpeedLimit`/`lowSpeedTime` end dead http transfers sooner
+  (they do not apply to ssh, where the deadline does), and API requests have connect and
+  total timeouts. Indexing starts once every fetch is done, so one hung remote delays the
+  whole cycle's publish by up to `git_timeout_secs` (15 min by default), then fails alone.
+- **Failures:** a repo whose fetch fails keeps its current index, which is still exactly
+  the commit it was built from. The failure is reported, the cycle carries on, and the next
+  cycle retries. `scout sync` exits non-zero if any repo failed.
+
+**Change detection is by commit.** `RepoIndex.commit` records the commit an index was built
+from. A synced repo is reindexed only when its working copy's `HEAD` differs from that
+commit, or when it has no index yet. This is exact and costs nothing: no listing, no
+journal. On Linux, where strict freshness has no journal and would rescan, it is the only
+cheap check. Repos added with `scout add` have no commit (their working tree may be dirty),
+and sync never touches them.
+
+**Repos follow the configuration.** Every entry that sync creates records its remote
+(`RepoEntry.remote`: URL and branch). When a cycle's resolved set no longer contains a
+synced repo (removed from the config, or from the org), the repo leaves the catalog, its
+shards are retired, and its working copy is deleted. Only entries with a remote are ever
+removed this way.
+
+**GitHub errors fail fast.** A 403 or 429 with `X-RateLimit-Remaining: 0` ends the listing
+with an error naming the reset time. The cycle then keeps every repo of that owner as it
+was, rather than reading a partial listing as "repos were deleted". There is no retry
+inside a cycle; the next cycle is the retry.
+
+**Incremental indexing: whole repos, only the changed ones.** A cycle reindexes only the
+repos whose commit moved, and each of those fully. Shards are immutable and cover one repo.
+A repo's reindex costs time in proportion to its size: the median repo in the bench corpus
+indexes in well under a second, and the whole 137-repo corpus in about 40 s. Reusing
+unchanged files inside a repo (`git diff --name-only old new` to pick the files, and a
+shard that copies the rest) would save time only on large repos with small commits. It
+also needs a merge step in the shard format. Deferred until a measured cycle shows
+reindexing dominating.
+
+**Publishing is generational, so readers never see a mix.** Before this, shard names were
+deterministic (`repo.0.native`) and a reindex renamed new shards over the old ones. A
+search reads the catalog, then opens its shards a few milliseconds later. A reindex
+landing in between gave it the new shard 0 next to the old catalog's digest, or a deleted
+shard 1. (Renaming over or deleting a _mapped_ shard is not itself a problem, on Windows
+either: measured, both succeed, because files are opened with delete sharing and existing
+maps keep the old bytes.) Now:
+
+1. Shards are named `<repo>.<generation>.<n>.<backend>`, where the generation is a fresh
+   per-index-run id, so new shards never collide with live ones.
+2. New shards are published, then the catalog is replaced with one atomic rename. A reader
+   sees the old catalog with the old shards, or the new catalog with the new shards.
+3. Replaced shards are not deleted at once. The new catalog lists them as `retired`, with
+   the time they were retired, and any writer deletes retired shards older than 60 s. That
+   grace covers a reader that loaded the previous catalog and has not opened its shards
+   yet (milliseconds in practice). A failed delete is an error like any other.
+4. Writers (`add`, `remove`, `index`, a sync cycle) take an exclusive lock on
+   `<index-dir>/write.lock` (`File::lock`), so two writers never lose each other's catalog
+   updates. The catalog's temp file is per process. Searches take no lock. A sync cycle
+   takes it only after fetching, so slow fetches never block `scout add` or `scout index`;
+   the mirror directory has its own lock (`.scout-sync.lock`), held for the whole cycle, so
+   two sync processes never share working copies.
+5. After the commit, the mirror directory is swept: everything that is neither the root
+   (or holds the root) of any catalog repo, path-added ones included, nor wanted this
+   cycle is deleted (removed repos, `.partial`
+   clones, leftovers of a cycle that failed between publishing and cleaning up). So the
+   directory converges on the catalog whatever went wrong before, and a working copy goes
+   only once no published catalog names it. Because of the sweep the directory is scout's:
+   a missing or empty one is adopted (a `.scout-mirrors` marker records it); one with other
+   content is refused rather than emptied. Changing `mirror_dir` leaves the old directory
+   behind for the operator to delete.
+
+Disk is freed by writers only: retired shards are deleted by the next writer after the
+grace period, so an idle index directory keeps them until then.
+
+The snapshot pack keeps its last-writer-wins rule. Every snapshot is valid at its own
+journal cursor, so a lost update only costs a longer refresh. A search persists its refreshed snapshots
+under a _try_ of the writer lock, against the catalog as it is then: a snapshot of a repo
+removed or moved meanwhile is dropped, never written back under a name a later repo may
+reuse. When a writer holds the lock the search skips persisting rather than wait behind a
+cycle. Sync writes snapshots for the
+repos it indexed, so CLI strict searches on the same index dir keep their fast path.
+
+**The server searches with `--freshness off`.** The working copies change only when a sync
+cycle changes them, and a cycle publishes the new index before the next search can see the
+new commit. So the index always equals the working copy at the published commit, and strict
+mode would only add cost (a full rescan on Linux) with nothing to find. The server holds the
+open shards of the current catalog as one _generation_ behind an `Arc`. Before and after
+every cycle the server compares the catalog on disk with the one it serves (repo names,
+roots and shards) and, when they differ, opens the new generation and swaps the pointer.
+Comparing rather than trusting the cycle's report also picks up a `scout index` run from
+the CLI, and a cycle that failed after publishing. In-flight searches finish on the generation
+they started with, and the old shards are unmapped when the last of those searches drops
+it. Content is served from the shards, never from the working copy, so a reset in the
+middle of a search cannot tear its results.
+
+**Hardware adaptivity.**
+
+- **Indexing:** a cycle uses the same worker and memory plan as `scout index`: a quarter of
+  RAM, capped at 4 GiB.
+- **Searching:** each search uses up to `cores` threads. The HTTP pool defaults to
+  `clamp(cores / 2, 1, 4)` concurrent searches (E17), so one box neither oversubscribes 1 CPU nor
+  leaves 30 cores idle.
+- **Memory:** the shards are mmapped, so a 2 GB box serves an index larger than its RAM, at
+  page-cache speed for the working set.
+
+**Toward AWS.** Shard objects are now write-once with unique names, which maps directly
+onto S3. The catalog is the single mutable object (a conditional put replaces the rename).
+A `ShardStore` for S3 needs a local cache behind `local_path`, because shards are mmapped.
+The working copies stay on local disk: they are a build input, not state, and the next
+cycle rebuilds them if lost.
+
+**Tests use local bare repos over `file://` URLs**, never the network. A plain-path clone
+ignores `--depth`, so `file://` is what exercises the shallow path the server uses.
+GitHub listing is tested against a local fake API (the base URL is configurable).
+
+**HTTP API (first cut).**
+
+- **`GET /search`:** query parameters `q` (pattern), `F`, `i`, `S`, `w`, `n`, `l`, `c`
+  (flags, `=1`), `m` (max count), `repo` (repeatable), and `rank=1` with optional `top`
+  (default 20; [ranking.md](ranking.md)), which prints only the best `top` files, each
+  exactly as plain search prints it. `top` without `rank=1` is a 400. It returns
+  `text/plain`, rg-identical output, with `X-Scout-Matched-Files` and `X-Scout-Generation` headers. It
+  returns 400 for a bad pattern, an unknown repo, an unknown parameter or a missing `q`.
+  Each search has two limits, checked inside the search after every document, so it stops
+  within one document of crossing either (one huge matching document can still overshoot
+  the output cap by its own size; the deadline is not checked while strict freshness
+  lists a repo, which the server never does): output (`--max-output-mb`, default 16; the
+  count spans all repos, because each repo's output is buffered until its turn in the
+  ordered output) answers 422 (not 413, which means the _request_ was too large), and time (`--search-timeout-secs`, default 30, so a few
+  broad queries cannot hold every HTTP worker) answers 503. Each request runs under
+  `catch_unwind`, so a panic costs that request, not a worker.
+- **`GET /status`:** JSON with the generation, its repos and commits, and the last
+  cycle's time and failures, or its error when the whole cycle failed.
+
+There is no authentication: bind to localhost or put it behind a proxy. MCP will sit next
+to it and call the same core.
+
+**Catalog format.** The catalog gained `remote`, `commit` and `retired`, with no migration (by policy): an index directory from before this change must be rebuilt (`scout add`, `scout index`).
 
 ## Open risks
 
@@ -194,4 +459,6 @@ mtime did not looks unchanged, and so does a hard link modified through another 
   process; see `docs/experiments.md`.
 - **Output parity with rg.** rg's defaults (hidden files, `.ignore`, binary handling,
   max file size) must be mirrored at index time, or results diverge. The bench gate catches
-  this.
+  this. One case is rg disagreeing with itself: a file whose first NUL lies past rg's first
+  64 KiB read prints differently depending on what the same rg thread read before. scout
+  defines it as rg with a fresh buffer, and the gate re-checks such files that way (E14).

@@ -1,0 +1,71 @@
+
+## 1cpu: query | e13 | e16 | e16/e13 | rounds e16 faster
+literal_rare | 36.2 | 36.3 | 1.004 | 1/5
+literal_common | 607.2 | 596.1 | 0.982 | 2/5
+literal_none | 14.9 | 15.0 | 1.010 | 3/5
+literal_long | 70.0 | 70.6 | 1.008 | 1/5
+ident_regex | 99.9 | 99.1 | 0.992 | 2/5
+alternation | 148.6 | 146.7 | 0.988 | 2/5
+case_insensitive | 144.8 | 144.9 | 1.001 | 0/5
+smart_case | 137.6 | 137.0 | 0.996 | 3/5
+word | 277.0 | 261.8 | 0.945 | 5/5
+short_unindexable | 914.6 | 872.6 | 0.954 | 5/5
+anchored | 36.9 | 36.7 | 0.994 | 2/5
+date_regex | 743.1 | 744.3 | 1.002 | 2/5
+email_regex | 205.8 | 201.8 | 0.980 | 3/5
+count_mode | 60.5 | 60.8 | 1.005 | 1/5
+files_mode | 81.6 | 80.2 | 0.983 | 2/5
+rare_regex | 48.8 | 47.7 | 0.977 | 3/5
+selective_one | 18.1 | 17.9 | 0.990 | 3/5
+selective_long | 17.9 | 18.7 | 1.041 | 2/5
+selective_vendored | 23.3 | 23.1 | 0.993 | 2/5
+selective_common_trigrams | 31.9 | 32.5 | 1.017 | 0/5
+geomean e16/e13: 0.993
+
+## 4cpu: query | e13 | e16 | e16/e13 | rounds e16 faster
+literal_rare | 23.8 | 24.1 | 1.014 | 2/5
+literal_common | 466.2 | 452.6 | 0.971 | 5/5
+literal_none | 13.4 | 12.9 | 0.962 | 4/5
+literal_long | 43.4 | 43.4 | 1.001 | 3/5
+ident_regex | 58.5 | 56.2 | 0.960 | 5/5
+alternation | 89.6 | 91.7 | 1.024 | 2/5
+case_insensitive | 110.2 | 120.4 | 1.093 | 1/5
+smart_case | 65.0 | 66.3 | 1.020 | 2/5
+word | 202.0 | 206.3 | 1.021 | 0/5
+short_unindexable | 583.4 | 576.3 | 0.988 | 3/5
+anchored | 25.0 | 23.7 | 0.947 | 5/5
+date_regex | 257.6 | 246.0 | 0.955 | 5/5
+email_regex | 113.5 | 100.2 | 0.883 | 5/5
+count_mode | 36.6 | 32.1 | 0.878 | 5/5
+files_mode | 45.0 | 42.5 | 0.943 | 4/5
+rare_regex | 34.0 | 32.5 | 0.955 | 3/5
+selective_one | 14.6 | 14.8 | 1.018 | 2/5
+selective_long | 15.4 | 14.7 | 0.954 | 3/5
+selective_vendored | 17.1 | 17.2 | 1.005 | 2/5
+selective_common_trigrams | 23.1 | 22.7 | 0.984 | 4/5
+geomean e16/e13: 0.978
+
+## 12cpu: query | e13 | e16 | e16/e13 | rounds e16 faster
+literal_rare | 25.8 | 25.8 | 1.000 | 4/5
+literal_common | 475.9 | 474.5 | 0.997 | 4/5
+literal_none | 15.6 | 15.8 | 1.014 | 1/5
+literal_long | 43.2 | 44.1 | 1.020 | 1/5
+ident_regex | 55.9 | 52.5 | 0.939 | 5/5
+alternation | 98.4 | 104.8 | 1.065 | 1/5
+case_insensitive | 123.3 | 130.0 | 1.054 | 1/5
+smart_case | 60.5 | 57.4 | 0.949 | 4/5
+word | 224.7 | 224.8 | 1.001 | 3/5
+short_unindexable | 585.1 | 570.5 | 0.975 | 4/5
+anchored | 26.6 | 25.1 | 0.944 | 5/5
+date_regex | 198.2 | 170.3 | 0.859 | 5/5
+email_regex | 110.1 | 99.9 | 0.908 | 5/5
+count_mode | 34.9 | 30.5 | 0.873 | 5/5
+files_mode | 41.5 | 42.6 | 1.026 | 2/5
+rare_regex | 34.6 | 33.2 | 0.959 | 5/5
+selective_one | 17.1 | 17.3 | 1.011 | 2/5
+selective_long | 16.9 | 17.9 | 1.060 | 1/5
+selective_vendored | 18.9 | 20.7 | 1.092 | 0/5
+selective_common_trigrams | 24.8 | 24.9 | 1.005 | 2/5
+geomean e16/e13: 0.985
+
+parity {'e13-12cpu': True, 'e13-1cpu': True, 'e13-4cpu': True, 'e16-12cpu': True, 'e16-1cpu': True, 'e16-4cpu': True}

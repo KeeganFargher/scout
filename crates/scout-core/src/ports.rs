@@ -162,11 +162,35 @@ pub trait ShardStore: Send + Sync {
     /// A local path a new shard can be written to before it is published.
     fn staging_path(&self, shard: &str) -> Result<PathBuf>;
 
-    /// Makes a staged shard visible under `shard`, replacing any previous version.
+    /// Makes a staged shard visible under `shard`. Shard names are unique per index run
+    /// (see [`crate::indexer::IndexOptions::generation`]), so an existing shard of that
+    /// name is an error, never something to replace: a live reader may be using it.
     fn publish(&self, staged: &Path, shard: &str) -> Result<()>;
+
+    /// Atomically replaces the store file `name` (not a shard) with `staged`. For files
+    /// that are rewritten in place, like [`crate::snapshots::PACK_NAME`], whose readers
+    /// accept either the old or the new version.
+    fn replace(&self, staged: &Path, name: &str) -> Result<()>;
 
     /// A local path the backend can open (a remote store would download/cache here).
     fn local_path(&self, shard: &str) -> Result<PathBuf>;
 
     fn remove(&self, shard: &str) -> Result<()>;
+
+    /// Every published object's name: shards, plus store files kept beside them such as
+    /// [`crate::snapshots::PACK_NAME`]. Used to find shards a crashed run published but
+    /// never recorded in a catalog.
+    fn list(&self) -> Result<Vec<String>>;
+
+    /// Blocks until this process is the only writer of the catalog, until the guard drops.
+    /// Catalog updates are read-modify-write; without this two writers lose each other's
+    /// changes. Readers never take it.
+    fn lock_writer(&self) -> Result<WriterLock>;
+
+    /// [`Self::lock_writer`] without waiting: `None` while another writer holds it. For
+    /// writes that are worth doing only when they cost the caller nothing.
+    fn try_lock_writer(&self) -> Result<Option<WriterLock>>;
 }
+
+/// Held while writing; releases the store's writer lock when dropped.
+pub type WriterLock = Box<dyn std::any::Any + Send>;

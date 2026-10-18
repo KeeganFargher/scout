@@ -34,6 +34,22 @@ use crate::context::Plan;
 pub use crate::context::{ChangeDetection, FsContext};
 use crate::refresh::{Outcome, Select};
 
+/// Peak working set and peak private commit of an exited child that has not been reaped
+/// yet, in bytes. Here because all OS FFI of the workspace is in this crate's `win.rs`
+/// (CLAUDE.md); `ErrorKind::Unsupported` where it is not measured.
+pub fn process_peak_memory(child: &std::process::Child) -> std::io::Result<(u64, u64)> {
+    os::peak_memory(child)
+}
+
+/// Memory this process may use, in bytes, for sizing the indexing budget: physical RAM, capped
+/// by a cgroup limit on Linux (containers, systemd units). Here for the same reason
+/// as [`process_peak_memory`]: a crate like sysinfo would do it without unsafe here, but
+/// links shell32, oleaut32, pdh and more into every scout process, which made each search
+/// 5–7 ms slower at process start (docs/experiments.md, E11 and E12).
+pub fn usable_memory() -> std::io::Result<u64> {
+    os::usable_memory()
+}
+
 pub struct FsSource {
     root: PathBuf,
     display: String,
@@ -267,6 +283,15 @@ mod tests {
 
     fn paths(files: Vec<FileMeta>) -> Vec<String> {
         sorted(files).into_iter().map(|f| f.0).collect()
+    }
+
+    // Only where `usable_memory` is implemented: other Unixes need `--memory-mb`.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn usable_memory_is_plausible() {
+        // Every machine that runs the tests has more than 256 MiB and less than 64 TiB.
+        let total = usable_memory().unwrap();
+        assert!((256 << 20..64 << 40).contains(&total), "{total}");
     }
 
     fn repo() -> tempfile::TempDir {

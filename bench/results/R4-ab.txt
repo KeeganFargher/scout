@@ -1,0 +1,23 @@
+# R4: plain vs --rank --top 20 vs --rank (every file), strict, interleaved 3 rounds x 20 runs
+query | plain ms | top20 ms | all ms | private MiB plain/top20/all
+literal_rare | 44.2 | 46.4 | 46.1 | 10/9/9
+literal_common | 287.9 | 268.9 | 631.5 | 239/16/574
+literal_none | 25.5 | 27.0 | 26.3 | 9/9/9
+literal_long | 82.0 | 83.2 | 87.1 | 10/10/10
+ident_regex | 114.3 | 116.2 | 127.8 | 14/15/15
+alternation | 162.8 | 175.2 | 197.0 | 59/11/92
+case_insensitive | 147.0 | 174.4 | 261.8 | 93/11/124
+smart_case | 129.7 | 129.7 | 139.7 | 11/12/11
+word | 172.6 | 151.5 | 276.0 | 116/12/132
+short_unindexable | 311.9 | 349.6 | 745.7 | 285/23/566
+anchored | 42.1 | 45.2 | 45.0 | 10/10/10
+date_regex | 230.1 | 240.9 | 402.5 | 48/14/97
+email_regex | 146.6 | 154.1 | 161.0 | 14/17/17
+count_mode | 56.1 | 67.7 | 74.1 | 10/10/10
+files_mode | 82.8 | 84.7 | 86.7 | 11/11/11
+rare_regex | 77.3 | 85.5 | 80.1 | 11/11/11
+selective_one | 25.4 | 27.6 | 28.1 | 9/9/9
+selective_long | 25.8 | 26.7 | 27.4 | 9/9/9
+selective_vendored | 27.5 | 31.5 | 30.1 | 10/10/10
+selective_common_trigrams | 54.0 | 55.5 | 56.3 | 10/10/10
+geomean vs plain: top20 1.054x, all 1.258x

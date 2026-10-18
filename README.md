@@ -21,6 +21,38 @@ directory. Search flags follow rg (`-i -S -F -w -n -l -c -m`). Scout adds:
 - `--repo NAME` (repeatable) limits the search to the named repos, and `--stats` prints
   timings and candidate counts to stderr.
 
+### Hosted: mirror remotes, sync on a schedule, serve over HTTP
+
+```bash
+scout sync --config sync.toml          # one cycle: clone/fetch, reindex what moved, publish
+scout serve --config sync.toml --listen 127.0.0.1:7700
+curl "http://127.0.0.1:7700/search?q=useLayoutEffect&n=1"
+curl http://127.0.0.1:7700/status
+```
+
+The config lists `[[repo]]` URLs and `[[github]]` orgs or users. The GitHub token is read from the env var it names (`GITHUB_TOKEN` by default) and is never logged. `/search` takes `q` plus rg-style flags (`F i S w n l c m`, `repo` repeatable) and returns rg-identical text, or with `rank=1&top=N` only the N best files ([docs/ranking.md](docs/ranking.md)), 422 past `--max-output-mb` (default 16) or 503 past `--search-timeout-secs` (default 30). The server needs `git` 2.31 or newer. Format and reasoning are in [docs/design.md](docs/design.md), "Hosted sync".
+
+### Hardware
+
+scout adapts to the machine it runs on: threads follow the CPUs (cgroup CPU quotas
+included), the indexing budget is a quarter of usable RAM (capped at 4 GiB; a container's
+or systemd unit's cgroup memory limit counts, not the host's RAM; where scout cannot see its
+own cgroup, as in a cgroup v1 container without its own namespace, it stops and asks for
+`--memory-mb`), and the index is mmapped, so it does not have to
+fit in memory. Measured with 137 repos (54k files, 1.1 GiB index):
+
+- **1 CPU / 2 GiB** works: indexing 16 s at a 130 MiB peak, selective searches 9–17 ms,
+  about 29 served searches a second.
+- **2–4 CPUs / 4 GiB** is the sweet spot: selective searches at
+  5–7 ms served, and at 4 CPUs a p99 of 26 ms with one client and about 85 searches a
+  second under load.
+- **More cores** keep paying for broad scans and concurrent clients (8 CPUs: ~103 served
+  searches a second); selective searches are already as fast as they get.
+
+Keep the index (and the mirrors, for hosted sync) on local SSD or EBS gp3, and give the page
+cache room for the index: about 1.3x the size of the files it indexes (1.1 GiB for 854 MiB
+here). Full tables: [docs/design.md](docs/design.md), "Measured on small and large machines".
+
 How it works and why: [docs/design.md](docs/design.md). Every optimisation, with numbers:
 [docs/experiments.md](docs/experiments.md).
 
@@ -32,20 +64,21 @@ crates/scout-index-native  mmap shard format (corpus bin + unit trigram postings
 crates/scout-index-sqlite  the same contract on SQLite
 crates/scout-source-fs     local repos: rg-identical walking, snapshots, change journal
 crates/scout-store-fs      shards, snapshots and the catalog in a local directory
-crates/scout-cli           the `scout` binary (composition root)
-crates/scout-bench         benchmark and parity gate against rg
+crates/scout-sync          hosted ingestion: sync config, GitHub listing, git working copies
+crates/scout-cli           the `scout` binary (composition root): index, search, sync, serve
+crates/scout-bench         benchmark and parity gate against rg; scout-rank-eval (ranking evaluation)
 vendor/ripgrep             upstream ripgrep (git subtree)
 packages/kernel            TypeScript scaffold, reserved for the MCP server
 ```
 
 ## Commands
 
-| Command                                           | What it does                                                         |
-| ------------------------------------------------- | -------------------------------------------------------------------- |
-| `cargo clippy --workspace --all-targets --release` | Lints (pedantic, no `unwrap`, `unsafe` only in `win.rs`); must be clean |
-| `cargo test --workspace --release`                | Unit and end-to-end tests                                            |
-| `cargo build --release`                           | Builds `scout` and `scout-bench`                                     |
-| `yarn check`                                      | Format, lint, typecheck and test the TypeScript workspaces           |
+| Command                                            | What it does                                                                                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo clippy --workspace --all-targets --release` | Lints (pedantic, no `unwrap`; `unsafe` only in `win.rs` and the shard mmap); must be clean                                         |
+| `cargo test --workspace --release`                 | Unit and end-to-end tests                                                                                                          |
+| `cargo build --release`                            | Builds `scout`, `scout-bench` and `scout-rank-eval`                                                                                |
+| `yarn check`                                       | Format every file but `vendor/` (upstream) and `bench/results/` (bench output); lint, typecheck and test the TypeScript workspaces |
 
 ### Benchmark
 
@@ -56,7 +89,21 @@ target/release/scout-bench --scout target/release/scout --index-dir <dir> --quer
 For each query it reports the median, p90 and p99 wall time, rg's time, candidates, peak
 memory, and a parity check of scout's output against rg's. Tails are reported only with
 `--runs` of 100 or more. Reindex before benchmarking `--freshness off`: files edited since
-indexing make parity fail, as they should.
+indexing make parity fail, as they should. A file in a parity diff that holds a NUL byte is
+re-checked against rg searching it alone, because rg's output for such a file depends on what
+its thread searched before (E14); the bench says so on stderr each time. A text file is never
+re-checked.
+
+### Ranking evaluation
+
+`scout search --rank --top N` prints the N best files first ([docs/ranking.md](docs/ranking.md)).
+Its quality is measured against hand-labelled judgments in [bench/golden](bench/golden/README.md):
+
+```bash
+target/release/scout-rank-eval --dumps <dir> dump --scout target/release/scout --index-dir <dir>
+target/release/scout-rank-eval --dumps <dir> eval --compare full,full+dedup
+target/release/scout-rank-eval --dumps <dir> crossval
+```
 
 ## TypeScript workspaces
 
@@ -66,12 +113,12 @@ only erasable TS syntax is allowed and relative imports use the `.ts` extension.
 `packages/kernel` exists today; the layer rules below apply as `domains/*` and `apps/*`
 workspaces are added.
 
-| Command                             | What it does                                    |
-| ----------------------------------- | ----------------------------------------------- |
-| `yarn lint` / `yarn lint:fix`       | oxlint (type-aware), warnings fail the run      |
-| `yarn format` / `yarn format:check` | oxfmt                                           |
-| `yarn typecheck`                    | `tsc --build` across all workspaces and tests   |
-| `yarn test`                         | `node --test` over every `src/**/*.test.ts`     |
+| Command                             | What it does                                  |
+| ----------------------------------- | --------------------------------------------- |
+| `yarn lint` / `yarn lint:fix`       | oxlint (type-aware), warnings fail the run    |
+| `yarn format` / `yarn format:check` | oxfmt                                         |
+| `yarn typecheck`                    | `tsc --build` across all workspaces and tests |
+| `yarn test`                         | `node --test` over every `src/**/*.test.ts`   |
 
 ## Dependency rules
 

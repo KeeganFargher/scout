@@ -1,0 +1,78 @@
+# E11 / E12 interleaved A/B. Search: 5 rounds x 20 runs per arm, median of round medians (ms), alternating order, scout repo freshly indexed. --version: 10 rounds x 30 spawns.
+
+## E10 vs E11 (the original E11 binary)
+
+off: query | e10 | e11 | ratio | rounds e11 faster
+literal_none | 19.7 | 26.0 | 1.321 | 0/5
+selective_one | 19.8 | 26.7 | 1.346 | 0/5
+selective_long | 20.5 | 27.1 | 1.324 | 0/5
+selective_vendored | 23.3 | 29.4 | 1.262 | 0/5
+selective_common_trigrams | 48.4 | 53.0 | 1.096 | 1/5
+
+strict: query | e10 | e11 | ratio | rounds e11 faster
+literal_none | 23.2 | 28.9 | 1.246 | 0/5
+selective_one | 25.0 | 30.9 | 1.235 | 0/5
+selective_long | 23.9 | 29.6 | 1.237 | 1/5
+selective_vendored | 26.2 | 31.5 | 1.203 | 1/5
+selective_common_trigrams | 51.6 | 56.7 | 1.099 | 0/5
+
+parity {"e10-off":true,"e10-strict":true,"e11-off":true,"e11-strict":true}
+
+## E10 vs E12
+
+off: query | e10 | e12 | ratio | rounds e12 faster
+literal_none | 20.0 | 20.1 | 1.001 | 2/5
+selective_one | 20.4 | 20.9 | 1.025 | 2/5
+selective_long | 21.0 | 20.6 | 0.980 | 4/5
+selective_vendored | 22.3 | 23.2 | 1.043 | 1/5
+selective_common_trigrams | 47.2 | 48.3 | 1.022 | 1/5
+
+strict: query | e10 | e12 | ratio | rounds e12 faster
+literal_none | 23.9 | 24.8 | 1.038 | 1/5
+selective_one | 23.7 | 24.5 | 1.036 | 1/5
+selective_long | 24.3 | 24.7 | 1.015 | 1/5
+selective_vendored | 25.5 | 26.5 | 1.042 | 0/5
+selective_common_trigrams | 50.8 | 51.2 | 1.009 | 0/5
+
+parity {"e10-off":true,"e10-strict":true,"e12-off":true,"e12-strict":true}
+
+## E11 (rebuilt: this tree with sysinfo restored, same imports as the original) vs E12, same index
+
+off: query | e11 | e12 | ratio | rounds e12 faster
+literal_none | 27.8 | 21.3 | 0.767 | 5/5
+selective_one | 27.4 | 22.0 | 0.804 | 5/5
+selective_long | 27.5 | 22.2 | 0.806 | 5/5
+selective_vendored | 29.8 | 24.8 | 0.832 | 5/5
+selective_common_trigrams | 55.5 | 50.1 | 0.904 | 5/5
+
+strict: query | e11 | e12 | ratio | rounds e12 faster
+literal_none | 30.8 | 25.3 | 0.820 | 5/5
+selective_one | 30.9 | 25.7 | 0.833 | 5/5
+selective_long | 31.3 | 25.9 | 0.827 | 5/5
+selective_vendored | 33.3 | 27.7 | 0.830 | 5/5
+selective_common_trigrams | 59.0 | 54.2 | 0.919 | 5/5
+
+parity {"e11-off":true,"e11-strict":true,"e12-off":true,"e12-strict":true}
+
+## Process start: scout --version
+### E10 vs E11
+rounds 10 x 30 spawns; median of round medians (ms)
+a E10
+  9.36  rounds: 9.8 9.2 9.2 9.4 9.5 9.3 9.0 9.4 9.2 9.4
+b E11
+  15.66  rounds: 15.9 15.6 15.7 16.0 15.7 15.6 15.6 15.6 15.7 15.7
+b faster in 0/10 rounds
+### E11 vs E12
+rounds 10 x 30 spawns; median of round medians (ms)
+a E11
+  15.53  rounds: 15.5 15.7 15.5 15.5 15.5 15.5 16.0 15.6 15.5 15.4
+b E12
+  10.24  rounds: 10.5 10.2 10.3 10.3 10.2 10.2 10.4 10.2 10.1 10.2
+b faster in 10/10 rounds
+### E10 vs E12
+rounds 10 x 30 spawns; median of round medians (ms)
+a E10
+  9.25  rounds: 9.3 9.3 9.1 9.3 9.2 9.1 9.2 9.3 9.2 9.3
+b E12
+  10.30  rounds: 10.1 10.4 10.5 10.3 10.2 10.4 10.4 10.1 10.3 10.2
+b faster in 0/10 rounds

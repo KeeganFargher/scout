@@ -1,0 +1,48 @@
+
+## 4cpu: query | e16 | e18 | e18/e16 | rounds e18 faster
+literal_rare | 24.4 | 25.0 | 1.025 | 2/5
+literal_common | 480.1 | 504.4 | 1.051 | 0/5
+literal_none | 13.2 | 13.6 | 1.030 | 3/5
+literal_long | 44.3 | 45.2 | 1.018 | 3/5
+ident_regex | 58.8 | 59.5 | 1.013 | 3/5
+alternation | 92.5 | 104.0 | 1.124 | 0/5
+case_insensitive | 115.7 | 121.1 | 1.047 | 0/5
+smart_case | 68.6 | 70.7 | 1.030 | 1/5
+word | 212.4 | 221.8 | 1.044 | 1/5
+short_unindexable | 580.5 | 602.3 | 1.038 | 0/5
+anchored | 24.1 | 25.8 | 1.068 | 1/5
+date_regex | 252.8 | 307.1 | 1.215 | 0/5
+email_regex | 106.5 | 126.5 | 1.189 | 0/5
+count_mode | 33.1 | 33.2 | 1.002 | 2/5
+files_mode | 45.2 | 47.1 | 1.042 | 0/5
+rare_regex | 33.4 | 33.2 | 0.993 | 2/5
+selective_one | 14.7 | 14.8 | 1.005 | 3/5
+selective_long | 15.3 | 14.3 | 0.933 | 5/5
+selective_vendored | 16.9 | 17.0 | 1.004 | 3/5
+selective_common_trigrams | 23.2 | 23.0 | 0.993 | 4/5
+geomean e18/e16: 1.041
+
+## 12cpu: query | e16 | e18 | e18/e16 | rounds e18 faster
+literal_rare | 25.5 | 25.7 | 1.009 | 2/5
+literal_common | 518.2 | 549.8 | 1.061 | 0/5
+literal_none | 16.2 | 15.8 | 0.978 | 4/5
+literal_long | 45.4 | 45.3 | 0.998 | 3/5
+ident_regex | 56.1 | 58.5 | 1.042 | 2/5
+alternation | 104.3 | 125.1 | 1.199 | 0/5
+case_insensitive | 133.0 | 145.6 | 1.095 | 1/5
+smart_case | 59.2 | 60.6 | 1.023 | 1/5
+word | 237.3 | 252.0 | 1.062 | 1/5
+short_unindexable | 621.3 | 677.9 | 1.091 | 0/5
+anchored | 25.1 | 25.2 | 1.003 | 2/5
+date_regex | 179.7 | 225.2 | 1.254 | 0/5
+email_regex | 105.6 | 107.0 | 1.013 | 0/5
+count_mode | 31.1 | 34.8 | 1.116 | 0/5
+files_mode | 43.7 | 44.3 | 1.014 | 1/5
+rare_regex | 34.7 | 34.1 | 0.983 | 4/5
+selective_one | 17.6 | 17.2 | 0.975 | 4/5
+selective_long | 17.2 | 17.0 | 0.985 | 3/5
+selective_vendored | 19.3 | 19.1 | 0.990 | 3/5
+selective_common_trigrams | 24.5 | 24.3 | 0.991 | 4/5
+geomean e18/e16: 1.042
+
+parity {'e16-12cpu': True, 'e16-4cpu': True, 'e18-12cpu': True, 'e18-4cpu': True}

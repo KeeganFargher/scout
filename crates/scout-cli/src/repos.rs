@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use scout_core::catalog::{Catalog, RepoEntry};
+use scout_core::catalog::{Catalog, RepoEntry, sanitize_name};
 
 /// Directories never worth descending into when looking for repos. They are huge and
 /// never contain repos a user means to search.
@@ -39,15 +39,6 @@ pub fn discover(dir: &Path, max_depth: usize) -> anyhow::Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-fn sanitize(s: &str) -> String {
-    let mut out: String = s
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
-        .collect();
-    out = out.trim_matches('-').to_string();
-    if out.is_empty() { "repo".to_string() } else { out }
-}
-
 /// Registers `root`. Returns `false` if it was already registered or lies inside (or
 /// contains) an already-registered repo, which would double-index files.
 pub fn register(catalog: &mut Catalog, root: &Path) -> anyhow::Result<Option<String>> {
@@ -62,13 +53,13 @@ pub fn register(catalog: &mut Catalog, root: &Path) -> anyhow::Result<Option<Str
             return Ok(None);
         }
     }
-    let base = sanitize(&root.file_name().map_or_else(|| "repo".into(), |n| n.to_string_lossy()));
+    let base = sanitize_name(&root.file_name().map_or_else(|| "repo".into(), |n| n.to_string_lossy()));
     let mut name = base.clone();
     let mut n = 2;
     while catalog.find(&name).is_some() {
         name = format!("{base}-{n}");
         n += 1;
     }
-    catalog.repos.push(RepoEntry { name: name.clone(), root: root_str, index: None });
+    catalog.repos.push(RepoEntry { name: name.clone(), root: root_str, remote: None, index: None });
     Ok(Some(name))
 }

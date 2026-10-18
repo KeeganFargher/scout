@@ -2,21 +2,24 @@
 //! an index backend into scout-core.
 
 mod host;
+mod ingest;
 mod repos;
+mod serve;
+mod sync;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use scout_core::catalog::{Catalog, RepoEntry};
-use scout_core::indexer::{IndexOptions, index_repo};
 use scout_core::ports::{IndexBackend, ShardStore};
-use scout_core::search::{CaseMode, Freshness, OutputMode, RepoHandle, SearchOptions, search};
+use scout_core::rank::Weights;
+use scout_core::ranked::{RankOptions, search_ranked};
+use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search};
 use scout_core::snapshots::SnapshotPack;
 use scout_index_native::NativeBackend;
 use scout_index_sqlite::SqliteBackend;
@@ -56,12 +59,46 @@ enum Command {
         backend: Backend,
         #[arg(long)]
         threads: Option<usize>,
-        /// Indexing memory budget in MiB. Default: a quarter of physical RAM, capped at 4 GiB.
+        /// Indexing memory budget in MiB. Default: a quarter of usable RAM (physical RAM, capped
+        /// by the cgroup memory limit on Linux), capped at 4 GiB. Usable RAM is read on Windows
+        /// and Linux only; elsewhere (macOS, BSD) pass this.
         #[arg(long)]
         memory_mb: Option<u64>,
     },
     /// Search every indexed repo (rg-compatible output).
     Search(SearchArgs),
+    /// Run one sync cycle: mirror the configured remotes, reindex what moved, publish.
+    Sync {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Indexing memory budget in MiB (default as for `index`).
+        #[arg(long)]
+        memory_mb: Option<u64>,
+    },
+    /// Serve searches over HTTP while syncing every `interval_secs` of the config.
+    Serve {
+        #[arg(long)]
+        config: PathBuf,
+        /// Address to bind; port 0 picks a free one (printed on startup).
+        #[arg(long, default_value = "127.0.0.1:7700")]
+        listen: String,
+        /// Threads per search, and for indexing. Default: the cores.
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Concurrent searches. Default: a quarter of the cores, 1 to 8.
+        #[arg(long)]
+        http_workers: Option<usize>,
+        /// Largest search response in MiB; bigger searches get 422 and must be narrowed.
+        #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u64).range(1..))]
+        max_output_mb: u64,
+        /// Longest one search may run, in seconds; past it the answer is 503.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+        search_timeout_secs: u64,
+        #[arg(long)]
+        memory_mb: Option<u64>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -98,6 +135,17 @@ struct SearchArgs {
     /// Print timing and filter statistics to stderr.
     #[arg(long)]
     stats: bool,
+    /// Print the best matching files first instead of every match in walk order
+    /// (docs/ranking.md). The files are rg's; only their order and number change.
+    #[arg(long)]
+    rank: bool,
+    /// With --rank: how many files to print.
+    #[arg(long, default_value_t = 20, requires = "rank", value_parser = clap::value_parser!(u64).range(1..))]
+    top: u64,
+    /// With --rank: also write every matching file's ranking features as JSON here, for
+    /// the evaluation harness (bench/golden).
+    #[arg(long, requires = "rank")]
+    rank_features: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -162,6 +210,22 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::List => cmd_list(&store),
         Command::Index { names, backend, threads, memory_mb } => cmd_index(&store, &names, backend, threads, memory_mb),
         Command::Search(args) => cmd_search(&store, &args),
+        Command::Sync { config, threads, memory_mb } => cmd_sync(&store, &config, threads, memory_mb),
+        Command::Serve { config, listen, threads, http_workers, max_output_mb, search_timeout_secs, memory_mb } => {
+            let budget = ingest::Budget::for_host(threads, memory_mb)?;
+            let opts = serve::ServeOptions {
+                listen,
+                threads: budget.threads,
+                http_workers: http_workers.unwrap_or_else(serve::default_http_workers),
+                max_output_bytes: usize::try_from(max_output_mb)?
+                    .checked_mul(1 << 20)
+                    .context("--max-output-mb is too large")?,
+                search_timeout: std::time::Duration::from_secs(search_timeout_secs),
+                budget,
+            };
+            serve::serve(&store, &scout_sync::config::Config::load(&config)?, &opts)?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -173,6 +237,7 @@ fn cmd_add(store: &FsStore, paths: &[PathBuf], discover: bool, max_depth: usize)
     if paths.is_empty() {
         bail!("no paths given");
     }
+    let _held = store.lock_writer()?;
     let mut catalog = store.load_catalog()?;
     let mut roots = Vec::new();
     for p in paths {
@@ -198,23 +263,15 @@ fn cmd_add(store: &FsStore, paths: &[PathBuf], discover: bool, max_depth: usize)
 }
 
 fn cmd_remove(store: &FsStore, names: &[String]) -> anyhow::Result<ExitCode> {
+    let held = store.lock_writer()?;
     let mut catalog = store.load_catalog()?;
+    let now = scout_core::catalog::now_unix()?;
     for name in names {
-        let Some(pos) = catalog.repos.iter().position(|r| &r.name == name) else { bail!("no repo named {name:?}") };
-        let entry = catalog.repos.remove(pos);
-        if let Some(idx) = &entry.index {
-            for name in &idx.shards {
-                store.remove(name)?;
-            }
-        }
+        catalog.remove_repo(name, now)?;
     }
-    store.save_catalog(&catalog)?;
     let mut pack = SnapshotPack::load(store)?;
-    let before = pack.entries.len();
     pack.entries.retain(|name, _| !names.contains(name));
-    if pack.entries.len() != before {
-        pack.save(store)?;
-    }
+    ingest::commit(store, &held, catalog, &pack)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -239,18 +296,21 @@ fn cmd_list(store: &FsStore) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Splits the memory budget across indexing workers. Each worker holds one shard's
-/// postings in memory, roughly 5x the shard's content size, so the per-worker shard cap is
-/// budget / workers / 5. On small machines we run fewer workers rather than shrinking
-/// shards below 16 MiB, which would hurt query speed more than slower indexing hurts.
-fn plan_indexing(threads: usize, budget: u64, repos: usize) -> (usize, u64) {
-    const MIN_SHARD: u64 = 16 << 20;
-    const MAX_SHARD: u64 = 512 << 20;
-    const OVERHEAD: u64 = 5;
-    let max_workers_for_budget = usize::try_from(budget / (MIN_SHARD * OVERHEAD)).unwrap_or(usize::MAX).max(1);
-    let workers = threads.min(max_workers_for_budget).min(repos).max(1);
-    let cap = (budget / workers as u64 / OVERHEAD).clamp(MIN_SHARD, MAX_SHARD);
-    (workers, cap)
+fn cmd_sync(
+    store: &FsStore,
+    config: &Path,
+    threads: Option<usize>,
+    memory_mb: Option<u64>,
+) -> anyhow::Result<ExitCode> {
+    let cfg = scout_sync::config::Config::load(config)?;
+    let token = scout_sync::Token::from_env(&cfg.token_env)?;
+    let git = cfg.git(token.clone())?;
+    let report = sync::run_cycle(store, &cfg, &git, token.as_ref(), ingest::Budget::for_host(threads, memory_mb)?)?;
+    sync::log_report(&report);
+    if !report.failures.is_empty() {
+        bail!("{} failure(s) in this cycle", report.failures.len());
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_index(
@@ -264,8 +324,9 @@ fn cmd_index(
         Backend::Native => &NativeBackend,
         Backend::Sqlite => &SqliteBackend,
     };
+    let held = store.lock_writer()?;
     let catalog = store.load_catalog()?;
-    let selected: Vec<_> = if names.is_empty() {
+    let selected: Vec<RepoEntry> = if names.is_empty() {
         catalog.repos.clone()
     } else {
         names
@@ -276,86 +337,21 @@ fn cmd_index(
     if selected.is_empty() {
         bail!("no repos registered; run `scout add` first");
     }
-    let threads = threads.unwrap_or_else(host::cores);
-    let budget = match memory_mb {
-        Some(mb) => mb << 20,
-        None => (host::physical_memory()? / 4).min(4 << 30),
-    };
-    let (workers, cap) = plan_indexing(threads, budget, selected.len());
-    let walk_threads = (threads / workers).max(1);
-    err_line(&format!(
-        "indexing {} repo(s): {workers} worker(s), shard cap {} MiB, budget {} MiB, backend {}",
-        selected.len(),
-        cap >> 20,
-        budget >> 20,
-        backend.name()
-    ));
-
     let started = Instant::now();
-    let next = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::new());
-    let ctx = Arc::new(FsContext::new(ChangeDetection::Journal));
-    std::thread::scope(|s| {
-        for _ in 0..workers {
-            s.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(repo) = selected.get(i) else { break };
-                    let t = Instant::now();
-                    let r = FsSource::new(Path::new(&repo.root), walk_threads, Arc::clone(&ctx)).and_then(|src| {
-                        index_repo(&repo.name, &src, backend, store, IndexOptions { shard_content_cap: cap })
-                    });
-                    match &r {
-                        Ok(rep) => err_line(&format!(
-                            "  {:<40} {:>7} files {:>8.1} MiB {:>2} shard(s) {:>6.2}s{}",
-                            repo.name,
-                            rep.index.files,
-                            rep.index.content_bytes as f64 / 1_048_576.0,
-                            rep.index.shards.len(),
-                            t.elapsed().as_secs_f64(),
-                            if rep.skipped.is_empty() {
-                                String::new()
-                            } else {
-                                format!("  ({} unreadable)", rep.skipped.len())
-                            }
-                        )),
-                        Err(e) => err_line(&format!("  {:<40} FAILED: {e}", repo.name)),
-                    }
-                    results.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((repo.name.clone(), r));
-                }
-            });
-        }
-    });
-
-    let mut catalog = store.load_catalog()?;
+    // A synced repo indexed by hand is still at the commit sync left it at; keeping the
+    // commit lets the next sync cycle skip it.
+    let jobs: Vec<ingest::Job> = selected
+        .into_iter()
+        .map(|repo| {
+            let commit = repo.index.as_ref().and_then(|i| i.commit.clone()).filter(|_| repo.remote.is_some());
+            ingest::Job { repo, commit }
+        })
+        .collect();
+    let outcomes = ingest::index_repos(store, &held, &jobs, backend, ingest::Budget::for_host(threads, memory_mb)?)?;
+    let mut catalog = catalog;
     let mut pack = SnapshotPack::load(store)?;
-    let mut failed = 0;
-    for (name, r) in results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
-        let Ok(rep) = r else {
-            // Already reported per repo as it happened.
-            failed += 1;
-            continue;
-        };
-        for skipped in rep.skipped.iter().take(3) {
-            err_line(&format!("  {name}: could not read {}: {}", skipped.path, skipped.error));
-        }
-        let entry = catalog.find_mut(&name).with_context(|| format!("repo {name:?} vanished from catalog"))?;
-        // Shard names are deterministic, so republishing replaced same-named shards;
-        // only shards beyond the new count (or from another backend) are stale.
-        for old in entry.index.iter().flat_map(|i| &i.shards) {
-            if !rep.index.shards.contains(old) {
-                store.remove(old)?;
-            }
-        }
-        entry.index = Some(rep.index);
-        // A source without snapshots leaves none behind, so a stale one is never used.
-        match rep.snapshot {
-            Some(bytes) => pack.entries.insert(name, bytes),
-            None => pack.entries.remove(&name),
-        };
-    }
-    store.save_catalog(&catalog)?;
-    pack.save(store)?;
+    let failed = ingest::apply(&mut catalog, &mut pack, outcomes)?;
+    ingest::commit(store, &held, catalog, &pack)?;
     err_line(&format!("done in {:.1}s", started.elapsed().as_secs_f64()));
     if failed > 0 {
         bail!("{failed} repo(s) failed to index");
@@ -433,19 +429,43 @@ fn open_repos(
 /// Stores the snapshots a strict search refreshed, so the next search starts from them.
 /// `selected` is in the same order as the repos passed to `search`.
 ///
-/// The pack is re-read rather than reusing the copy read at open, so that entries another
-/// process persisted meanwhile (for repos this search did not change) are kept.
+/// Done under the writer lock against the catalog as it is now, not as the search saw it:
+/// a repo removed (or re-added at another root) while the search ran must not get its old
+/// working copy's snapshot back, or a later repo of that name would start from a listing
+/// of the wrong tree. The lock is only tried: when a writer holds it, persisting is
+/// skipped. The pack is a cache, so the cost is the next search replaying more of the
+/// journal, where waiting could block a search behind a whole sync cycle.
 fn persist_snapshots(store: &FsStore, selected: &[&RepoEntry], snapshots: Vec<(usize, Vec<u8>)>) -> anyhow::Result<()> {
     if snapshots.is_empty() {
         return Ok(());
     }
+    let Some(_held) = store.try_lock_writer()? else {
+        return Ok(());
+    };
+    let catalog = store.load_catalog()?;
     let mut pack = SnapshotPack::load(store)?;
     for (i, bytes) in snapshots {
-        let repo = selected.get(i).context("snapshot for a repo that was not searched")?;
-        pack.entries.insert(repo.name.clone(), bytes);
+        let searched = selected.get(i).context("snapshot for a repo that was not searched")?;
+        if catalog.find(&searched.name).is_some_and(|now| now.root == searched.root) {
+            pack.entries.insert(searched.name.clone(), bytes);
+        }
     }
+    pack.entries.retain(|name, _| catalog.find(name).is_some());
     pack.save(store)?;
     Ok(())
+}
+
+/// The evaluation harness's input: everything a ranked search scored, so it can re-score
+/// under other weights without searching again.
+fn write_rank_features(path: &Path, r: &scout_core::ranked::RankedReport) -> anyhow::Result<()> {
+    #[derive(serde::Serialize)]
+    struct Dump<'a> {
+        terms: &'a [String],
+        corpus: &'a scout_core::rank::Corpus,
+        files: &'a [scout_core::rank::FileFeatures],
+    }
+    let json = serde_json::to_vec(&Dump { terms: &r.terms, corpus: &r.corpus, files: &r.files })?;
+    std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
 }
 
 fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
@@ -479,6 +499,8 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         },
         max_count: a.max_count,
         threads,
+        // Unbounded: the CLI streams to whoever runs it.
+        limits: Limits::default(),
         freshness: match a.freshness {
             FreshnessArg::Strict => Freshness::Strict,
             FreshnessArg::Off => Freshness::Off,
@@ -486,7 +508,19 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
     };
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::with_capacity(1 << 16, stdout.lock());
-    let report = match search(&opts, &repos, &mut out) {
+    let handles: Vec<&RepoHandle> = repos.iter().collect();
+    let searched = if a.rank {
+        let rank = RankOptions { top: usize::try_from(a.top)?, weights: Weights::default() };
+        search_ranked(&opts, &rank, &handles, &mut out).and_then(|r| {
+            if let Some(path) = &a.rank_features {
+                write_rank_features(path, &r).map_err(|e| scout_core::Error::Invalid(format!("{e:#}")))?;
+            }
+            Ok(SearchReport { stats: r.stats, snapshots: r.snapshots })
+        })
+    } else {
+        search(&opts, &handles, &mut out)
+    };
+    let report = match searched {
         Ok(s) => s,
         // `scout ... | head` closing the pipe is a normal way to stop a search.
         Err(scout_core::Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::BrokenPipe => {
@@ -504,7 +538,7 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
     persist_snapshots(store, &selected, report.snapshots)?;
     if a.stats {
         err_line(&format!(
-            "scout-stats repos={} shards={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
+            "scout-stats repos={} shards={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
             stats.repos,
             stats.shards,
             stats.docs,
@@ -515,6 +549,8 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
             stats.unchanged_repos,
             stats.list_time.as_secs_f64() * 1e3,
             stats.map_time.as_secs_f64() * 1e3,
+            stats.postings_time.as_secs_f64() * 1e3,
+            stats.verify_time.as_secs_f64() * 1e3,
             opened.as_secs_f64() * 1e3,
             stats.elapsed.as_secs_f64() * 1e3,
             started.elapsed().as_secs_f64() * 1e3,

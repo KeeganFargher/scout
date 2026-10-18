@@ -25,6 +25,12 @@ pub enum Error {
     },
     #[error("{0}")]
     Invalid(String),
+    /// The search produced more output than `Limits::output_bytes` allows.
+    #[error("search output exceeds {0} bytes")]
+    OutputLimit(usize),
+    /// The search ran past `Limits::deadline`.
+    #[error("search ran past its deadline")]
+    Deadline,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

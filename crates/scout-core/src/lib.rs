@@ -10,6 +10,8 @@ pub mod error;
 pub mod indexer;
 pub mod ports;
 pub mod query;
+pub mod rank;
+pub mod ranked;
 pub mod search;
 pub mod snapshots;
 pub mod trigram;

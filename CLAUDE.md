@@ -7,8 +7,9 @@ docs/experiments.md for every performance change and its numbers.
 
 - `cargo clippy --workspace --all-targets --release` and `cargo test --workspace --release`
   must both pass before work is declared done.
-- `unsafe` lives only in `crates/scout-source-fs/src/win.rs`, and every block there has a
-  SAFETY comment.
+- `unsafe` lives only in `crates/scout-source-fs/src/win.rs` (all OS FFI), plus the one
+  shard `mmap` in `crates/scout-index-native/src/lib.rs` (`memmap2::Mmap::map` has no safe
+  form and the index is mmapped on every platform). Every block has a SAFETY comment.
 - A performance change is an experiment. Benchmark it with `scout-bench` (`--runs 100` for
   p99), keep it only if it wins, and log it in docs/experiments.md either way.
 - The bench parity gate (scout output == rg output) must stay green.

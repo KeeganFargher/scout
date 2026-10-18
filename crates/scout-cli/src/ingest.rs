@@ -1,0 +1,245 @@
+//! Indexing repos and publishing the result, shared by `scout index` and sync cycles.
+//!
+//! Publishing order is what keeps concurrent searches correct (docs/design.md, "Hosted
+//! sync"): shards under fresh generation names first, then the catalog in one atomic
+//! rename, and replaced shards are only deleted a grace period later.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use anyhow::Context;
+use scout_core::catalog::{Catalog, RepoEntry, now_unix};
+use scout_core::indexer::{IndexOptions, IndexReport, index_repo, new_generation};
+use scout_core::ports::{IndexBackend, ShardStore, WriterLock};
+use scout_core::snapshots::{PACK_NAME, SnapshotPack};
+use scout_source_fs::{ChangeDetection, FsContext, FsSource};
+
+use crate::{err_line, host};
+
+/// Threads and memory an indexing run may use.
+#[derive(Debug, Clone, Copy)]
+pub struct Budget {
+    pub threads: usize,
+    pub memory: u64,
+}
+
+impl Budget {
+    /// `threads` defaults to the cores, memory to a quarter of RAM capped at 4 GiB: enough
+    /// for 512 MiB shards on big machines while leaving a 2 GB box room to serve searches.
+    pub fn for_host(threads: Option<usize>, memory_mb: Option<u64>) -> anyhow::Result<Self> {
+        let memory = match memory_mb {
+            Some(mb) => mb << 20,
+            None => (host::usable_memory()? / 4).min(4 << 30),
+        };
+        Ok(Self { threads: threads.unwrap_or_else(host::cores), memory })
+    }
+}
+
+/// One repo to index, and the commit its working copy is at (synced repos only).
+pub struct Job {
+    pub repo: RepoEntry,
+    pub commit: Option<String>,
+}
+
+pub struct Outcome {
+    pub name: String,
+    pub result: anyhow::Result<IndexReport>,
+}
+
+/// Splits the memory budget across indexing workers. Each worker holds one shard's
+/// postings in memory, roughly 5x the shard's content size, so the per-worker shard cap is
+/// budget / workers / 5. On small machines we run fewer workers rather than shrinking
+/// shards below 16 MiB, which would hurt query speed more than slower indexing hurts.
+fn plan_indexing(threads: usize, budget: u64, repos: usize) -> (usize, u64) {
+    const MIN_SHARD: u64 = 16 << 20;
+    const MAX_SHARD: u64 = 512 << 20;
+    const OVERHEAD: u64 = 5;
+    let max_workers_for_budget = usize::try_from(budget / (MIN_SHARD * OVERHEAD)).unwrap_or(usize::MAX).max(1);
+    let workers = threads.min(max_workers_for_budget).min(repos).max(1);
+    let cap = (budget / workers as u64 / OVERHEAD).clamp(MIN_SHARD, MAX_SHARD);
+    (workers, cap)
+}
+
+/// Builds and stages-then-publishes shards for every job, reporting each repo as it
+/// finishes. Nothing becomes visible to searches until [`commit`] saves the catalog.
+pub fn index_repos(
+    store: &dyn ShardStore,
+    _held: &WriterLock,
+    jobs: &[Job],
+    backend: &dyn IndexBackend,
+    budget: Budget,
+) -> anyhow::Result<Vec<Outcome>> {
+    if jobs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (workers, cap) = plan_indexing(budget.threads, budget.memory, jobs.len());
+    let walk_threads = (budget.threads / workers).max(1);
+    err_line(&format!(
+        "indexing {} repo(s): {workers} worker(s), shard cap {} MiB, budget {} MiB, backend {}",
+        jobs.len(),
+        cap >> 20,
+        budget.memory >> 20,
+        backend.name()
+    ));
+    let opts = IndexOptions { shard_content_cap: cap, generation: new_generation()? };
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::with_capacity(jobs.len()));
+    let ctx = Arc::new(FsContext::new(ChangeDetection::Journal));
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(job) = jobs.get(i) else { break };
+                    let t = Instant::now();
+                    let result = FsSource::new(Path::new(&job.repo.root), walk_threads, Arc::clone(&ctx))
+                        .and_then(|src| index_repo(&job.repo.name, &src, backend, store, opts))
+                        .map(|mut rep| {
+                            rep.index.commit.clone_from(&job.commit);
+                            rep
+                        })
+                        .map_err(anyhow::Error::from);
+                    report(&job.repo.name, &result, t);
+                    results
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(Outcome { name: job.repo.name.clone(), result });
+                }
+            });
+        }
+    });
+    Ok(results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+fn report(name: &str, result: &anyhow::Result<IndexReport>, started: Instant) {
+    match result {
+        Ok(rep) => {
+            err_line(&format!(
+                "  {:<40} {:>7} files {:>8.1} MiB {:>2} shard(s) {:>6.2}s{}",
+                name,
+                rep.index.files,
+                rep.index.content_bytes as f64 / 1_048_576.0,
+                rep.index.shards.len(),
+                started.elapsed().as_secs_f64(),
+                if rep.skipped.is_empty() { String::new() } else { format!("  ({} unreadable)", rep.skipped.len()) }
+            ));
+            for skipped in rep.skipped.iter().take(3) {
+                err_line(&format!("  {name}: could not read {}: {}", skipped.path, skipped.error));
+            }
+        }
+        Err(e) => err_line(&format!("  {name:<40} FAILED: {e:#}")),
+    }
+}
+
+/// Records successful outcomes in `catalog` (retiring the shards they replace) and their
+/// snapshots in the pack. Returns how many repos failed; a failed repo keeps its previous
+/// index, which is still exactly what it was built from.
+pub fn apply(catalog: &mut Catalog, pack: &mut SnapshotPack, outcomes: Vec<Outcome>) -> anyhow::Result<usize> {
+    let now = now_unix()?;
+    let mut failed = 0;
+    for Outcome { name, result } in outcomes {
+        let Ok(rep) = result else {
+            // Already reported per repo as it happened.
+            failed += 1;
+            continue;
+        };
+        catalog.set_index(&name, rep.index, now).with_context(|| format!("repo {name:?} vanished from catalog"))?;
+        // A source without snapshots leaves none behind, so a stale one is never used.
+        match rep.snapshot {
+            Some(bytes) => pack.entries.insert(name, bytes),
+            None => pack.entries.remove(&name),
+        };
+    }
+    Ok(failed)
+}
+
+/// Saves the catalog, then the pack, then deletes what expired. The catalog goes first:
+/// once it is saved no new reader can pick up a retired shard.
+pub fn commit(
+    store: &dyn ShardStore,
+    held: &WriterLock,
+    mut catalog: Catalog,
+    pack: &SnapshotPack,
+) -> anyhow::Result<Catalog> {
+    store.save_catalog(&catalog)?;
+    pack.save(store)?;
+    collect_garbage(store, held, &mut catalog, now_unix()?)?;
+    Ok(catalog)
+}
+
+/// Retires shards that no catalog names (a run that crashed between publishing shards
+/// and saving the catalog leaves those), and deletes retired shards past their grace.
+fn collect_garbage(store: &dyn ShardStore, _held: &WriterLock, catalog: &mut Catalog, now: u64) -> anyhow::Result<()> {
+    let known: std::collections::HashSet<&str> =
+        catalog.live_shards().chain(catalog.retired.iter().map(|r| r.shard.as_str())).collect();
+    let orphans: Vec<String> =
+        store.list()?.into_iter().filter(|n| n != PACK_NAME && !known.contains(n.as_str())).collect();
+    let expired = catalog.take_expired(now);
+    if orphans.is_empty() && expired.is_empty() {
+        return Ok(());
+    }
+    catalog.retired.extend(orphans.into_iter().map(|shard| scout_core::catalog::RetiredShard { shard, at_unix: now }));
+    // Save before deleting: a crash in between leaves files the next sweep re-retires,
+    // never a catalog naming deleted shards.
+    store.save_catalog(catalog)?;
+    for shard in &expired {
+        store.remove(shard)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use scout_core::catalog::{RETIRE_GRACE_SECS, RepoEntry, RepoIndex};
+    use scout_store_fs::FsStore;
+
+    use super::*;
+
+    fn publish(store: &FsStore, name: &str) {
+        let staged = store.staging_path(name).unwrap();
+        std::fs::write(&staged, b"x").unwrap();
+        store.publish(&staged, name).unwrap();
+    }
+
+    fn index(shard: &str) -> RepoIndex {
+        RepoIndex {
+            backend: "native".into(),
+            shards: vec![shard.into()],
+            listing_digest: None,
+            commit: None,
+            files: 0,
+            content_bytes: 0,
+            binary_files: 0,
+            indexed_at_unix: 0,
+        }
+    }
+
+    /// Replaced shards stay on disk through the grace period and are deleted after it;
+    /// a shard no catalog names is retired, then deleted the same way.
+    #[test]
+    fn retired_and_orphaned_shards_are_deleted_after_the_grace_period() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::open(dir.path()).unwrap();
+        let held = store.lock_writer().unwrap();
+        let mut catalog = Catalog::default();
+        catalog.repos.push(RepoEntry { name: "r".into(), root: "/r".into(), remote: None, index: None });
+        publish(&store, "r.1.0.native");
+        catalog.set_index("r", index("r.1.0.native"), 1000).unwrap();
+        publish(&store, "r.2.0.native");
+        catalog.set_index("r", index("r.2.0.native"), 1000).unwrap();
+        publish(&store, "orphan.1.0.native");
+        let exists = |n: &str| store.local_path(n).unwrap().exists();
+
+        collect_garbage(&store, &held, &mut catalog, 1000).unwrap();
+        assert!(exists("r.1.0.native") && exists("orphan.1.0.native"), "inside the grace period");
+        assert_eq!(catalog.retired.len(), 2);
+
+        collect_garbage(&store, &held, &mut catalog, 1000 + RETIRE_GRACE_SECS).unwrap();
+        assert!(!exists("r.1.0.native") && !exists("orphan.1.0.native"));
+        assert!(exists("r.2.0.native"), "the live shard is never touched");
+        assert!(catalog.retired.is_empty());
+        assert!(store.load_catalog().unwrap().retired.is_empty(), "the catalog on disk agrees");
+    }
+}

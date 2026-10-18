@@ -14,10 +14,10 @@ use crate::{Error, Result};
 /// 16 KiB filters a little better but doubles the postings; 256 KiB barely filters.
 pub const UNIT_TARGET: usize = 64 << 10;
 
-/// Splits `content` into units of about `target` bytes, each ending just after a
-/// newline (or at the end). A line never spans two units, which is what makes per-unit trigram
-/// filtering sound for line-oriented matching. A line longer than `target` makes one
-/// larger unit.
+/// Splits `content` into units of about `target` bytes, each ending just after a newline
+/// (or at the end). A line never spans two units, which is what makes per-unit trigram
+/// filtering sound for line-oriented matching. A line longer than `target` makes one larger
+/// unit.
 #[must_use]
 pub fn unit_spans(content: &[u8], target: usize) -> Vec<std::ops::Range<usize>> {
     let mut spans = Vec::with_capacity(content.len() / target.max(1) + 1);
@@ -52,6 +52,15 @@ pub struct IndexOptions {
     /// Content bytes per shard before a new shard is started. Building a shard holds its
     /// postings in memory, so this is what bounds indexing RAM on small machines.
     pub shard_content_cap: u64,
+    /// Part of every shard name, so a reindex never reuses the name of a shard a reader
+    /// may still be about to open. One per index run; see [`new_generation`].
+    pub generation: u64,
+}
+
+/// A generation id no earlier run used: the clock in nanoseconds. Writers hold the store's
+/// writer lock, so two runs never start in the same nanosecond on one store.
+pub fn new_generation() -> Result<u64> {
+    crate::catalog::since_epoch().map(|d| d.as_nanos() as u64)
 }
 
 /// A file that could not be indexed. Reported to the caller rather than aborting the
@@ -83,8 +92,11 @@ pub enum Kind {
     /// UTF-16 BOM: rg transcodes it to UTF-8 before matching, so raw-byte trigrams say
     /// nothing about it.
     Utf16,
-    /// Contains a NUL at this offset: rg searches only the bytes before it, then stops with
-    /// a warning. Nothing after the NUL can ever affect output.
+    /// Contains a NUL at this offset. rg reads the file in fills of its line buffer and quits
+    /// at the first fill holding the NUL, after printing the matches of earlier fills and a
+    /// warning. scout reproduces rg with a fresh (64 KiB) buffer; rg's own output depends on
+    /// how far earlier files grew its reused buffer (E14). Nothing after the NUL can ever
+    /// affect output.
     Binary { nul: usize },
 }
 
@@ -103,6 +115,7 @@ struct Building<'a> {
     backend: &'a dyn IndexBackend,
     store: &'a dyn ShardStore,
     repo: &'a str,
+    generation: u64,
     staged: Vec<(String, PathBuf)>,
     current: Option<Box<dyn ShardWriter>>,
 }
@@ -110,7 +123,7 @@ struct Building<'a> {
 impl Building<'_> {
     fn add(&mut self, meta: &crate::ports::FileMeta, content: &[u8], units: &[Vec<Trigram>]) -> Result<u64> {
         if self.current.is_none() {
-            let name = format!("{}.{}.{}", self.repo, self.staged.len(), self.backend.name());
+            let name = format!("{}.{:x}.{}.{}", self.repo, self.generation, self.staged.len(), self.backend.name());
             let path = self.store.staging_path(&name)?;
             self.current = Some(self.backend.create(&path)?);
             self.staged.push((name, path));
@@ -148,7 +161,7 @@ pub fn index_repo(
     files.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 
     let mut extractor = TrigramExtractor::default();
-    let mut b = Building { backend, store, repo, staged: Vec::new(), current: None };
+    let mut b = Building { backend, store, repo, generation: opts.generation, staged: Vec::new(), current: None };
     let mut skipped = Vec::new();
     let (mut indexed, mut bytes, mut binary) = (0u64, 0u64, 0u64);
 
@@ -165,7 +178,7 @@ pub fn index_repo(
             Kind::Utf8Bom => (content.len(), b.add(meta, &content, &units(&mut extractor, &content, &[READER_MODE]))?),
             Kind::Utf16 => (content.len(), b.add(meta, &content, &[vec![READER_MODE, ALWAYS_SEARCH]])?),
             Kind::Binary { nul } => {
-                // Keep the bytes up to and including the NUL: exactly what rg looks at,
+                // Keep the bytes up to and including the NUL: all that can affect rg's output,
                 // and the NUL offset reproduces rg's warning text. Images, fonts and
                 // archives usually have a NUL within a few bytes, so this costs almost
                 // nothing to store. The bytes before the NUL are matched raw (no BOM), so
@@ -197,12 +210,14 @@ pub fn index_repo(
         }
         d.finish()
     });
-    let indexed_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let indexed_at_unix = crate::catalog::now_unix()?;
     Ok(IndexReport {
         index: RepoIndex {
             backend: backend.name().to_string(),
             shards,
             listing_digest,
+            // Only the caller knows whether the source is a synced working copy.
+            commit: None,
             files: indexed,
             content_bytes: bytes,
             binary_files: binary,

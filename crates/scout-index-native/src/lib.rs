@@ -1,21 +1,31 @@
-//! Native shard format (v2).
+//! Native shard format (v3).
 //!
 //! One file per shard, read through `mmap` so the OS decides what stays in RAM. That is
 //! what keeps scout usable on a 2 GB machine with an index far larger than memory.
 //!
 //! ```text
-//! magic    8  b"SCOUTNI2"
-//! header  64  u32 version, u32 doc_count, u32 trigram_count, u32 unit_count,
-//!             u64 content_off, u64 docs_off, u64 paths_off, u64 units_off, u64 dict_off,
-//!             u64 postings_off
+//! magic    8  b"SCOUTNI3"
+//! header  80  u32 version, u32 doc_count, u32 trigram_count, u32 unit_count,
+//!             u64 content_off, u64 docs_off, u64 paths_off, u64 units_off, u64 keys_off,
+//!             u64 vals_off, u64 fence_off, u64 postings_off
 //! content     corpus bin: every document's bytes, concatenated
 //! docs        doc_count × 40: u64 content_off, u64 size, u64 mtime_ns,
 //!             u32 content_len, u32 path_off, u32 path_len, u32 pad
 //! paths       UTF-8 relative paths, concatenated
 //! units       unit_count × 4: u32 doc of each posting unit (see `UnitId`)
-//! dict        trigram_count × 16, sorted by trigram: u32 trigram, u32 unit_count, u64 off
+//! keys        trigram_count × 4, sorted: u32 trigram
+//! vals        trigram_count × 12, same order: u32 unit_count, u64 postings offset
+//! fence       ceil(trigram_count / FENCE) × 4: every FENCE-th key
 //! postings    per trigram: unit ids, delta + LEB128 varint encoded
 //! ```
+//!
+//! The dictionary is split so a lookup touches few pages (E19). With v2's interleaved
+//! 16-byte entries, a binary search over a shard's ~44k trigrams made ~16 probes over ~10
+//! distinct pages, and dictionary lookups cost 3–4.5 ms of a selective query's ~10 ms at
+//! 1 CPU: a fresh CLI process faults in every mmapped page it touches. Now the fence
+//! (~1.4 KiB, one or two pages, shared by every lookup) picks a block, the block's keys
+//! (512 bytes, one page or straddling two) find the trigram, and one value read finishes
+//! it. Sections are not page-aligned, so those are typical counts, not bounds.
 //!
 //! Content comes first so the writer can stream it straight to disk; everything else is
 //! small enough to buffer and append in `finish`. All integers are little-endian.
@@ -29,11 +39,14 @@ use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Shard, ShardWrit
 use scout_core::trigram::Trigram;
 use scout_core::{Error, Result};
 
-const MAGIC: &[u8; 8] = b"SCOUTNI2";
-const VERSION: u32 = 2;
-const HEADER_LEN: u64 = 8 + 64;
+const MAGIC: &[u8; 8] = b"SCOUTNI3";
+const VERSION: u32 = 3;
+const HEADER_LEN: u64 = 8 + 80;
 const DOC_LEN: usize = 40;
-const DICT_LEN: usize = 16;
+const VAL_LEN: usize = 12;
+/// Keys per fence block: 128 × 4 bytes is one short cache-friendly run (usually within one
+/// page), and the fence of a 44k-trigram shard is ~350 keys, ~1.4 KiB.
+const FENCE: usize = 128;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NativeBackend;
@@ -144,12 +157,15 @@ impl ShardWriter for NativeWriter {
         let paths_off = docs_off + docs.len() as u64;
         let units_off = paths_off + self.paths.len() as u64;
         let units: Vec<u8> = self.units.iter().flat_map(|d| d.to_le_bytes()).collect();
-        let dict_off = units_off + units.len() as u64;
+        let keys_off = units_off + units.len() as u64;
 
         self.pairs.sort_unstable();
-        let (dict, postings) = encode_postings(&self.pairs);
-        let postings_off = dict_off + dict.len() as u64;
-        let trigram_count = to_u32(dict.len() / DICT_LEN, "trigram count")?;
+        let (keys, vals, postings) = encode_postings(&self.pairs);
+        let fence: Vec<u8> = keys.chunks(FENCE * 4).flat_map(|block| block[..4].to_vec()).collect();
+        let vals_off = keys_off + keys.len() as u64;
+        let fence_off = vals_off + vals.len() as u64;
+        let postings_off = fence_off + fence.len() as u64;
+        let trigram_count = to_u32(keys.len() / 4, "trigram count")?;
 
         let mut header = Vec::with_capacity(HEADER_LEN as usize);
         header.extend_from_slice(MAGIC);
@@ -157,7 +173,7 @@ impl ShardWriter for NativeWriter {
         header.extend_from_slice(&to_u32(self.docs.len(), "doc count")?.to_le_bytes());
         header.extend_from_slice(&trigram_count.to_le_bytes());
         header.extend_from_slice(&to_u32(self.units.len(), "unit count")?.to_le_bytes());
-        for off in [HEADER_LEN, docs_off, paths_off, units_off, dict_off, postings_off] {
+        for off in [HEADER_LEN, docs_off, paths_off, units_off, keys_off, vals_off, fence_off, postings_off] {
             header.extend_from_slice(&off.to_le_bytes());
         }
 
@@ -166,7 +182,9 @@ impl ShardWriter for NativeWriter {
         self.out.write_all(&docs).map_err(io)?;
         self.out.write_all(&self.paths).map_err(io)?;
         self.out.write_all(&units).map_err(io)?;
-        self.out.write_all(&dict).map_err(io)?;
+        self.out.write_all(&keys).map_err(io)?;
+        self.out.write_all(&vals).map_err(io)?;
+        self.out.write_all(&fence).map_err(io)?;
         self.out.write_all(&postings).map_err(io)?;
         let mut file = self.out.into_inner().map_err(|e| Error::io(&path, e.into_error()))?;
         file.seek(SeekFrom::Start(0)).map_err(io)?;
@@ -175,9 +193,11 @@ impl ShardWriter for NativeWriter {
     }
 }
 
-/// Groups sorted `(trigram, unit)` pairs into the dictionary and varint postings blobs.
-fn encode_postings(pairs: &[u64]) -> (Vec<u8>, Vec<u8>) {
-    let mut dict = Vec::new();
+/// Groups sorted `(trigram, unit)` pairs into the dictionary's keys and values and the
+/// varint postings blob.
+fn encode_postings(pairs: &[u64]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut keys = Vec::new();
+    let mut vals = Vec::new();
     let mut postings = Vec::new();
     let mut i = 0;
     while i < pairs.len() {
@@ -192,11 +212,11 @@ fn encode_postings(pairs: &[u64]) -> (Vec<u8>, Vec<u8>) {
             count += 1;
             i += 1;
         }
-        dict.extend_from_slice(&tri.to_le_bytes());
-        dict.extend_from_slice(&count.to_le_bytes());
-        dict.extend_from_slice(&start.to_le_bytes());
+        keys.extend_from_slice(&tri.to_le_bytes());
+        vals.extend_from_slice(&count.to_le_bytes());
+        vals.extend_from_slice(&start.to_le_bytes());
     }
-    (dict, postings)
+    (keys, vals, postings)
 }
 
 fn write_varint(out: &mut Vec<u8>, mut v: u32) {
@@ -217,7 +237,9 @@ pub struct NativeShard {
     docs_off: usize,
     paths_off: usize,
     units_off: usize,
-    dict_off: usize,
+    keys_off: usize,
+    vals_off: usize,
+    fence_off: usize,
     postings_off: usize,
 }
 
@@ -243,6 +265,15 @@ impl NativeShard {
         let map = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| Error::io(path, e))?;
         let name = path.display().to_string();
         let corrupt = |reason: &str| Error::Corrupt { shard: name.clone(), reason: reason.to_string() };
+        // Another format version is not damage, but it is just as unreadable, so it is
+        // reported through the same error with a reason that says what fixes it.
+        if map.len() >= 8 && map[..7] == MAGIC[..7] && map[..8] != MAGIC[..] {
+            return Err(corrupt(&format!(
+                "native format {} is not {}: rebuild the index with `scout index`",
+                String::from_utf8_lossy(&map[..8]),
+                String::from_utf8_lossy(MAGIC)
+            )));
+        }
         if map.len() < HEADER_LEN as usize || &map[..8] != MAGIC {
             return Err(corrupt("bad magic or truncated header"));
         }
@@ -258,18 +289,25 @@ impl NativeShard {
             docs_off: off(1)?,
             paths_off: off(2)?,
             units_off: off(3)?,
-            dict_off: off(4)?,
-            postings_off: off(5)?,
+            keys_off: off(4)?,
+            vals_off: off(5)?,
+            fence_off: off(6)?,
+            postings_off: off(7)?,
             name: name.clone(),
             map,
         };
         let docs_end = shard.docs_off + shard.doc_count as usize * DOC_LEN;
         let units_end = shard.units_off + shard.unit_count as usize * 4;
-        let dict_end = shard.dict_off + shard.trigram_count as usize * DICT_LEN;
+        let n = shard.trigram_count as usize;
+        let keys_end = shard.keys_off + n * 4;
+        let vals_end = shard.vals_off + n * VAL_LEN;
+        let fence_end = shard.fence_off + n.div_ceil(FENCE) * 4;
         if docs_end > shard.paths_off
             || shard.paths_off > shard.units_off
-            || units_end > shard.dict_off
-            || dict_end > shard.postings_off
+            || units_end > shard.keys_off
+            || keys_end > shard.vals_off
+            || vals_end > shard.fence_off
+            || fence_end > shard.postings_off
             || shard.postings_off > shard.map.len()
         {
             return Err(corrupt("section offsets out of bounds"));
@@ -288,16 +326,31 @@ impl NativeShard {
         Ok(self.docs_off + doc as usize * DOC_LEN)
     }
 
+    /// `(unit_count, postings offset)` of `tri`: the fence picks the one block that can
+    /// hold it, a binary search of that block's keys finds it.
     fn dict_entry(&self, tri: Trigram) -> Option<(u32, usize)> {
-        let (mut lo, mut hi) = (0usize, self.trigram_count as usize);
+        let n = self.trigram_count as usize;
+        let fences = n.div_ceil(FENCE);
+        // The last block whose first key is <= tri.
+        let (mut lo, mut hi) = (0usize, fences);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let at = self.dict_off + mid * DICT_LEN;
-            match le_u32(&self.map, at).cmp(&tri.0) {
+            if le_u32(&self.map, self.fence_off + mid * 4) <= tri.0 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let block = lo.checked_sub(1)?;
+        let (mut lo, mut hi) = (block * FENCE, ((block + 1) * FENCE).min(n));
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match le_u32(&self.map, self.keys_off + mid * 4).cmp(&tri.0) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
                 std::cmp::Ordering::Equal => {
-                    return Some((le_u32(&self.map, at + 4), le_u64(&self.map, at + 8) as usize));
+                    let at = self.vals_off + mid * VAL_LEN;
+                    return Some((le_u32(&self.map, at), le_u64(&self.map, at + 4) as usize));
                 }
             }
         }
@@ -323,8 +376,13 @@ impl Shard for NativeShard {
         let Some((count, off)) = self.dict_entry(tri) else {
             return Ok(Vec::new());
         };
-        let mut out = Vec::with_capacity(count as usize);
-        let data = self.map.get(self.postings_off + off..).ok_or_else(|| self.corrupt("postings out of bounds"))?;
+        let data = self
+            .postings_off
+            .checked_add(off)
+            .and_then(|start| self.map.get(start..))
+            .ok_or_else(|| self.corrupt("postings out of bounds"))?;
+        // Every unit takes at least one byte, so a corrupt count cannot over-allocate.
+        let mut out = Vec::with_capacity((count as usize).min(data.len()));
         let (mut pos, mut prev) = (0usize, 0u32);
         for _ in 0..count {
             let (mut v, mut shift) = (0u32, 0u32);
@@ -405,10 +463,43 @@ mod tests {
     }
 
     #[test]
+    fn finds_every_trigram_across_fence_blocks() {
+        // Several full fence blocks plus a partial last one, an exact multiple of the block
+        // (full last block), one key, and none at all (a shard of files under 3 bytes). One
+        // doc per trigram, so trigram k's postings are exactly [k].
+        for n in [FENCE * 3 + 17, FENCE * 3, 1, 0].map(|n| n as u32) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("s.native");
+            let mut w = NativeBackend.create(&path).unwrap();
+            // Even keys only, so the odd ones in between must miss.
+            let key = |k: u32| Trigram(0x10_0000 + k * 2);
+            for k in 0..n {
+                let meta = FileMeta { path: format!("f{k}"), size: 1, mtime_ns: 0 };
+                w.add(&meta, b"x", &[vec![key(k)]]).unwrap();
+            }
+            if n == 0 {
+                w.add(&FileMeta { path: "ab".into(), size: 2, mtime_ns: 0 }, b"ab", &[vec![]]).unwrap();
+            }
+            w.finish().unwrap();
+            let s = NativeBackend.open(&path).unwrap();
+            for k in 0..n {
+                assert_eq!(s.postings(key(k)).unwrap(), vec![k], "{n} keys: trigram {k}");
+                assert!(s.postings(Trigram(key(k).0 + 1)).unwrap().is_empty(), "{n} keys: after {k}");
+            }
+            assert!(s.postings(Trigram(0x0f_ffff)).unwrap().is_empty(), "{n} keys: below the first");
+            assert!(s.postings(Trigram(key(n).0 + 4)).unwrap().is_empty(), "{n} keys: past the last");
+        }
+    }
+
+    #[test]
     fn rejects_garbage() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad");
         std::fs::write(&path, b"not a shard at all, definitely not").unwrap();
         assert!(NativeBackend.open(&path).is_err());
+        // An older format names the fix instead of claiming corruption.
+        std::fs::write(&path, b"SCOUTNI2 and the rest of an old shard").unwrap();
+        let err = NativeBackend.open(&path).err().unwrap().to_string();
+        assert!(err.contains("rebuild the index"), "{err}");
     }
 }

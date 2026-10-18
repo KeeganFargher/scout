@@ -60,12 +60,7 @@ fn run(detection: &str, full_scans: u64, idle_unchanged: u64) {
     assert_eq!(stat(&err, "unchanged_repos"), idle_unchanged, "{err}");
 
     // A same-size rewrite deep in the tree: only the file's mtime and content change.
-    std::fs::write(
-        repo.join("old").join("b.txt"),
-        "needle uno
-",
-    )
-    .unwrap();
+    std::fs::write(repo.join("old").join("b.txt"), "needle uno\n").unwrap();
     let (out, err) = search(&index);
     assert_eq!(sorted_lines(&out), vec![format!("{}:needle uno", repo.join("old").join("b.txt").display())], "{err}");
     assert_eq!(stat(&err, "unchanged_repos"), 0, "{err}");
@@ -112,7 +107,12 @@ fn run(detection: &str, full_scans: u64, idle_unchanged: u64) {
 
 #[test]
 fn strict_freshness_with_journal() {
-    run("journal", 0, 1);
+    // Only Windows has a change journal; elsewhere journal mode scans, like a FAT volume.
+    if cfg!(windows) {
+        run("journal", 0, 1);
+    } else {
+        run("journal", 1, 0);
+    }
 }
 
 #[test]

@@ -3,5 +3,5 @@
   "printWidth": 100,
   "sortImports": true,
   "sortPackageJson": true,
-  "ignorePatterns": ["**/dist/**", ".tsbuild/**", ".yarn/**"]
+  "ignorePatterns": ["**/dist/**", ".tsbuild/**", ".yarn/**", "vendor/**", "bench/results/**"]
 }

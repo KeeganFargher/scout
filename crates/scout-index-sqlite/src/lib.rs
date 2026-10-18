@@ -218,7 +218,7 @@ impl Shard for SqliteShard {
         };
         let mut out = Vec::new();
         let (mut v, mut shift, mut prev) = (0u32, 0u32, 0u32);
-        for b in blob {
+        for b in &blob {
             v |= u32::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 prev += v;
@@ -228,6 +228,10 @@ impl Shard for SqliteShard {
             } else {
                 shift += 7;
             }
+        }
+        // A blob ending inside a varint was cut short; the native backend says the same.
+        if blob.last().is_some_and(|b| b & 0x80 != 0) {
+            return Err(Error::Invalid(format!("postings for trigram {:#x} are truncated", tri.0)));
         }
         Ok(out)
     }
@@ -262,17 +266,9 @@ mod tests {
             w.add(&FileMeta { path: p.into(), size: c.len() as u64, mtime_ns: 7 }, c, &[ex.extract(c).to_vec()])
                 .unwrap();
         }
-        // A second doc split into two units, as the indexer does for large files.
-        let split: &[u8] = b"hello
-world";
-        let units = vec![
-            ex.extract(
-                b"hello
-",
-            )
-            .to_vec(),
-            ex.extract(b"world").to_vec(),
-        ];
+        // A third doc split into two units, as the indexer does for large files.
+        let split: &[u8] = b"hello\nworld";
+        let units = vec![ex.extract(b"hello\n").to_vec(), ex.extract(b"world").to_vec()];
         w.add(&FileMeta { path: "c.rs".into(), size: 11, mtime_ns: 7 }, split, &units).unwrap();
         w.finish().unwrap();
 

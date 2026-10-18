@@ -1,4 +1,5 @@
-//! Windows FFI: directory enumeration with file ids, and the NTFS/ReFS change journal.
+//! Windows FFI: directory enumeration with file ids, the NTFS/ReFS change journal, a
+//! child process's peak memory (for scout-bench), and usable memory (the indexing budget).
 //!
 //! All `unsafe` in this crate lives here. Every block calls one documented Win32 API with
 //! buffers sized and aligned for it, and every record the kernel returns is bounds-checked
@@ -357,4 +358,38 @@ impl Journal {
         }
         Ok(())
     }
+}
+
+/// Memory this process may use, in bytes: total physical memory. (A Job Object memory limit
+/// is not read; scout is not run inside one.)
+pub(crate) fn usable_memory() -> io::Result<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).map_err(|_| invalid("status size"))?,
+        ..Default::default()
+    };
+    // SAFETY: `status` is a MEMORYSTATUSEX whose `dwLength` is its own size, which is the
+    // documented contract of GlobalMemoryStatusEx; it writes only into that struct.
+    let ok = unsafe { GlobalMemoryStatusEx(&raw mut status) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(status.ullTotalPhys)
+}
+
+/// Peak working set and peak private commit of an exited, not yet reaped child, in bytes.
+pub(crate) fn peak_memory(child: &std::process::Child) -> io::Result<(u64, u64)> {
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    let mut c = PROCESS_MEMORY_COUNTERS {
+        cb: u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).map_err(|_| invalid("counters size"))?,
+        ..Default::default()
+    };
+    // SAFETY: the child's handle stays valid while `child` is borrowed (Child owns it and
+    // closes it on drop), and `c` is a PROCESS_MEMORY_COUNTERS whose `cb` is its own size,
+    // which is the documented contract of GetProcessMemoryInfo.
+    let ok = unsafe { GetProcessMemoryInfo(child.as_raw_handle(), &raw mut c, c.cb) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((c.PeakWorkingSetSize as u64, c.PeakPagefileUsage as u64))
 }

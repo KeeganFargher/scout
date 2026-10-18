@@ -68,6 +68,9 @@ struct QueryResult {
     parity: bool,
     missing_in_scout: usize,
     extra_in_scout: usize,
+    /// Files in the diff holding a NUL, whose expected output was re-taken from rg searching
+    /// them alone (see [`reverify_nul_files`]).
+    reverified_nul_files: usize,
     /// Includes touched mmap pages, which are shared and evictable.
     scout_peak_ws_mb: Option<f64>,
     /// Private commit: the memory the process really needs. This is the number that must
@@ -126,23 +129,13 @@ struct Peak {
     private: u64,
 }
 
-#[cfg(windows)]
-fn peak_memory(child: &std::process::Child) -> Option<Peak> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
-    let mut c =
-        PROCESS_MEMORY_COUNTERS { cb: u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).ok()?, ..Default::default() };
-    // SAFETY: the child handle is valid until `child` is dropped (it has exited but is
-    // not yet reaped), and `c` is a correctly sized PROCESS_MEMORY_COUNTERS.
-    #[allow(unsafe_code)]
-    let ok = unsafe { GetProcessMemoryInfo(child.as_raw_handle(), &raw mut c, c.cb) };
-    (ok != 0).then_some(Peak { working_set: c.PeakWorkingSetSize as u64, private: c.PeakPagefileUsage as u64 })
-}
-
-/// Peak memory is only measured on Windows so far; elsewhere it is reported as unknown.
-#[cfg(not(windows))]
-fn peak_memory(_: &std::process::Child) -> Option<Peak> {
-    None
+/// `None` where the platform does not measure it (see `process_peak_memory`).
+fn peak_memory(child: &std::process::Child) -> anyhow::Result<Option<Peak>> {
+    match scout_source_fs::process_peak_memory(child) {
+        Ok((working_set, private)) => Ok(Some(Peak { working_set, private })),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => Ok(None),
+        Err(e) => Err(e).context("reading the child's peak memory"),
+    }
 }
 
 fn run(program: &str, args: &[String]) -> anyhow::Result<Run> {
@@ -170,7 +163,7 @@ fn run(program: &str, args: &[String]) -> anyhow::Result<Run> {
     })?;
     let status = child.wait()?;
     let elapsed = started.elapsed();
-    let peak = peak_memory(&child);
+    let peak = peak_memory(&child)?;
     // rg and scout both exit 1 for "no matches"; only 2+ is an error.
     if status.code().is_none_or(|c| c > 1) {
         bail!("{program} failed ({status}): {stderr}");
@@ -199,6 +192,95 @@ fn keys(out: &[u8], line_mode: bool) -> BTreeSet<String> {
         })
         .collect()
 }
+
+/// The file a key belongs to: the whole key for `-l`, else everything before the last `:`
+/// (`path:line`, `path: WARNING`, `path:count`; the part after it never holds a `:`).
+fn key_path(key: &str, files_mode: bool) -> &str {
+    if files_mode { key } else { key.rsplit_once(':').map_or(key, |(p, _)| p) }
+}
+
+/// rg's output for a file whose first NUL lies past its first 64 KiB read depends on what
+/// the same search thread read before it: rg reuses each thread's line buffer, which only
+/// grows. A grown buffer sees the NUL in its first fill and prints nothing; a fresh one
+/// prints the matches before the fill that holds the NUL, then a warning. Which one a file
+/// gets depends on the walk order and thread scheduling, so a parity diff on such a file is
+/// rg disagreeing with itself. scout defines the output as rg's with a fresh buffer (each
+/// reader-mode doc gets a fresh searcher, see `scout-core`'s `search::run`). So for every
+/// file in the diff that holds a NUL, the expected keys are replaced with those of rg
+/// searching a lone copy of it (the first and only file on its thread), with the query's
+/// own flags.
+///
+/// Only that case is re-verified, so nothing else can hide behind it: a file without a NUL
+/// or with one inside the first read (rg's output for it is deterministic) stays a failure,
+/// and so does a file rg would not search at all over the same roots (ignored, hidden,
+/// excluded by the query's globs), since the lone copy has no ignore files around it.
+/// Returns how many files were re-verified.
+fn reverify_nul_files(
+    rg: &str,
+    q: &Query,
+    roots: &[String],
+    scout: &BTreeSet<String>,
+    expected: &mut BTreeSet<String>,
+    files_mode: bool,
+) -> anyhow::Result<usize> {
+    let diff: BTreeSet<String> =
+        scout.symmetric_difference(expected).map(|k| key_path(k, files_mode).to_string()).collect();
+    let mut searched: Option<BTreeSet<String>> = None;
+    let mut reverified = 0;
+    for path in diff {
+        let bytes = std::fs::read(&path).with_context(|| format!("reading {path} to re-verify it"))?;
+        if bytes.iter().position(|&b| b == 0).is_none_or(|at| at < RG_FIRST_READ) {
+            continue;
+        }
+        if searched.is_none() {
+            // The query's flags choose files too (-t, -g, --hidden), but -l and -c are modes
+            // and the last mode flag wins: `--files` goes after them or rg searches for the
+            // first root as a pattern.
+            let mut args: Vec<String> = q.flags.clone();
+            args.push("--files".to_string());
+            args.extend(roots.iter().cloned());
+            let out = run(rg, &args)?;
+            searched = Some(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect());
+        }
+        if !searched.as_ref().is_some_and(|s| s.contains(&path)) {
+            continue;
+        }
+        let (root, rel) = roots
+            .iter()
+            .find_map(|r| path.strip_prefix(r.as_str()).map(|rel| (r, rel.trim_start_matches(['/', '\\']))))
+            .with_context(|| format!("{path} is under no root"))?;
+        // The copy keeps its path below the root, so path-based flags (-t, -g 'src/**')
+        // select it as they did there; ignore rules were already applied by `--files`.
+        let dir = std::env::temp_dir().join(format!("scout-bench-nul-{}", std::process::id()));
+        let copy = dir.join(rel);
+        std::fs::create_dir_all(copy.parent().context("copy has no parent")?)?;
+        let mut args: Vec<String> = ["--no-heading", "--with-filename", "--color", "never", "-n", "-j1"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        args.extend(q.flags.iter().cloned());
+        args.extend(["-e".to_string(), q.pattern.clone(), dir.to_str().context("temp dir is not UTF-8")?.to_string()]);
+        // The directory goes whether the copy or the search failed; the copy's or search's
+        // error is the one reported, the cleanup's only when they succeeded.
+        let r = std::fs::write(&copy, &bytes).map_err(anyhow::Error::from).and_then(|()| run(rg, &args));
+        let cleaned = std::fs::remove_dir_all(&dir);
+        let r = r?;
+        cleaned?;
+        let prefix = dir.to_str().context("temp dir is not UTF-8")?;
+        let fresh = keys(&r.stdout, !files_mode && !q.flags.iter().any(|f| f == "-c"));
+        expected.retain(|k| key_path(k, files_mode) != path);
+        for k in fresh {
+            let rest = k.strip_prefix(prefix).with_context(|| format!("rg printed {k:?}, not under {prefix}"))?;
+            expected.insert(format!("{root}{rest}"));
+        }
+        reverified += 1;
+    }
+    Ok(reverified)
+}
+
+/// rg's first read of a file fills its default 64 KiB buffer (`grep-searcher`'s
+/// `DEFAULT_BUFFER_CAPACITY`); a NUL inside it is seen whatever the buffer's history.
+const RG_FIRST_READ: usize = 64 * 1024;
 
 fn stat(stderr: &str, key: &str) -> u64 {
     stderr
@@ -319,7 +401,13 @@ fn main() -> anyhow::Result<()> {
         let rg_last = rg_last.context("no rg run")?;
 
         let a = keys(&last.stdout, line_mode);
-        let b = keys(&rg_last.stdout, line_mode);
+        let mut b = keys(&rg_last.stdout, line_mode);
+        let files_mode = q.flags.iter().any(|f| f == "-l");
+        let reverified = reverify_nul_files(&args.rg, q, &roots, &a, &mut b, files_mode)?;
+        if reverified > 0 {
+            let _ =
+                writeln!(std::io::stderr(), "{}: re-verified {reverified} NUL file(s) against fresh-buffer rg", q.name);
+        }
         let missing: Vec<_> = b.difference(&a).collect();
         let extra_found: Vec<_> = a.difference(&b).collect();
         let parity = missing.is_empty() && extra_found.is_empty();
@@ -354,6 +442,7 @@ fn main() -> anyhow::Result<()> {
             parity,
             missing_in_scout: missing.len(),
             extra_in_scout: extra_found.len(),
+            reverified_nul_files: reverified,
             scout_peak_ws_mb: last.peak.map(|p| p.working_set as f64 / 1_048_576.0),
             scout_peak_private_mb: last.peak.map(|p| p.private as f64 / 1_048_576.0),
         };
@@ -369,7 +458,11 @@ fn main() -> anyhow::Result<()> {
             r.candidates,
             r.matched_files,
             r.results,
-            if r.parity { "ok" } else { "FAIL" },
+            match (r.parity, r.reverified_nul_files) {
+                (false, _) => "FAIL".to_string(),
+                (true, 0) => "ok".to_string(),
+                (true, n) => format!("ok ({n} NUL re-verified)"),
+            },
             mib(r.scout_peak_ws_mb),
             mib(r.scout_peak_private_mb)
         )?;
@@ -405,4 +498,18 @@ fn main() -> anyhow::Result<()> {
         bail!("parity failures; results are not trustworthy");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{key_path, keys};
+
+    #[test]
+    fn key_path_recovers_the_file_of_every_key_shape() {
+        let lines = keys(b"/r/a.txt:12:if x\n/r/a.txt: WARNING: stopped searching binary file\n", true);
+        assert!(lines.iter().all(|k| key_path(k, false) == "/r/a.txt"), "{lines:?}");
+        assert_eq!(key_path(r"C:\r\a.txt:3", false), r"C:\r\a.txt");
+        assert_eq!(key_path("/r/a.txt:7", false), "/r/a.txt", "-c output is path:count");
+        assert_eq!(key_path("/r/a:b.txt", true), "/r/a:b.txt", "-l output is the whole path");
+    }
 }

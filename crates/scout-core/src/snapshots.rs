@@ -47,7 +47,7 @@ impl SnapshotPack {
     pub fn save(&self, store: &dyn ShardStore) -> Result<()> {
         let staged = store.staging_path(&format!("{PACK_NAME}.{}", std::process::id()))?;
         std::fs::write(&staged, self.encode()?).map_err(|e| Error::io(&staged, e))?;
-        store.publish(&staged, PACK_NAME)
+        store.replace(&staged, PACK_NAME)
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {

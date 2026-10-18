@@ -16,6 +16,7 @@ scout-index-native = { path = "crates/scout-index-native" }
 scout-index-sqlite = { path = "crates/scout-index-sqlite" }
 scout-source-fs = { path = "crates/scout-source-fs" }
 scout-store-fs = { path = "crates/scout-store-fs" }
+scout-sync = { path = "crates/scout-sync" }
 
 # Vendored ripgrep (git subtree). Patch here, not via crates.io.
 grep-matcher = { path = "vendor/ripgrep/crates/matcher" }
