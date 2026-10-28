@@ -13,6 +13,7 @@ pub mod query;
 pub mod rank;
 pub mod ranked;
 pub mod search;
+pub mod shape;
 pub mod snapshots;
 pub mod trigram;
 

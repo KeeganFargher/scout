@@ -27,7 +27,16 @@ ignore = { path = "vendor/ripgrep/crates/ignore" }
 
 regex-syntax = "0.8.11"
 memchr = "2.8"
+itoa = "1"
+lz4 = "1.28.1"
 memmap2 = "0.9"
+# Safe Rust block encoder (no frames). Reads use the bounds-checked reference decoder.
+lz4_flex = { version = "0.11.6", default-features = false, features = [
+  "std",
+  "safe-encode",
+  "safe-decode",
+  "checked-decode",
+] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

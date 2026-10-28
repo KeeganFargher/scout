@@ -1,0 +1,9 @@
+exhaustive cold if count: 8585236 lines in 26008.1 ms
+exhaustive prefix parity OK: if
+exhaustive prefix parity OK: return
+exhaustive prefix parity OK: export
+exhaustive prefix parity OK: todo
+exhaustive prefix parity OK: date
+exhaustive prefix parity OK: symbol
+exhaustive prefix parity OK: none
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=3235 oom_kills=0 io: rbytes=3354333184 wbytes=0 rios=39301 wios=0 dbytes=0 dios=0

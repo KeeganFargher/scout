@@ -1,0 +1,2 @@
+{"document_visits":1131349,"elapsed_secs":119.276875694,"indexed_bytes":8714175268,"method":"cycle and repartition existing plain text; no generated filler; no cross-file compression","repos":250,"requested_bytes":8589934592,"source":"/mnt/ebs/idx-subsecond-v9-hybrid-20261027","source_documents":650237}
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=4096 oom_kills=0 io: rbytes=2137346048 wbytes=5239201792 rios=19082 wios=759 dbytes=0 dios=0

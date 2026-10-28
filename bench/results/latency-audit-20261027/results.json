@@ -1,0 +1,330 @@
+{
+  "measured_date": "2026-10-27",
+  "description": "Warm E29/v6 baseline, not a build of the current E31/E32 working tree. One warm-up and three timed samples per query/mode. stdout /dev/null; stderr captures --stats.",
+  "profile": {
+    "cpus": 2,
+    "memory_max": "4G",
+    "swap_max": 0,
+    "read_MB_per_second": 125,
+    "read_IOPS": 3000,
+    "cgroup_peak_mib": 2617,
+    "oom_kills": 0
+  },
+  "complete": true,
+  "binary": "/home/keegan/small/bin-e29b/scout",
+  "index": "/mnt/ebs/idx-e29",
+  "rows": [
+    {
+      "query": "common",
+      "mode": "lines",
+      "samples": [
+        {
+          "wall_ms": 599.9350750007579,
+          "cpu_ms": 1143.5320000000002,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 568.0319379989669,
+          "cpu_ms": 1100.0509999999997,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 581.3926050013833,
+          "cpu_ms": 1129.5289999999998,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 581.3926050013833,
+      "median_cpu_ms": 1129.5289999999998,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=6 docs=697675 candidates=50646 matched_files=50302 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=10.92 verify_ms=1090.66 open_ms=2.01 search_ms=560.57 total_ms=562.60 plan=And([Tri(Trigram(7566436)), Tri(Trigram(7627834)), Tri(Trigram(6568506)), Tri(Trigram(3816053)), Tri(Trigram(3831150)), Tri(Trigram(7695977)), Tri(Trigram(7235953)), Tri(Trigram(6910325)), Tri(Trigram(7435621)), Tri(Trigram(7693663)), Tri(Trigram(6643568)), Tri(Trigram(6254708)), Tri(Trigram(7369842))])"
+    },
+    {
+      "query": "common",
+      "mode": "files",
+      "samples": [
+        {
+          "wall_ms": 539.9613179997687,
+          "cpu_ms": 1043.1670000000013,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 531.7952879995573,
+          "cpu_ms": 1025.6539999999993,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 545.0843460002943,
+          "cpu_ms": 1055.7440000000006,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 539.9613179997687,
+      "median_cpu_ms": 1043.1670000000013,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=6 docs=697675 candidates=50646 matched_files=50302 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=10.58 verify_ms=1018.08 open_ms=1.94 search_ms=523.44 total_ms=525.41 plan=And([Tri(Trigram(7566436)), Tri(Trigram(7627834)), Tri(Trigram(6568506)), Tri(Trigram(3816053)), Tri(Trigram(3831150)), Tri(Trigram(7695977)), Tri(Trigram(7235953)), Tri(Trigram(6910325)), Tri(Trigram(7435621)), Tri(Trigram(7693663)), Tri(Trigram(6643568)), Tri(Trigram(6254708)), Tri(Trigram(7369842))])"
+    },
+    {
+      "query": "common",
+      "mode": "count",
+      "samples": [
+        {
+          "wall_ms": 548.7769020000997,
+          "cpu_ms": 1061.2910000000006,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 542.6557669998147,
+          "cpu_ms": 1052.4249999999995,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 566.2956619999022,
+          "cpu_ms": 1093.2630000000004,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 548.7769020000997,
+      "median_cpu_ms": 1061.2910000000006,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=6 docs=697675 candidates=50646 matched_files=50302 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=10.45 verify_ms=1058.47 open_ms=1.98 search_ms=545.03 total_ms=547.06 plan=And([Tri(Trigram(7566436)), Tri(Trigram(7627834)), Tri(Trigram(6568506)), Tri(Trigram(3816053)), Tri(Trigram(3831150)), Tri(Trigram(7695977)), Tri(Trigram(7235953)), Tri(Trigram(6910325)), Tri(Trigram(7435621)), Tri(Trigram(7693663)), Tri(Trigram(6643568)), Tri(Trigram(6254708)), Tri(Trigram(7369842))])"
+    },
+    {
+      "query": "license",
+      "mode": "lines",
+      "samples": [
+        {
+          "wall_ms": 1680.604465000215,
+          "cpu_ms": 3244.500999999996,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1696.8659710000793,
+          "cpu_ms": 3295.007000000002,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1672.448474999328,
+          "cpu_ms": 3246.9089999999987,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 1680.604465000215,
+      "median_cpu_ms": 3246.9089999999987,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=7 docs=697675 candidates=184684 matched_files=182037 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=48.84 verify_ms=3160.11 open_ms=1.95 search_ms=1643.59 total_ms=1645.57 plan=And([Tri(Trigram(7697253)), Tri(Trigram(7562528)), Tri(Trigram(6627439)), Tri(Trigram(2125670)), Tri(Trigram(7300640)), Tri(Trigram(6692980)), Tri(Trigram(2126952)), Tri(Trigram(7628905)), Tri(Trigram(6842739)), Tri(Trigram(6910752)), Tri(Trigram(7544947)), Tri(Trigram(2126703)), Tri(Trigram(7565173)), Tri(Trigram(7304562)), Tri(Trigram(7696995)), Tri(Trigram(7496549)), Tri(Trigram(6513952)), Tri(Trigram(6627427)), Tri(Trigram(2122607)), Tri(Trigram(6516580)), Tri(Trigram(7300197)), Tri(Trigram(6579488)), Tri(Trigram(6627433)), Tri(Trigram(2124147)), Tri(Trigram(7544935)), Tri(Trigram(2123631)), Tri(Trigram(6778742)), Tri(Trigram(7304805)), Tri(Trigram(7759218)), Tri(Trigram(6648430)), Tri(Trigram(7499365)), Tri(Trigram(7234916)), Tri(Trigram(6644768)), Tri(Trigram(6561890)), Tri(Trigram(2122361)), Tri(Trigram(6453536)), Tri(Trigram(7938145)), Tri(Trigram(2122016)), Tri(Trigram(6365282)), Tri(Trigram(2122355)), Tri(Trigram(6452068)), Tri(Trigram(7562285)), Tri(Trigram(6565235)), Tri(Trigram(2978676)), Tri(Trigram(7566457)), Tri(Trigram(7633260)), Tri(Trigram(7957605)), Tri(Trigram(7103776)), Tri(Trigram(6627436)), Tri(Trigram(2124905)), Tri(Trigram(7104867)), Tri(Trigram(6906725)), Tri(Trigram(6514030)), Tri(Trigram(6647411)), Tri(Trigram(7238501))])"
+    },
+    {
+      "query": "license",
+      "mode": "files",
+      "samples": [
+        {
+          "wall_ms": 1631.7190190002293,
+          "cpu_ms": 3169.5649999999987,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1685.7794770003238,
+          "cpu_ms": 3273.603999999999,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1607.3521559992514,
+          "cpu_ms": 3108.6540000000014,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 1631.7190190002293,
+      "median_cpu_ms": 3169.5649999999987,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=7 docs=697675 candidates=184684 matched_files=182037 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=53.30 verify_ms=3021.55 open_ms=1.88 search_ms=1579.52 total_ms=1581.44 plan=And([Tri(Trigram(7697253)), Tri(Trigram(7562528)), Tri(Trigram(6627439)), Tri(Trigram(2125670)), Tri(Trigram(7300640)), Tri(Trigram(6692980)), Tri(Trigram(2126952)), Tri(Trigram(7628905)), Tri(Trigram(6842739)), Tri(Trigram(6910752)), Tri(Trigram(7544947)), Tri(Trigram(2126703)), Tri(Trigram(7565173)), Tri(Trigram(7304562)), Tri(Trigram(7696995)), Tri(Trigram(7496549)), Tri(Trigram(6513952)), Tri(Trigram(6627427)), Tri(Trigram(2122607)), Tri(Trigram(6516580)), Tri(Trigram(7300197)), Tri(Trigram(6579488)), Tri(Trigram(6627433)), Tri(Trigram(2124147)), Tri(Trigram(7544935)), Tri(Trigram(2123631)), Tri(Trigram(6778742)), Tri(Trigram(7304805)), Tri(Trigram(7759218)), Tri(Trigram(6648430)), Tri(Trigram(7499365)), Tri(Trigram(7234916)), Tri(Trigram(6644768)), Tri(Trigram(6561890)), Tri(Trigram(2122361)), Tri(Trigram(6453536)), Tri(Trigram(7938145)), Tri(Trigram(2122016)), Tri(Trigram(6365282)), Tri(Trigram(2122355)), Tri(Trigram(6452068)), Tri(Trigram(7562285)), Tri(Trigram(6565235)), Tri(Trigram(2978676)), Tri(Trigram(7566457)), Tri(Trigram(7633260)), Tri(Trigram(7957605)), Tri(Trigram(7103776)), Tri(Trigram(6627436)), Tri(Trigram(2124905)), Tri(Trigram(7104867)), Tri(Trigram(6906725)), Tri(Trigram(6514030)), Tri(Trigram(6647411)), Tri(Trigram(7238501))])"
+    },
+    {
+      "query": "license",
+      "mode": "count",
+      "samples": [
+        {
+          "wall_ms": 1679.957378999461,
+          "cpu_ms": 3263.0650000000046,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1692.6609940001072,
+          "cpu_ms": 3288.359,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 1621.1295330012945,
+          "cpu_ms": 3146.003999999991,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 1679.957378999461,
+      "median_cpu_ms": 3263.0650000000046,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=7 docs=697675 candidates=184684 matched_files=182037 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=47.92 verify_ms=3060.88 open_ms=1.83 search_ms=1592.90 total_ms=1594.78 plan=And([Tri(Trigram(7697253)), Tri(Trigram(7562528)), Tri(Trigram(6627439)), Tri(Trigram(2125670)), Tri(Trigram(7300640)), Tri(Trigram(6692980)), Tri(Trigram(2126952)), Tri(Trigram(7628905)), Tri(Trigram(6842739)), Tri(Trigram(6910752)), Tri(Trigram(7544947)), Tri(Trigram(2126703)), Tri(Trigram(7565173)), Tri(Trigram(7304562)), Tri(Trigram(7696995)), Tri(Trigram(7496549)), Tri(Trigram(6513952)), Tri(Trigram(6627427)), Tri(Trigram(2122607)), Tri(Trigram(6516580)), Tri(Trigram(7300197)), Tri(Trigram(6579488)), Tri(Trigram(6627433)), Tri(Trigram(2124147)), Tri(Trigram(7544935)), Tri(Trigram(2123631)), Tri(Trigram(6778742)), Tri(Trigram(7304805)), Tri(Trigram(7759218)), Tri(Trigram(6648430)), Tri(Trigram(7499365)), Tri(Trigram(7234916)), Tri(Trigram(6644768)), Tri(Trigram(6561890)), Tri(Trigram(2122361)), Tri(Trigram(6453536)), Tri(Trigram(7938145)), Tri(Trigram(2122016)), Tri(Trigram(6365282)), Tri(Trigram(2122355)), Tri(Trigram(6452068)), Tri(Trigram(7562285)), Tri(Trigram(6565235)), Tri(Trigram(2978676)), Tri(Trigram(7566457)), Tri(Trigram(7633260)), Tri(Trigram(7957605)), Tri(Trigram(7103776)), Tri(Trigram(6627436)), Tri(Trigram(2124905)), Tri(Trigram(7104867)), Tri(Trigram(6906725)), Tri(Trigram(6514030)), Tri(Trigram(6647411)), Tri(Trigram(7238501))])"
+    },
+    {
+      "query": "alternation",
+      "mode": "lines",
+      "samples": [
+        {
+          "wall_ms": 791.5310759999556,
+          "cpu_ms": 1523.4229999999939,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 771.608560000459,
+          "cpu_ms": 1493.6810000000094,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 776.2193609996757,
+          "cpu_ms": 1504.1650000000004,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 776.2193609996757,
+      "median_cpu_ms": 1504.1650000000004,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=49040 matched_files=44213 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=6.13 verify_ms=1451.96 open_ms=1.80 search_ms=740.09 total_ms=741.93 plan=Or([And([Tri(Trigram(6711672)), Tri(Trigram(6912109)), Tri(Trigram(7892325))]), And([Tri(Trigram(6840675)), Tri(Trigram(6382443))]), And([Tri(Trigram(7630692)), Tri(Trigram(7300207))])])"
+    },
+    {
+      "query": "alternation",
+      "mode": "files",
+      "samples": [
+        {
+          "wall_ms": 727.1621859999868,
+          "cpu_ms": 1401.0660000000003,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 736.8963099997927,
+          "cpu_ms": 1426.2350000000056,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 769.3648180011223,
+          "cpu_ms": 1487.0769999999993,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 736.8963099997927,
+      "median_cpu_ms": 1426.2350000000056,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=49040 matched_files=44213 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=5.58 verify_ms=1433.42 open_ms=2.32 search_ms=731.82 total_ms=734.20 plan=Or([And([Tri(Trigram(6711672)), Tri(Trigram(6912109)), Tri(Trigram(7892325))]), And([Tri(Trigram(6840675)), Tri(Trigram(6382443))]), And([Tri(Trigram(7630692)), Tri(Trigram(7300207))])])"
+    },
+    {
+      "query": "alternation",
+      "mode": "count",
+      "samples": [
+        {
+          "wall_ms": 829.0572389996669,
+          "cpu_ms": 1608.6270000000127,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 768.3319759998994,
+          "cpu_ms": 1485.2190000000007,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 780.5064080002921,
+          "cpu_ms": 1510.2119999999957,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 780.5064080002921,
+      "median_cpu_ms": 1510.2119999999957,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=49040 matched_files=44213 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=5.99 verify_ms=1455.21 open_ms=2.78 search_ms=741.82 total_ms=744.62 plan=Or([And([Tri(Trigram(6711672)), Tri(Trigram(6912109)), Tri(Trigram(7892325))]), And([Tri(Trigram(6840675)), Tri(Trigram(6382443))]), And([Tri(Trigram(7630692)), Tri(Trigram(7300207))])])"
+    },
+    {
+      "query": "date",
+      "mode": "lines",
+      "samples": [
+        {
+          "wall_ms": 2813.7604970015673,
+          "cpu_ms": 5511.121999999986,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2166.974472998845,
+          "cpu_ms": 4247.671000000011,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2352.0889559986244,
+          "cpu_ms": 4619.225999999998,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 2352.0889559986244,
+      "median_cpu_ms": 4619.225999999998,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=697675 matched_files=5699 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=1.40 verify_ms=4510.17 open_ms=2.07 search_ms=2294.41 total_ms=2296.54 plan=All"
+    },
+    {
+      "query": "date",
+      "mode": "files",
+      "samples": [
+        {
+          "wall_ms": 2430.1682709992747,
+          "cpu_ms": 4759.733999999995,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2331.4898280004854,
+          "cpu_ms": 4575.39700000001,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2303.113209998628,
+          "cpu_ms": 4517.9389999999985,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 2331.4898280004854,
+      "median_cpu_ms": 4575.39700000001,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=697675 matched_files=5699 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=1.42 verify_ms=4414.74 open_ms=2.08 search_ms=2245.87 total_ms=2247.99 plan=All"
+    },
+    {
+      "query": "date",
+      "mode": "count",
+      "samples": [
+        {
+          "wall_ms": 2367.3960429987346,
+          "cpu_ms": 4448.980999999989,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2339.543936001064,
+          "cpu_ms": 4587.572000000023,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 2520.065071001227,
+          "cpu_ms": 4943.042999999989,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 2367.3960429987346,
+      "median_cpu_ms": 4587.572000000023,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=697675 matched_files=5699 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=1.96 verify_ms=4833.06 open_ms=2.36 search_ms=2461.48 total_ms=2463.95 plan=All"
+    },
+    {
+      "query": "short",
+      "mode": "files",
+      "samples": [
+        {
+          "wall_ms": 3962.0283389995166,
+          "cpu_ms": 7838.161000000014,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 3739.4639770009235,
+          "cpu_ms": 7395.15099999997,
+          "read_mib": 0
+        },
+        {
+          "wall_ms": 3713.6854179989314,
+          "cpu_ms": 7343.713000000036,
+          "read_mib": 0
+        }
+      ],
+      "median_wall_ms": 3739.4639770009235,
+      "median_cpu_ms": 7395.15099999997,
+      "stats_last": "scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=697675 matched_files=367730 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=1.23 verify_ms=7251.73 open_ms=2.17 search_ms=3657.00 total_ms=3659.30 plan=All"
+    }
+  ]
+}

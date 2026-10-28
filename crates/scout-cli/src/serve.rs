@@ -15,7 +15,9 @@ use scout_core::catalog::{Catalog, now_unix};
 use scout_core::ports::ShardStore;
 use scout_core::rank::Weights;
 use scout_core::ranked::{RankOptions, search_ranked};
-use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search};
+use scout_core::search::{
+    BoundedOptions, CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search, search_bounded,
+};
 use scout_index_native::FilterHome;
 use scout_source_fs::{ChangeDetection, FsContext};
 use scout_store_fs::FsStore;
@@ -24,7 +26,7 @@ use scout_sync::config::Config;
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use crate::ingest::Budget;
+use crate::ingest::{Budget, Content};
 use crate::sync::{log_report, run_cycle};
 use crate::{err_line, host};
 
@@ -40,6 +42,8 @@ pub struct ServeOptions {
     /// cannot occupy every HTTP worker.
     pub search_timeout: Duration,
     pub budget: Budget,
+    /// How each cycle's reindexed repos store their content.
+    pub content: Content,
 }
 
 struct Generation {
@@ -141,7 +145,7 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
     let mut next_id = 2;
     loop {
         reconcile(store, &state, &mut next_id);
-        match run_cycle(store, cfg, &git, token.as_ref(), opts.budget) {
+        match run_cycle(store, cfg, &git, token.as_ref(), opts.budget, opts.content) {
             Ok(report) => {
                 log_report(&report);
                 state.record(LastCycle {
@@ -258,18 +262,45 @@ fn search_response(state: &State, query: &str) -> Response<std::io::Cursor<Vec<u
         v
     };
     let mut out = Vec::new();
-    let searched = match request.top {
-        Some(top) => {
-            let rank = RankOptions { top, weights: Weights::default() };
-            search_ranked(&request.opts, &rank, &selected, &mut out).map(|r| r.stats)
+    let mut bounded = None;
+    let searched = if let Some(bounds) = request.bounded {
+        search_bounded(&request.opts, bounds, &selected, &mut out).map(|r| {
+            if request.opts.output == OutputMode::Count {
+                out = serde_json::json!({"count": r.count_estimate(), "complete": r.complete(), "stop_reason": r.stop})
+                    .to_string()
+                    .into_bytes();
+            }
+            bounded = Some((r.complete(), r.stop, r.returned_matches));
+            r.stats
+        })
+    } else {
+        match request.top {
+            Some(top) => {
+                let rank = RankOptions { top, weights: Weights::default() };
+                search_ranked(&request.opts, &rank, &selected, &mut out).map(|r| r.stats)
+            }
+            None => search(&request.opts, &selected, &mut out).map(|r| r.stats),
         }
-        None => search(&request.opts, &selected, &mut out).map(|r| r.stats),
     };
     match searched {
-        Ok(done) => Response::from_data(out)
-            .with_header(header("Content-Type", "text/plain; charset=utf-8"))
-            .with_header(header("X-Scout-Matched-Files", &done.matched_files.to_string()))
-            .with_header(header("X-Scout-Generation", &generation.id.to_string())),
+        Ok(done) => {
+            let content_type = if bounded.is_some() && request.opts.output == OutputMode::Count {
+                "application/json"
+            } else {
+                "text/plain; charset=utf-8"
+            };
+            let mut response = Response::from_data(out)
+                .with_header(header("Content-Type", content_type))
+                .with_header(header("X-Scout-Matched-Files", &done.matched_files.to_string()))
+                .with_header(header("X-Scout-Generation", &generation.id.to_string()));
+            if let Some((complete, stop, matches)) = bounded {
+                response.add_header(header("X-Scout-Complete", if complete { "true" } else { "false" }));
+                response.add_header(header("X-Scout-Stop-Reason", stop.as_str()));
+                response.add_header(header("X-Scout-Returned-Matches", &matches.to_string()));
+            }
+            response
+        }
+        Err(e @ scout_core::Error::Invalid(_)) => text(400, format!("{e}\n")),
         Err(scout_core::Error::Pattern(msg)) => text(400, format!("invalid pattern: {msg}\n")),
         Err(e @ scout_core::Error::OutputLimit(_)) => {
             text(422, format!("{e}; narrow the search (repo=, m=, l=1 or c=1)\n"))
@@ -289,6 +320,7 @@ struct SearchRequest {
     repos: Vec<String>,
     /// `Some(top)` for a ranked search (`rank=1`, `top=N`, default 20).
     top: Option<usize>,
+    bounded: Option<BoundedOptions>,
 }
 
 /// Maps rg-style flags (`F`, `i`, `S`, `w`, `n`, `l`, `c`, `m`) and ranking (`rank`, `top`)
@@ -300,8 +332,20 @@ fn parse_search(params: &[(String, String)], threads: usize, limits: Limits) -> 
     let mut max_count = None;
     let mut repos = Vec::new();
     let mut top = None;
+    let (mut limit, mut max_bytes, mut timeout_ms) = (None, None, None);
     for (k, v) in params {
         match k.as_str() {
+            "limit" | "max_bytes" | "timeout_ms" => {
+                let n = v.parse::<usize>().map_err(|_| format!("{k} must be a positive integer"))?;
+                if n == 0 {
+                    return Err(format!("{k} must be positive"));
+                }
+                match k.as_str() {
+                    "limit" => limit = Some(n),
+                    "max_bytes" => max_bytes = Some(n),
+                    _ => timeout_ms = Some(n),
+                }
+            }
             "q" => pattern = Some(v.clone()),
             "F" | "i" | "S" | "w" | "n" | "l" | "c" | "rank" => {
                 let on = match v.as_str() {
@@ -329,6 +373,20 @@ fn parse_search(params: &[(String, String)], threads: usize, limits: Limits) -> 
         return Err("top only applies to rank=1".into());
     }
     let top = on("rank").then(|| top.unwrap_or(DEFAULT_TOP));
+    if limit.is_none() && (max_bytes.is_some() || timeout_ms.is_some()) {
+        return Err("max_bytes and timeout_ms require limit".into());
+    }
+    if limit.is_some() && (top.is_some() || on("l")) {
+        return Err("limit supports unranked lines or an explicitly bounded count".into());
+    }
+    let bounded = limit.map(|max_matches| BoundedOptions {
+        max_matches,
+        max_bytes: max_bytes.unwrap_or(65_536),
+        timeout: Duration::from_millis(timeout_ms.unwrap_or(1000) as u64),
+    });
+    if on("c") && bounded.is_some_and(|b| b.max_bytes < 256) {
+        return Err("bounded count needs at least 256 bytes for count metadata".into());
+    }
     Ok(SearchRequest {
         opts: SearchOptions {
             pattern,
@@ -356,6 +414,7 @@ fn parse_search(params: &[(String, String)], threads: usize, limits: Limits) -> 
         },
         repos,
         top,
+        bounded,
     })
 }
 

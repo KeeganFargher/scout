@@ -1,0 +1,8 @@
+# Broad-query rg parity gate. Full if/return output is checked byte-for-byte between
+# arms by lazy-ab.py without storing it; these cases also compare against rg.
+common_lines	-F	std::unique_ptr
+license_files	-l -F	Use of this source code is governed by a BSD-style license
+todo_count	-c	TODO|FIXME|HACK
+date_lines		\d{4}-\d{2}-\d{2}
+if_files	-l	if
+return_m1	-m 1 -F	return

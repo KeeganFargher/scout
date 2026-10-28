@@ -42,6 +42,14 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E21 | Measurement, no code change: honest cold vs warm latency, CLI vs `serve`, and the page-cache cliff. Cold = the index evicted from the page cache before every request and checked evicted with `mincore`, so a cold number can never be a cached one                                                                         | —                                                     | —           | **measured** (geomean p50 of 20 queries, ms. Warm CLI / cold CLI / warm serve / cold serve: 1 CPU 71.9 / 2232 / 36.9 / 2047; 4 CPUs 49.2 / 1720 / 22.1 / 1527; 12 CPUs 51.9 / 1725 / 23.6 / 1522. Serve at 1 CPU, warm: 36–40 ms down to a 1280 MiB limit, 215 at 1 GiB, 1040 at 768 MiB, 1594 at 512 MiB; parity all OK)                                                                                                  |
 | E22 | Count-first AND planning: every trigram's unit count is read from the dictionary first (one count of 0 empties the AND before anything is decoded), then lists are decoded rarest first. A: only the 2 rarest. B: a decode budget, stop once decoding the next list costs more than verifying the candidates it could remove | —                                                     | —           | **A rejected** (geomean 1.054 at 1 CPU, 1.042 at 4, 1.038 at 12; `literal_rare` 1.610 / 1.464 / 1.374, 0/5). **B kept** (geomean 0.954 at 1 CPU, 0.969 at 4, 0.977 at 12; `selective_long` 0.775, `selective_vendored` 0.789, `selective_one` 0.866 at 1 CPU, 5/5 (`selective_common_trigrams` 0.957); `case_insensitive` 1.138 at 1 CPU (0/5) with identical candidates and in-process timings, see notes; parity all OK) |
 | E23 | Each shard's marker doc lists (`ALWAYS_SEARCH`, `READER_MODE`) decoded once at open and held on the heap, with the native fence copied out of the map (was: two dictionary lookups, postings decodes and unit maps per shard on every query)                                                                                 | —                                                     | —           | **kept, small** (served warm: `selective_one` / `selective_long` 1.5 → 1.3 ms at 1 CPU and 1.8 → 1.6 at 4, about 0.2 ms a query; pooled geomean 0.934 / 0.976 / 1.003 at 1 / 4 / 12 CPUs, partly noise, see notes. CLI 0.997 / 1.012 / 1.007. Served cold: median major faults per request 3–4% lower, latency 1.007 / 1.024 / 0.994; parity all OK)                                                                       |
+| E25 | Read-ahead indexing: files are read, classified and trigram-split on `walk_threads` threads ahead of the shard writer, which takes them in path order (bounded window, an eighth of a shard), so shards are byte-identical to a serial build's. One CPU reads inline. Found indexing chromium + llvm-project                 | —                                                     | —           | **kept** (Windows, chromium + llvm-project, 697,675 files, 5.1 GiB: 4088 s cold, base on a warm cache over 1526 s and unfinished, e25 944 / 998 s; llvm-project alone 1420 → 302 s warm. Linux, 137 repos, CPU s / wall s median: 1 CPU (inline) 7.12 → 7.25 / 10.84 → 11.10, 4 CPUs 8.24 → 8.73 / 5.18 → 4.77, 12 CPUs 9.85 → 11.79 / 4.83 → 3.78; peak RSS equal or lower; shards identical in every build)              |
+| E26 | Shards, not repos, released in parallel after a search: one queue of every opened shard that `threads` threads drain (was one repo per thread, E6)                                                                                                                                                                           | —                                                     | —           | **kept** (chromium + llvm-project, scout alone, 5/5 rounds: `nomatch_unicode_regex` 933 → 654 ms, `date_regex` 1,167 → 878, `literal_long` 477 → 364; output byte-identical; 21 of 23 queries now under 1 s)                                                                                                                                                                                                               |
+| E27 | CLI stdout buffer 64 KiB → 1 MiB                                                                                                                                                                                                                                                                                             | —                                                     | —           | **rejected** (no change, 0.992–1.026: chunks are written whole and bypass the buffer)                                                                                                                                                                                                                                                                                                                                      |
+| E28 | EBS-like harness (2 CPUs / 4 GiB, gp3 caps); verifiers queue `MADV_WILLNEED` over their candidates' content in ~4 MiB blocks ahead of verifying                                                                                                                                                                              | —                                                     | —           | **kept** (chromium + llvm-project, 5.8 GiB index on 4 GiB: cold geomean 0.696 with ~40% fewer bytes read; steady state 0.940, noisy)                                                                                                                                                                                                                                                                                       |
+| E29 | Format v6: content in line-aligned blocks, each lz4 where smaller; `--content auto` picks lz4 when content > half of usable memory                                                                                                                                                                                           | —                                                     | —           | **kept** (EBS box: index 5.8 → 2.3 GiB, steady state 0.567 with no disk reads, `date_regex` 20.9 → 2.3 s, cold 0.746; bench corpus raw v6 + E28 vs e26: 0.813 / 0.851 / 0.899 at 1 / 4 / 12 CPUs; lz4 on an index that fits memory 1.5–1.9x slower, so `auto` keeps raw there; parity green)                                                                                                                               |
+| E30 | Posting lists mapped `MADV_RANDOM` and each asks for its exact range (`MADV_WILLNEED`). A: the dictionary too. B: postings only                                                                                                                                                                                              | —                                                     | —           | **A rejected** (1 GiB warm 1.094, 2 GiB on v6 1.455: dictionary misses become 4 KiB reads; cold 0.80–0.87). **B kept** (v9, 1 GiB: warm 0.893, cold 0.914; 4 GiB warm 1.002, cold 0.917; outputs identical)                                                                                                                                                                                                                |
+| E31 | A repo's shards share trigram counts; a long AND counts only the 6 the shard before ranked rarest                                                                                                                                                                                                                            | —                                                     | —           | **rejected, removed** (cold 0.993 at 4 GiB, 1.013 at 1 GiB, same bytes read; `literal_none` warm 10 → 20 ms from 4 more candidates)                                                                                                                                                                                                                                                                                        |
+| E32 | Format v7: blocks carry their line offset; a large candidate is read and searched only at its candidate units (vendored grep-searcher patched to start line numbers at N)                                                                                                                                                    | —                                                     | —           | **kept** (with E31 and E30's WILLNEED, vs e29: 4 GiB warm 0.915, cold 0.956, 8,714 → 7,866 MiB read cold, broad queries slower cold; 2 GiB warm 0.954, cold 0.980; outputs identical)                                                                                                                                                                                                                                      |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -702,8 +710,8 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   everything, so the cold geomean moves less than the selective rows. Warm within noise:
   on a rejected shard a probe replaces a dictionary lookup, on the others it adds one.
 - Built and checked ([results](../bench/results/E24-index/index-summary.txt)): the v5
-  bench index with the 12-CPU profile, 9.26 s at 413 MiB peak RSS (one run; E24's earlier
-  v4-format build of the same index took 8.32 s at 446 MiB). `v3v5same.py`: 139 shards in
+  bench index with the 12-CPU profile, 9.26 s at 413 MiB peak RSS (one run; the indexing
+  A/B below compares build cost properly). `v3v5same.py`: 139 shards in
   137 repos, every section byte-identical to the v3 index's except the filter; all
   6,056,069 dictionary keys pass their own shard's filter; the filters total 4.33 MiB (6.00
   bits a key). End to end (`filtercheck.py`,
@@ -712,6 +720,13 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   on-disk filters, and the shards let through are exactly the oracle's above, so no shard
   holding every trigram is rejected. The regex queries skip 0 (`short_unindexable`,
   `date_regex`) to 63 (`anchored`) of the 139 shards.
+- Indexing against base (`run-e24.sh indexab`,
+  [results](../bench/results/E24-indexab/summary.txt)): a fresh index of the same repos per
+  build, arms alternating, 5 builds each. CPU time (user + sys) 6.64 → 6.68 s at 1 CPU /
+  2 GiB and 8.76 → 8.67 s at 12 CPUs, each median inside the other arm's range of builds.
+  Peak RSS 135 → 135 MiB and 464 → 450 MiB. The index grows by the filters, 4.3 MiB
+  (+0.42%). Wall time is no measure here: it varied by up to 4 s between one arm's builds
+  with the disk's writeback (9.98–13.89 s at 1 CPU).
 - Warm CLI, first run (the v4-format build, 5 rounds of 20,
   [results](../bench/results/E24-v4-ab/summary.txt)): 0.889 / 0.927 / 0.943 at 1 / 4 / 12
   CPUs. But at 1 CPU the queries the filter cannot touch (`short_unindexable`,
@@ -736,12 +751,21 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   0.975 at 12; parity all OK. The selective queries carry it. At 1 CPU: `selective_long`
   0.798, `selective_one` 0.892, `literal_none` 0.905, `selective_common_trigrams` 0.917,
   `anchored` 0.943 (all 5/5) and `selective_vendored` 0.934 (4/5). At 12 CPUs they read
-  0.905–0.979, all 5/5 but `literal_none` (0.914, 4/5). Slower: `case_insensitive` 1.043
-  at 4 CPUs (0/5) and 1.062 at 12 (1/5), `word` 1.049 at 4 (2/5), and `literal_common`
-  and `alternation` 1.022–1.023 at 12. All four are verification-bound (90–525 ms), and
-  E24 changes their work by well under a millisecond. For example, the 27 shards
-  `case_insensitive` (`-i todo`) skips are ones whose count-first AND would have found
-  empty without decoding anything (E22).
+  0.905–0.979, all 5/5 but `literal_none` (0.914) and `anchored` (0.964), 4/5 each.
+  Slower: `case_insensitive` 1.043 at 4 CPUs (0/5) and 1.062 at 12 (1/5), `word` 1.049 at
+  4 (2/5), and `literal_common` and `alternation` 1.022–1.023 at 12.
+- The slower rows, in process (`stats-ab.sh`,
+  [results](../bench/results/E24-stats/summary.txt)): `scout search --stats` with the
+  output piped, as scout-bench reads it, timed around the whole process too. 15 pairs per
+  query and profile, in alternating order after 3 untimed runs of each. Both builds verify
+  the same candidates at every profile (868, 5,715, 10,759 and 1,374), and the probes add
+  0.05–0.44 ms of thread time to postings. The 27 shards `case_insensitive` (`-i todo`)
+  skips are ones whose count-first AND would have found empty without decoding anything
+  (E22). The search's own total reads 0.873–1.029 and the whole process 0.914–1.022, e24
+  lower in 4–9 of 15 pairs, with the interquartile ranges overlapping in every cell; so
+  neither the 0.87 nor the 1.03 is a difference. `case_insensitive` at 4 CPUs, 1.043 in
+  the A/B, reads 0.946 here. These rows are bench noise, as `case_insensitive` was in E22
+  (1.138 with identical work) and E23 (0.873).
 - Why the CLI gains warm, although the expectation said noise: every CLI search is a new
   process, so each dictionary page it touches costs a minor fault even when cached, and a
   rejected shard skips the key block, value and postings reads of every trigram.
@@ -762,6 +786,409 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - The pre-registered fault counts (`literal_none` ~145 to under 15) cannot hold for the
   CLI at any read-ahead: each search opens all 139 shards, and open reads the header, the
   fence and the markers. They describe `serve`, where open happens once at start.
+- **Served cold, the hypothesis's test** (`serve-coldab.sh` at 8 MiB read-ahead: 2
+  interleaved reps per profile, each a server started on an evicted index, then cold
+  rounds (3 at 1 and 4 CPUs, 1 at 12), then 10 warm rounds;
+  [results](../bench/results/E24-serve)). Geomean 2119 → 1667 ms at 1 CPU (0.787),
+  1586 → 1229 at 4 (0.775), 1564 → 1212 at 12 (0.775); parity all OK. Median major faults
+  per request, against the expectation written before the runs: `literal_none` 145 → 11
+  (expected under 15), `selective_long` 144 → 15 (expected ~20), `selective_one` 148 → 61
+  (expected ~100), `literal_common` 187 → 178 (expected unchanged). Latency followed:
+  `literal_none` 0.125–0.148, `selective_long` 0.201–0.228, `selective_one` 0.605–0.645,
+  `selective_common_trigrams` 0.785–0.811, `anchored` 0.827–0.846, `rare_regex`
+  0.886–0.891. Match-all plans (`short_unindexable`, `date_regex`) took the same faults in
+  both arms. The fault counts are what carries to a cloud disk: each fault avoided here
+  saves an 8 MiB read, there a 128 KiB one, so the MiB saved (`literal_none` 402 → 53)
+  and the latency do not transfer as they stand.
+- Served warm, same runs: 0.990 at 1 CPU, 1.029 at 4, 0.960 at 12. Per query the swings
+  run both ways and do not repeat across profiles: `selective_vendored` 0.967 / 1.131 /
+  0.955, `short_unindexable` 1.005 / 1.080 / 0.878, `date_regex` 0.839 / 1.009 / 0.945.
+  On a rejected shard a heap probe replaces a dictionary lookup, which is too little work
+  to move a verification-bound query by 10%; this is the 2-rep noise E23 saw.
+- Memory cliff (`serve` warm at 1 CPU under shrinking limits, 8 MiB read-ahead, 2 reps
+  per arm, alternating; [results](../bench/results/E24-cliff)): geomean 1.045 at
+  1280 MiB, 1.022 at 1 GiB, 0.812 at 768 MiB and 0.816 at 512 MiB; parity all OK, no OOM
+  kills at any limit. Once the page cache cannot hold the index, the filter does what it
+  should: at 768 and 512 MiB `literal_none` reads 0.040 and 0.066 (median major faults
+  78 → 2 and 92 → 3) and `selective_long` 0.170 and 0.140. At 1 GiB, where E21 found
+  about 94% of the index cached, the queries swing both ways, 0.18 to 3.59: what a query
+  costs there depends on which of its pages are evicted at the time. At 1280 MiB, the last
+  limit at which E21's served queries ran fully cached, e24 reached the limit more often
+  (`memory.events` `max`: base 1415 and 1411, e24 1663 and 3940) and refaulted on
+  queries that took no faults in base: `alternation` 2 → 18, `smart_case` 4 → 14, `word`
+  0 → 10, `rare_regex` 1 → 10 (2.78x slower). The likely cause is the 4.33 MiB of heap
+  filters, which the kernel cannot reclaim, pushing index pages out at the edge. But
+  e24's two reps differ by 2.4x in `max` events, more than the arms do, so two reps do
+  not establish it.
+- Map or heap for the CLI's filters (1 CPU / 2 GiB, 5 rounds of 20, equal state;
+  [results](../bench/results/E24-heapcli/summary.txt)): a build whose CLI copies every
+  filter to the heap at open, as `serve` does, reads 1.104 against probing through the
+  map. The selective queries read 1.23–1.37, all 0/5 (`selective_long` 10.1 → 13.9 ms,
+  `literal_none` 9.6 → 13.2, `selective_one` 12.1 → 16.2): copying 4.33 MiB on every
+  start costs about 4 ms, more than these queries' whole search. The CLI keeps the map.
+  Only 1 CPU was measured: the copy runs in the parallel shard open, so more CPUs would
+  spread it rather than test it.
+- Expectation for a cloud disk's 128 KiB read-ahead, written before those runs
+  (`run-e24.sh` `serve128` and `clicold`): a cold fault now reads at most 128 KiB, so a
+  shard's dictionary no longer arrives with one read-around, and both arms take more,
+  smaller faults than at 8 MiB. MiB read falls in both. Served, a rejected shard still
+  costs nothing, so the fault ratios follow the share of shards let through, as at 8 MiB
+  (0.08, 0.10, 0.41 and 0.95 for `literal_none`, `selective_long`, `selective_one` and
+  `literal_common`), plus the always-searched docs' content. The selective queries'
+  latency ratios follow their fault ratios. CLI cold: both arms pay open's header, fence
+  and marker reads in all 139 shards, so the selective queries' fault ratios land between
+  serve's and 1: roughly 0.3–0.7 for `literal_none`, depending on how many faults a
+  shard's lookups take next to its open. But no longer 1.0, as the 8 MiB mask made them.
+
+### E25: read-ahead indexing, found on chromium
+
+- Setting: the first test of scout on large public repos. Shallow clones of
+  `chromium/chromium` (510,212 files indexed, 2,958 MiB) and `llvm/llvm-project` (187,463
+  files, 2,222 MiB), 5.1 GiB of content and a 5.7 GiB index, on the dev box (Windows 11,
+  Defender real-time scanning on). The query suite is
+  [`bench/queries-big.tsv`](../bench/queries-big.tsv), the same classes as the bench suite
+  with patterns that occur in these trees. Results are in
+  [`bench/results/E25-big/`](../bench/results/E25-big).
+- What broke: indexing took 4,088 s (68 min), and the process had used 245 s of CPU at
+  65 min (sampled while it ran; index-ab.txt). `index_repo` read, classified and trigram-split every file of a repo serially on its worker, and a
+  worker is a repo: chromium got one thread that waited on 510k file opens one after the
+  other, each paying Defender's scan. More workers do not help one huge repo.
+- Change: `read_ahead` (indexer.rs) runs read + classify + trigram extraction on
+  `read_threads` threads (the worker's `walk_threads`, cores / workers) and hands results
+  to the writer in path order, so the writer does exactly what the serial loop did and the
+  shards are byte-identical (a unit test builds a repo at 0, 1, 2, 4 and 16 threads and
+  compares every writer call; on chromium + llvm-project all 14 shards hashed the same as the base build's,
+  [shard-hashes.txt](../bench/results/E25-big/shard-hashes.txt)).
+  Claimed-but-unwritten files may cost at most an eighth of the shard cap, at their size
+  plus 4 KiB each (so runs of empty files cannot race ahead): 5–13% of the 5x-shard memory
+  a worker plans for, depending on how many distinct trigrams the text has. Binary files
+  are cut to their NUL prefix as soon as they are read. A panic on either side stops the
+  other, so a failing build panics instead of hanging (both directions tested under a
+  timeout).
+- Windows, chromium + llvm-project ([index-ab.txt](../bench/results/E25-big/index-ab.txt)):
+  the cold base build 4,088 s; on a warm cache, e25 944 s and 998 s, base stopped after
+  1,526 s unfinished, with llvm-project alone 1,420 s against e25's 302 and 385. These
+  e25 builds predate the review fixes (two condvars, the per-file cost, binary
+  truncation); their shards are the same.
+- Linux small-server profiles, the 137 bench repos (`run-e25.sh`, 5 alternating builds,
+  [first run](../bench/results/E25-indexab-v1/summary.txt),
+  [1 CPU inline](../bench/results/E25-indexab/summary.txt)): with a reader thread at every
+  profile, CPU time rose 4% at 1 CPU (7.21 → 7.50 s, wall 11.65 → 14.25 s median, both
+  arms' ranges overlapping), 6% at 4 CPUs and 20% at 12, while wall time fell 8% at 4 CPUs
+  (5.18 → 4.77 s) and 22% at 12 (4.83 → 3.78 s). At 12 CPUs each of the 12 workers has one
+  reader, which overlaps the long tail of large repos. On one CPU the handoff is pure cost,
+  with no core to overlap it on and reads coming from the page cache, so one CPU now reads
+  inline: 7.12 → 7.25 s CPU, 10.84 → 11.10 s wall, the same peak RSS (135 MiB). Peak RSS
+  is equal or lower at every profile, and every build wrote identical shards.
+- Search, same index, against rg ([search.txt](../bench/results/E25-big/search.txt), stopped
+  after 8 of 20 queries: rg took 134–293 s a query, opening 697k files through Defender):
+  scout 41–521 ms, 451–3,246x faster, parity OK on all 8. Scout alone, all 20 queries plus
+  three that match nothing, 20 runs each
+  ([scout-only.txt](../bench/results/E25-big/scout-only.txt), `bench/harness/scout_only.py`):
+  selective queries (under 1,000 candidates) 34–54 ms, broader ones 84–471 ms, `return`
+  (2.8M lines from 209k files) 1.4 s, and the three full scans (no indexable literal, all
+  697,675 docs verified) 0.9–2.7 s: `\bxq\d{12}\b` (Unicode `\d`) 926 ms with 0 results,
+  `date_regex` 1.1 s, `if` 2.7 s for 4.9M lines.
+- Left open: a full scan that prints little takes up to twice the search's own `total_ms`
+  as a process (926 vs 458 ms for `\bxq\d{12}\b`, 1,149 vs 681 for `date_regex`), possibly
+  releasing 5 GiB of touched mapped pages at exit (E6 territory); E26 found and fixed it.
+  And `read_threads` is fixed per run: once llvm-project finished, chromium kept only its
+  6 of 12 readers.
+
+### E26: release shards, not repos, in parallel (and E27, a bigger stdout buffer)
+
+- Found: E25's "left open". After a search, `release_repos` unmapped the opened repos
+  across threads, one repo per task (E6). With two repos, two threads unmapped the ~5 GiB a
+  full scan touches, chromium's ~3 GiB on one of them, at E6's ~0.17 ms per MiB: about
+  460 ms after the search (`date_regex` 712 ms searching, 1,170 ms as a process, median of 3,
+  stdout to NUL; [teardown.txt](../bench/results/E26-big/teardown.txt)). E26 leaves about
+  170 ms (644 and 816).
+- Change: every opened shard goes into one queue that `threads` threads pop and drop, so the
+  unit is a shard (14 here, 139 on the bench corpus) and a thread that finishes early takes
+  the next one. One thread (1 CPU) drops every shard, as before.
+- Interleaved A/B on chromium + llvm-project, scout alone, 5 rounds of 6 runs, output read
+  through a pipe ([ab.txt](../bench/results/E26-big/ab.txt)): faster on 7 queries in 5/5
+  rounds, and within noise on the two under 50 ms (`literal_none` 0.974, 4/5;
+  `selective_symbol` 0.970, 5/5). `nomatch_unicode_regex` 933 → 654 ms (0.701),
+  `date_regex` 1,167 → 878 (0.752), `literal_long` 477 → 364, `literal_common` 274 → 210,
+  `literal_ident` 84 → 67, `short_unindexable` 2,605 → 2,305, `huge_output` 1,446 → 1,243.
+  Output byte-identical to E25's on `if`, `return`, `date_regex` and `RenderFrameHostImpl`
+  (sha256). Not measured on the Linux profiles: at 1 CPU the code does what it did, and on
+  the bench corpus a shard is almost always a whole repo.
+- Where that leaves the suite ([scout-only.txt](../bench/results/E26-big/scout-only.txt), 20
+  runs): 21 of 23 queries under 1 s at the median, `date_regex` the slowest at 870 ms (p90
+  892). The two over it print most of the corpus: `return` 480 MB in 1,227 ms and `if`
+  903 MB in 2,225 ms through a pipe, 542 ms and ~1.0 s to NUL. A pipe into the reader the
+  bench uses (Python `capture_output`) is the floor: writing the same bytes from memory
+  takes 808 ms and 1,510 ms in 1 MiB writes (833 and 1,505 in 8 MiB ones), 1,168 and 2,966
+  in 64 KiB writes
+  ([pipe-ceiling.txt](../bench/results/E26-big/pipe-ceiling.txt)).
+- E27, rejected: the CLI's stdout `BufWriter` 64 KiB → 1 MiB, since the ceiling run showed
+  64 KiB writes costing far more than 1 MiB ones. No change (3 rounds of 5:
+  `huge_output` 1.021, `short_unindexable` 0.992, the rest 1.001–1.026,
+  [ab.txt](../bench/results/E27-big/ab.txt)): verification chunks are written whole, and a
+  `write_all` larger than the buffer bypasses it, so the writes were already chunk-sized.
+
+### E28: an EBS-like volume, and read-ahead of the content to verify
+
+- Why: deploying to EC2 + EBS on a small instance. The index cannot be held in memory:
+  chromium + llvm-project is 5.8 GiB (5.2 content, 545 MiB postings) on a 4 GiB box, and
+  gp3's baseline is 125 MB/s and 3000 IOPS, with ~0.5–1 ms a read.
+- Harness ([bench/harness](../bench/harness), `ebs-*.sh`, `run-ebs.sh`, `ab-ebs.sh`): a
+  `dm-delay` volume in WSL2 with a 128 KiB read-ahead, and each run in a cgroup with 2 CPUs,
+  `memory.max` 4 GiB (no swap; the page cache is charged to it) and gp3's `io.max`. Index
+  built in the same box (52 shards, 325 s). `qbench.py` CLI, warm (steady state: every
+  query in turn, 3 rounds, the index bigger than the box's memory) and cold (the index
+  evicted before each query). Read delay 0 ms: `dm-delay` waits in 4 ms ticks.
+- Baseline e26 ([results](../bench/results/E28-ebs/base-e26/summary.txt)): steady state
+  geomean 465 ms, 14 of 18 queries under 1 s, `date_regex` 20 s reading 2.3 GiB; cold
+  geomean 7.8 s, with even selective queries reading 160–490 MiB. The page faults were the
+  cost: each reads a 128 KiB window around one page, one IOPS at a time.
+- Change: `Shard::prefetch`. Each verifier queues `MADV_WILLNEED` over its candidates'
+  stored content in ~4 MiB blocks (adjacent ranges coalesced), the next block queued when
+  verification reaches the start of the one before, so the kernel reads ahead in large
+  requests while the thread verifies. A doc larger than the block is its own block.
+- Result, 2 interleaved reps ([results](../bench/results/E28-ebs/ab-0ms/summary.txt)):
+  cold geomean 0.696, ~40% fewer bytes read, faster on 16 of 18 queries in both reps.
+  Steady state 0.940 but noisy (each query's time depends on what the one before left in
+  the cache): `alternation` 0.47, `smart_case` 0.37, `literal_common` 3.8x worse in both
+  reps. Per round, e28 read 3.0–3.3 GiB against e26's 3.3–4.2. **Kept**, for the cold
+  path; the steady state is E29's.
+
+### E29: lz4 content blocks, chosen by index size against memory
+
+- Why: E28 left the steady state read-bound: 4 GiB cannot cache a 5.8 GiB index, so every
+  round reads gigabytes again. poc-compress measured lz4 per 64 KiB unit at 3.5x on the
+  bench corpus, ~3.6–4 GB/s decode a core; E15 (lz4 per whole doc) lost 2x on an index
+  that fits RAM, so the codec has to be a choice.
+- Change: native format v6. A doc's content is stored as its units' spans (the
+  line-aligned ~64 KiB blocks, `unit_spans`), each lz4-compressed only where that is
+  smaller, with a blocks table of (stored, raw) lengths; the reader checks the block range
+  and lengths against the doc row before decoding. `content` borrows the map when every
+  block is raw and decodes into a per-thread buffer otherwise. `scout index --content
+  auto|raw|lz4`, default `auto`: lz4 once the content of every registered repo (the
+  jobs' as listed now, the rest from the catalog) is more than half of usable memory.
+  `sync` and `serve` take the same flag.
+- chromium + llvm-project at 2 CPUs / 4 GiB ([log](../bench/results/E28-ebs/idx-e29.log)):
+  `auto` picked lz4; the index is 2.3 GiB (content 5.0 → 1.57 GiB, 3.2x) and built in
+  194 s against 325 s raw (less to write).
+- EBS A/B against e28, 2 interleaved reps
+  ([results](../bench/results/E29-ebs/ab-0ms/summary.txt)): steady state geomean 0.567
+  with 0 MiB read from disk (the whole index stays cached): `date_regex` 20.9 → 2.3 s,
+  `crbug_regex` 2.2 → 0.26 s, `literal_common` 3.8 → 0.58 s. 16 of 18 queries under 1 s;
+  `literal_long` 1.6 s and `date_regex` 2.3 s are not. Slower: `selective_symbol` 23 → 36
+  ms, `llvm_regex` 32 → 46, `anchored` 0.67 → 0.75 s, `alternation` 0.73 → 0.79 (the decode
+  of whole candidate docs). Cold geomean 0.746, about half the bytes read.
+- Bench corpus, Linux profiles, 4 interleaved rounds of 10 runs, rg parity green on every
+  run ([results](../bench/results/E29-bench); index 1.1 GiB raw, 421 MiB lz4). The v6
+  format with E28's read-ahead, raw, against e26 on v5: geomean 0.813 at 1 CPU / 2 GiB,
+  0.851 at 4 / 4 GiB, 0.899 at 12, faster on 19 of 20 queries at each (`literal_common`
+  0.98–1.07, within noise). lz4 against raw on that index, which fits every profile's
+  memory: 1.93x slower at 1 CPU, 1.60x at 4, 1.53x at 12, worst on selective queries that
+  verify a few large docs (`literal_rare` 19 → 61 ms at 1 CPU), equal on those with no
+  candidates. That is the case `auto` keeps raw: 854 MiB of content is under half of 2 GiB.
+  One Windows `cargo clippy` ran during the first of these A/Bs (a minute, one run;
+  rounds alternate arms).
+- **Kept**: format v6 and `--content auto`. Left open: decoding only the units that can
+  match, not the whole doc, which would cut lz4's cost on selective queries; line numbers
+  then need each unit's first line number.
+- Review fixes after the runs (bounds only, not re-measured): a block whose raw length is
+  more than 255x its stored length (lz4's limit) or smaller than it is refused before a
+  buffer is sized from it; a repo `auto` cannot list fails the run instead of counting as
+  empty; `sync` and `serve` take `--content`, and `auto`'s memory read names it when the
+  limit cannot be read.
+
+### E30: no read-around on posting lists
+
+- Why: an index bigger than memory (hundreds of repos on a small box) pays its cold lookup
+  data on every query. `coldmap.py` (the shard pages a query left resident, by section;
+  it read v6 then and reads v9 now) on E29's index at 2 CPUs / 4 GiB, IOs from
+  `ebs-run.sh`'s io.stat: `selective_long` left 133 MiB resident in 1,206 IOs to verify
+  24 MiB of content; keys 17.6, vals 34.1 and postings 34.5 MiB of it. That output was
+  not saved; the A/B below measures the same query at 149 → 84 MiB read. Each lookup touches a
+  few hundred bytes and each fault read 128 KiB around it.
+- Change: `postings` asks for exactly a list's range (`MADV_WILLNEED`, lists over a page),
+  and an opened shard's sections go `MADV_RANDOM`. A: both the dictionary (keys, vals) and
+  the postings. B: the postings only.
+- A on v6 against e29 ([results](../bench/results/E30-ebs)), 2 interleaved reps:
+  `selective_long` 133 → 68 MiB resident (`coldmap.py`, not saved) but 1,206 → 2,853 IOs.
+  4 GiB: cold geomean 0.853 (`llvm_regex` 0.62, `selective_symbol` 0.63), steady state
+  0.997. 2 GiB: cold 0.868; the steady state misses there: **1.455**, `selective_long` 65 → 329 ms, `count_mode` 2.7x,
+  `literal_none` 2.1x. Without read-around each dictionary miss is a synchronous 4 KiB
+  read, where one read-around had fetched the pages the next lookups need. e29 had no
+  per-list WILLNEED, so these numbers are A and it together; A's 1 GiB run below has
+  WILLNEED in both arms.
+- B on E34's v9 lz4 index ([results](../bench/results/E30b-ebs)), against no
+  `MADV_RANDOM` (both arms keep the per-list WILLNEED), same build otherwise: 4 GiB warm
+  1.002, cold 0.917 (`selective_long` 0.73, `literal_none` 0.75), faster on 17/18 cold
+  queries in both reps; 2 GiB warm 0.995, cold 0.914. Since E33 the 2 GiB steady state
+  reads nothing, so the bigger-than-memory case was run at **1 GiB**: B warm **0.893**
+  (1,918 → 1,433 MiB read a round, faster on 14/18 in both reps), cold 0.914. A at 1 GiB: warm
+  **1.094** (`selective_symbol` 2.1x, `selective_long` 1.7x, `literal_none` 1.7x), cold
+  0.799 (5,812 against B's 6,377 MiB). Outputs byte-identical across arms (`ebsab.py`).
+- Final tree (B, E31 removed, E32–E35): rg parity all OK on the bench corpus, v9 raw
+  and lz4, at 1 CPU / 2 GiB and 12 CPUs (`parity-e30.sh`,
+  [output](../bench/results/E30b-ebs/parity)).
+- **A rejected, B kept.** A reads the least cold, but the steady state of an index bigger
+  than memory is what a small box lives in.
+- Not measured alone: the per-list `MADV_WILLNEED`. It is in both arms of every B run
+  and of E31's, and in E32's arm against e29. Two reps of 3 warm and 1 cold round each,
+  no p99: the cold results agree across reps (B faster on 17/18 at 4 GiB in both), the
+  1 GiB warm ones less so.
+
+### E31: count only the trigrams the shard before ranked rarest (rejected)
+
+- Why: E22 counts every trigram of an AND in every shard to find the rarest one or two it
+  decodes. A 36-byte literal is 34 dictionary lookups per shard, ~1,700 over 51 shards,
+  and on a cold disk each lookup can be a read.
+- Change: a repo's shards, planned in order, shared the counts seen so far. Once the hint
+  knew every trigram of an AND longer than 6, a shard counted only the 6 the hint ranked
+  rarest and left the rest out of the AND (a superset of candidates, so still exact).
+- Same tree with the hint on against `COUNTED_PER_AND` above any AND, v9 lz4 index,
+  2 interleaved reps ([results](../bench/results/E31-ebs)). Cold, the case it was for:
+  geomean 0.993 at 4 GiB and 1.013 at 1 GiB, with 6,349 → 6,377 MiB read: no fewer bytes.
+  Warm 4 GiB 1.018, with `literal_none` 10 → 20 ms (0/2). Warm `--stats` runs outside
+  the cgroup (not saved): e29 76 candidates, verify 2–9 ms, 12–14 ms wall; the E31 + E32
+  snapshot 80 candidates, verify 15–23 ms, 23–24 ms; that snapshot with the hint off 76
+  candidates, 13–14 ms. Warm 1 GiB 0.927 (`selective_symbol` 0.62, `selective_long`
+  0.66), with 1,455 → 1,474 MiB read a round; why it was faster there was not looked into.
+- **Rejected and removed.** What it was for, fewer cold dictionary reads, did not happen,
+  and a wrong pick costs candidates, which cost the no-match query twice its time. The
+  1 GiB warm gain is the one result for it; two reps did not make it worth the code.
+  Probably the skipped counts' pages were mostly read anyway by the lookups that remained
+  (a key block holds 128 keys); not checked with `coldmap.py`.
+
+### E32: read only a large candidate's candidate units
+
+- Why: E29 decoded and searched a candidate whole, so a 2 MiB file with one candidate
+  64 KiB unit cost 32 units of lz4 and regex. Units and content blocks are the same
+  line-aligned spans for text, so a unit maps to one block.
+- Change: native format v7. A block row gains the doc's line count before it, so a unit
+  read alone keeps its file line numbers; the vendored grep-searcher gains
+  `Searcher::set_first_line_number` (a scout patch: rg has no other way to start
+  numbering at N). `Shard::unit_content` returns the stored or decoded bytes of the asked
+  units as runs, each with its first line; `prefetch` takes the same wants, so read-ahead
+  covers only those blocks. Planning keeps each candidate's units. Whole-file reads stay
+  for docs of one unit, reader-mode (binary, BOM) docs, always-searched docs, `-c` and
+  `-m` (E33 later carried counts and limits across units), ranking and walked repos.
+  SQLite returns the doc as one run from line 1.
+- Measured with E31 and E30's per-list WILLNEED, which were built together, so the
+  numbers below include both (E31's own A/B, above, is neutral cold): a copy of the E33
+  baseline snapshot without `MADV_RANDOM` (`build-e32.sh`) on a v7 lz4 index, against e29
+  on its v6 index, 2 interleaved reps ([results](../bench/results/E32-ebs)). 4 GiB warm
+  **0.915** with no disk reads: `smart_case` 0.72, `llvm_regex` 0.72, `rare_regex` 0.73,
+  `selective_symbol` 0.75, `case_insensitive` 0.79; `literal_none` 10 → 20 ms is E31's
+  (above). Cold 0.956, 8,714 → 7,866 MiB read over the 18 queries, but broad queries
+  were slower cold in both reps while reading less: `ident_regex` 1.08, `case_insensitive`
+  1.05, `alternation` 1.03, `anchored`, `rare_regex` (7/18 slower in both at 4 GiB, 9/18
+  at 2 GiB, `alternation` 1.20 there). Unexplained; smaller or more scattered reads are a
+  guess, not measured. 2 GiB warm 0.954,
+  1,337 → 1,199 MiB a round (per-query ratios there, 0.33–1.98, follow what the query
+  before left cached, as in E28); cold 0.980. Outputs byte-identical across arms.
+- **Kept**: format v7 (since replaced by E34's v9, which keeps the line counts).
+
+### E33: lazy content visits and initialized decode-buffer reuse
+
+- Compared against a snapshot of the current working tree, including E31 count hints
+  and E32 candidate-unit reads, on one freshly built v7 LZ4 index. No format change.
+- Native content is visited in line-aligned blocks, stopping decoding on `-l`'s first
+  match or a file-wide `-m` limit. One printer sink spans the file, so counts and limits
+  also work across candidate units. Reader-mode files, ranking and haystack anchors
+  retain whole-document matching. Decode scratch keeps initialized bytes between reads.
+- 2 CPUs / 4 GiB, no swap, EBS-like 125 MB/s / 3,000 IOPS, chromium + llvm-project:
+  five interleaved rounds of two samples per arm/query, 19 cases, stdout to `/dev/null`.
+  All 380 timed samples had zero disk reads; index residency was verified zero before
+  the hash/warm-up pass populated it from the limited cgroup.
+- Geomean latency ratio **0.962**. Common counts 562 → 529 ms, common `-m 1` 544 → 503,
+  date filenames 2,115 → 1,935, `if -m 1` 3,766 → 3,523. Full `if` output 4,226 → 4,119;
+  full license and `return` output effectively unchanged. No-match literal 20.8 → 21.3
+  ms, slower in 4/5 rounds. Twelve cases improved in all five rounds.
+- Byte-identical output/exit codes on all 19 cases, including streamed hashes of the
+  full 812 MB `if` and 429 MB `return` outputs. Windows and Linux workspace tests and
+  release Clippy passed. New tests prove early stop avoids decoding a corrupt later
+  payload and exercise buffer reuse, file-wide counts/limits and unit-boundary lines.
+- Independent rg parity passed all six broad-query oracle cases at 2 CPUs / 4 GiB,
+  with disk throttling lifted for the oracle after the timed A/B completed.
+- [Full report](lazy-decoding-benchmark.md), [samples](../bench/results/E33-lazy/warm.json),
+  [resource log](../bench/results/E33-lazy/warm.log), and the separate rg parity gate in
+  `bench/results/E33-lazy/rg-parity.json`.
+
+### E34: broad queries below one second at 2 CPUs / 4 GiB
+
+- Compared with the E33 working-tree snapshot on chromium + llvm-project, 697,675
+  files / 5,126 MiB content. Five alternating rounds, two samples per query/arm, 19
+  queries. Each arm warmed its own index in a fresh 2 CPU / 4 GiB cgroup, with no swap
+  and EBS-like 125 MB/s / 3,000 IOPS caps. All 380 timed samples recorded zero disk reads.
+- **19/19 warm CLI medians below one second**; all cases faster in every paired round.
+  Full `if` output **4,161.6 → 957.0 ms**, date lines **2,012.4 → 362.6 ms**, `return`
+  lines **2,377.3 → 714.0 ms**, license lines **1,602.0 → 328.0 ms**. Geomean ratio
+  **0.294**, about 70.6% less latency. Output is still fully formatted; timed stdout
+  goes to `/dev/null`, freshness is off. Cold latency and HTTP transfer are not measured.
+- Full `if` samples range **930.2–1,046.6 ms**; 9/10 below one second. That was the
+  only candidate sample above one second out of 190, so this is not a strict tail SLA.
+- Direct plain-text formatting and exact-literal byte search; bounded output-buffer
+  recycling and path reuse; reference bounds-checked LZ4 decoding; native v9 tagged
+  two-byte postings and conservative numeric shape summaries. Unicode digits remain
+  supported. Binary/BOM readers and complete-file count/match limits retain rg semantics.
+- Small blocks below 4 KiB stay raw, trading cache space for fewer decoder calls and
+  content copies. The index grows **2,354.5 → 2,863.4 MiB (+21.6%)**. Maximum charged
+  batch memory **1,935 MiB**, no OOM kills; the index build also completed inside 4 GiB.
+  Previous native/SQLite indexes require `scout index` to rebuild.
+- Exact output hashes, byte counts and exit codes match for all 19 corpus cases.
+  The independent rg oracle also passes all six broad-query cases after timing.
+  Windows and Linux workspace tests and release Clippy pass, including Unicode/byte
+  edge cases, small raw-file borrowing, corruption and file-wide output limits.
+- Cold-index follow-up on the final binary: three runs per case, index residency
+  verified zero before all 18 samples, same 2 CPU / 4 GiB and disk caps, executable
+  warm. Full `if` **14.58 s**, `return` **12.18 s**, license **6.59 s**, dates
+  **3.55 s**; selective symbol / no-match **700 / 515 ms**. Full `if` reads 1.64 GiB
+  from disk. All six separate cold-output checks match the warm outputs; no OOM kills.
+  [Cold samples](../bench/results/E34-subsecond/cold/summary.json) and
+  [resource log](../bench/results/E34-subsecond/cold.log). These measure cold index data
+  under local bandwidth/IOPS limits, with no extra injected delay, not a full-machine
+  boot. The subsequent original-build comparison below provides the missing baseline.
+- Compared directly with the original task-start build (before E33 and E34), all 19
+  measured warm medians are lower; geomean ratio **0.284**. Cold is mixed across the
+  matching six-case, three-run sweeps: date lines **14.37 → 3.55 s**, `return` lines
+  **23.96 → 12.18 s**, full `if` **14.37 → 14.58 s**, license **6.41 → 6.59 s**,
+  selective symbol **738 → 700 ms**, no-match **462 → 515 ms**. Selective-query ranges
+  overlap. Both builds' cold outputs match exactly; 35/36 timed samples start at zero
+  index residency, one original date sample at 128 KiB, below the unchanged 2 MiB guard.
+  These are separate sweeps, not interleaved original/final rounds.
+  [Original comparison and source reports](../bench/results/E34-subsecond/original-comparison.json).
+- [Full report](subsecond-search-benchmark.md),
+  [final samples](../bench/results/E34-subsecond/ab-final/summary.json),
+  [resource logs](../bench/results/E34-subsecond/ab-final), and
+  [incremental patch](../bench/results/E34-subsecond/implementation.patch).
+
+### E35: bounded interactive batches and explicit count lower bounds
+
+- Added `search_bounded` to the shared Rust API, `--max-results` / byte/time budgets
+  to the CLI, and `limit` / `max_bytes` / `timeout_ms` to HTTP. Planning stops before
+  later shards and lazy block visits stop on the batch budget. The existing exact
+  grep/count path retains its output; all 19 E34 exhaustive hashes/exit codes pass.
+- Bounded counts return tagged `exact` or `lower_bound` values with completion and
+  stop-reason metadata. Ordinary `-c` remains exhaustive. No actual MCP protocol
+  adapter was added; this is the core/CLI/HTTP integration for an interactive caller.
+- Repartitioned/cycled real Chromium/LLVM plain text into 250 fixture repos:
+  1,131,349 documents / 8.12 GiB, 4.88 GiB native LZ4 index. This is synthetic scale
+  testing, not actual NX repositories. One tiny local sync-control repo makes 251
+  entries in the real server.
+- Persistent HTTP, 2 CPUs / 4 GiB, no swap, 125 MB/s / 3,000 IOPS / 128 KiB read-ahead,
+  zero extra injected latency. Three shuffled cold rounds, 0 MiB index residency
+  before all 33 requests; heap filters remain live. Cold 100-line medians: `if`
+  **6.9 ms**, `return` **11.4**, `export` **34.4**, date **119.7**, symbol **455.8**.
+  An unindexable sparse scan stops at **1,008 ms**, explicitly incomplete.
+- Cold `if` count: threshold 100 in **6.6 ms**; one-second budget returns lower bound
+  **291,584** in **1,006.5 ms**. Exact exhaustive count is **8,585,236** in **26.02 s**.
+  These are different answers, not an exact-count speedup. Deadline checks are
+  cooperative; queue/transport/startup are outside the core processing budget.
+- HTTP prefix/count oracles, raw/LZ4/SQLite boundary tests, full Linux release tests
+  and workspace release Clippy pass. Peak served memory **667 MiB**, zero OOM kills.
+- [Contract, limitations and reproduction](bounded-mcp-search.md),
+  [accepted HTTP samples](../bench/results/E35-bounded/http-final/summary.json),
+  [oracle](../bench/results/E35-bounded/oracle-final.json), and
+  [incremental source evidence](../bench/results/E35-bounded/evidence/source-evidence.json).
 
 ## Ranking experiments
 
@@ -910,3 +1337,18 @@ are therefore for 8 MiB read-arounds; with 128 KiB a cold shard takes more, smal
    128 KiB that likely loses. At 8 MiB, though, a selective cold CLI query reads ~580 MiB
    in ~170 faults (E24), so paired with `WILLNEED` on just the pages a query needs it might
    win where read-ahead is large. Unmeasured; an earlier version of this note dismissed it.
+
+### Output through a pipe (found in E24)
+
+E24's in-process check ran the same searches twice, with stdout sent to `/dev/null`
+([results](../bench/results/E24-stats-devnull/summary.txt), from the first version of
+`stats-ab.sh`, before it piped the output and timed the whole process) and piped to a
+reader ([results](../bench/results/E24-stats/summary.txt)), as scout-bench and an agent's
+tool call read it. Piped, the search's own time grows most where the most CPUs verify:
+`case_insensitive` (`-i todo`) took 81 → 101 ms at 1 CPU, 32 → 76 at 4 and 27 → 87 at 12
+(the base build, medians of 15). So for broad queries at 4 CPUs and up the output path,
+not verification, may set the floor. That would fit the CLI A/Bs, where broad queries run
+no faster at 12 CPUs than at 4, and often slower (E24's base: `literal_common` 412 → 514
+ms, `short_unindexable` 478 → 624). Not yet profiled: how many bytes these queries print, and whether
+the time goes to write calls, to the ordered output (E18) waiting on a full pipe, or to the
+reader sharing the scope's CPUs.

@@ -1,0 +1,6 @@
+if_lines		if
+if_files	-l	if
+return_lines	-F	return
+license_lines	-F	Use of this source code is governed by a BSD-style license
+license_files	-l -F	Use of this source code is governed by a BSD-style license
+date_lines		\d{4}-\d{2}-\d{2}

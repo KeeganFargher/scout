@@ -1,0 +1,4 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=377412 matched_files=367730 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=33.46 verify_ms=5041.15 open_ms=57.22 search_ms=2673.54 total_ms=2731.01 plan=Tri(Trigram(16804198))
+scout-stats repos=2 shards=51 shards_filtered=0 docs=697675 candidates=56542 matched_files=5699 dirty_files=0 full_scans=0 unchanged_repos=0 list_ms=0.00 map_ms=0.00 postings_ms=17.60 verify_ms=774.13 open_ms=1.94 search_ms=415.38 total_ms=417.40 plan=All

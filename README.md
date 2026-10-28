@@ -20,6 +20,15 @@ directory. Search flags follow rg (`-i -S -F -w -n -l -c -m`). Scout adds:
   NTFS change journal where there is one; `scan` re-lists every indexed directory.
 - `--repo NAME` (repeatable) limits the search to the named repos, and `--stats` prints
   timings and candidate counts to stderr.
+- `--max-results N --freshness off` explicitly permits an incomplete batch: global
+  matching-line cap, 64 KiB output cap and one-second processing budget by default.
+  `--result-bytes` and `--budget-ms` set those budgets. Line output carries completion
+  metadata on stderr; combined with `-c`, stdout is JSON with an exact count or a
+  lower bound. Ordinary `-c` remains exhaustive. [Contract and measurements](docs/bounded-mcp-search.md).
+
+The current native shard format is v9. After upgrading from an older build, run
+`scout index` to rebuild existing native or SQLite indexes: two-byte postings and numeric
+shape summaries are required by the query planner.
 
 ### Hosted: mirror remotes, sync on a schedule, serve over HTTP
 
@@ -31,6 +40,12 @@ curl http://127.0.0.1:7700/status
 ```
 
 The config lists `[[repo]]` URLs and `[[github]]` orgs or users. The GitHub token is read from the env var it names (`GITHUB_TOKEN` by default) and is never logged. `/search` takes `q` plus rg-style flags (`F i S w n l c m`, `repo` repeatable) and returns rg-identical text, or with `rank=1&top=N` only the N best files ([docs/ranking.md](docs/ranking.md)), 422 past `--max-output-mb` (default 16) or 503 past `--search-timeout-secs` (default 30). The server needs `git` 2.31 or newer. Format and reasoning are in [docs/design.md](docs/design.md), "Hosted sync".
+
+For a bounded response, add `limit=100&max_bytes=65536&timeout_ms=1000`. Completion
+and stop-reason headers distinguish a partial batch from an exhausted search.
+Adding `c=1` returns JSON with `count.kind` set to `exact` or `lower_bound`.
+This core/CLI/HTTP contract is available for a future MCP adapter; the MCP protocol
+server remains unimplemented. [Examples and cold results](docs/bounded-mcp-search.md).
 
 ### Hardware
 
@@ -56,6 +71,21 @@ because it waits on one or two random disk reads per repo shard, so put the inde
 with low read latency (local NVMe or EBS gp3, not a burstable instance's baseline EBS
 bandwidth). Full tables: [docs/design.md](docs/design.md), "Measured on small and large
 machines", and [docs/experiments.md](docs/experiments.md), E21.
+
+When the files are more than half of usable memory, `scout index`, `sync` and `serve`
+(`--content auto`, the default) store content lz4-compressed, about 3x smaller, so the
+index stays cached for the cost of decoding what a search verifies. On a 2 CPU / 4 GiB box
+with an EBS gp3-like volume, chromium + llvm-project (5.0 GiB of files) became a 2.3 GiB
+index instead of 5.8, and the steady-state geomean fell from 379 to 215 ms with no disk
+reads (E29). The choice is made per indexing run for the repos it writes; pass
+`--content lz4` (or `raw`) to decide yourself, e.g. when building an index on a bigger
+machine than the one that will search it.
+
+On the same large corpus, E34 brings all 19 warm CLI query medians below one second at
+**2 CPUs / 4 GiB**: full `if` output 4.16 s → 957 ms, date lines 2.01 s → 363 ms, and
+`return` lines 2.38 s → 714 ms, with identical output. The v9 index is 21.6% larger;
+one full-`if` sample took 1.05 s. These measurements use freshness off and formatted
+stdout to `/dev/null`. [Results, parity and limits](docs/subsecond-search-benchmark.md).
 
 How it works and why: [docs/design.md](docs/design.md). Every optimisation, with numbers:
 [docs/experiments.md](docs/experiments.md).

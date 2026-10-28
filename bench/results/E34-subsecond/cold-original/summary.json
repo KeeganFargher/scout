@@ -1,0 +1,316 @@
+{
+  "complete": true,
+  "reference": "/mnt/c/Users/User/source/test space/scout/bench/results/E34-subsecond/cold-original-reference.json",
+  "arm": {
+    "exe": "/home/keegan/small/bin-lazy-before/scout",
+    "index": "/mnt/ebs/idx-lazy-v7-20261027",
+    "binary_sha256": "377ff3575b47f46cabd9a18fa570890f40da7fcd7799f99bfb2a4b3b117c7259",
+    "catalog_sha256": "ff4bbfc66f35c090f6da32859a75b333eb5bd0ad352ec0a4200b3da6f59eb566"
+  },
+  "rounds": 3,
+  "cpus": [
+    0,
+    1
+  ],
+  "memory_bytes": 4294967296,
+  "readahead_kb": 128,
+  "cold_scope": "index evicted before every sample; executable warm; timed stdout /dev/null",
+  "queries": [
+    {
+      "name": "license_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "warm_median_ms": 1590.3335160001006,
+      "expected_output": {
+        "sha256": "75894e1994a1174052bfdad1ca7b826d6e6d608c635023c196e3767307d72040",
+        "bytes": 31428314,
+        "exit": 0
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 6399.240844002634,
+          "read_bytes": 719208448,
+          "major_faults": 902,
+          "cpu_ms": 3891.275,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 1,
+          "wall_ms": 6451.966142998572,
+          "read_bytes": 719208448,
+          "major_faults": 901,
+          "cpu_ms": 3805.980000000002,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 2,
+          "wall_ms": 6410.844494999765,
+          "read_bytes": 719208448,
+          "major_faults": 902,
+          "cpu_ms": 4022.3119999999994,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        }
+      ],
+      "cold_output": {
+        "sha256": "75894e1994a1174052bfdad1ca7b826d6e6d608c635023c196e3767307d72040",
+        "bytes": 31428314,
+        "exit": 0
+      },
+      "hash_run_resident_mib_before": 0.0,
+      "cold_median_ms": 6410.844494999765,
+      "cold_median_read_mib": 685.890625
+    },
+    {
+      "name": "return_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "return",
+      "warm_median_ms": 2424.5775155004594,
+      "expected_output": {
+        "sha256": "6f11d4b54fdb04e499c6446e9e848e5feb20d5a736c8648a207b6da1c2097204",
+        "bytes": 428643537,
+        "exit": 0
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 23962.270392999926,
+          "read_bytes": 1213558784,
+          "major_faults": 978,
+          "cpu_ms": 6381.8820000000005,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 1,
+          "wall_ms": 23962.917673998163,
+          "read_bytes": 1213558784,
+          "major_faults": 977,
+          "cpu_ms": 6233.129000000002,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 2,
+          "wall_ms": 23958.99334099886,
+          "read_bytes": 1213521920,
+          "major_faults": 979,
+          "cpu_ms": 6337.303000000005,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        }
+      ],
+      "cold_output": {
+        "sha256": "6f11d4b54fdb04e499c6446e9e848e5feb20d5a736c8648a207b6da1c2097204",
+        "bytes": 428643537,
+        "exit": 0
+      },
+      "hash_run_resident_mib_before": 0.0546875,
+      "cold_median_ms": 23962.270392999926,
+      "cold_median_read_mib": 1157.33984375
+    },
+    {
+      "name": "date_lines",
+      "flags": [],
+      "pattern": "\\d{4}-\\d{2}-\\d{2}",
+      "warm_median_ms": 2162.282719500581,
+      "expected_output": {
+        "sha256": "3f43942331a99b752cd16e584d3f9059316b3af09b447260f3ae9bdfd06c627c",
+        "bytes": 61640204,
+        "exit": 0
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 14374.709727999289,
+          "read_bytes": 1791492096,
+          "major_faults": 1409,
+          "cpu_ms": 5625.935,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 1,
+          "wall_ms": 14373.824635997153,
+          "read_bytes": 1791492096,
+          "major_faults": 1412,
+          "cpu_ms": 5433.050999999992,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 2,
+          "wall_ms": 14305.73467800059,
+          "read_bytes": 1791361024,
+          "major_faults": 1414,
+          "cpu_ms": 5604.923,
+          "resident_mib_before": 0.125,
+          "exit": 0
+        }
+      ],
+      "cold_output": {
+        "sha256": "3f43942331a99b752cd16e584d3f9059316b3af09b447260f3ae9bdfd06c627c",
+        "bytes": 61640204,
+        "exit": 0
+      },
+      "hash_run_resident_mib_before": 0.0,
+      "cold_median_ms": 14373.824635997153,
+      "cold_median_read_mib": 1708.5
+    },
+    {
+      "name": "if_lines",
+      "flags": [],
+      "pattern": "if",
+      "warm_median_ms": 4225.63300550064,
+      "expected_output": {
+        "sha256": "1cf5ea6d2ff9abea49a67d303b03c20d46fc6a0b6195d6dbae2d6ea9e5894ec7",
+        "bytes": 811859623,
+        "exit": 0
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 14311.345502999757,
+          "read_bytes": 1791578112,
+          "major_faults": 1429,
+          "cpu_ms": 10229.77,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 1,
+          "wall_ms": 14374.919737998425,
+          "read_bytes": 1791492096,
+          "major_faults": 1395,
+          "cpu_ms": 9700.592000000004,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 2,
+          "wall_ms": 14375.006875001418,
+          "read_bytes": 1791492096,
+          "major_faults": 1391,
+          "cpu_ms": 9813.121999999992,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        }
+      ],
+      "cold_output": {
+        "sha256": "1cf5ea6d2ff9abea49a67d303b03c20d46fc6a0b6195d6dbae2d6ea9e5894ec7",
+        "bytes": 811859623,
+        "exit": 0
+      },
+      "hash_run_resident_mib_before": 0.0,
+      "cold_median_ms": 14374.919737998425,
+      "cold_median_read_mib": 1708.5
+    },
+    {
+      "name": "selective_symbol",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "getAsCXXRecordDecl",
+      "warm_median_ms": 27.643844499834813,
+      "expected_output": {
+        "sha256": "c8e264d39e7e2fc8dd00161409feb7955e53fc7af93d16f8a89ec4f21d091d4b",
+        "bytes": 123127,
+        "exit": 0
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 737.8117539992672,
+          "read_bytes": 97718272,
+          "major_faults": 730,
+          "cpu_ms": 114.66899999999924,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 1,
+          "wall_ms": 691.0682580019056,
+          "read_bytes": 97587200,
+          "major_faults": 730,
+          "cpu_ms": 111.95199999999872,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        },
+        {
+          "round": 2,
+          "wall_ms": 740.8649829994829,
+          "read_bytes": 97718272,
+          "major_faults": 730,
+          "cpu_ms": 107.33099999998785,
+          "resident_mib_before": 0.0,
+          "exit": 0
+        }
+      ],
+      "cold_output": {
+        "sha256": "c8e264d39e7e2fc8dd00161409feb7955e53fc7af93d16f8a89ec4f21d091d4b",
+        "bytes": 123127,
+        "exit": 0
+      },
+      "hash_run_resident_mib_before": 0.0,
+      "cold_median_ms": 737.8117539992672,
+      "cold_median_read_mib": 93.19140625
+    },
+    {
+      "name": "selective_none",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "zqxjvbnm_nothing_here",
+      "warm_median_ms": 20.788000000720785,
+      "expected_output": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "exit": 1
+      },
+      "samples": [
+        {
+          "round": 0,
+          "wall_ms": 417.17576799783274,
+          "read_bytes": 62595072,
+          "major_faults": 516,
+          "cpu_ms": 65.13499999999972,
+          "resident_mib_before": 0.0,
+          "exit": 1
+        },
+        {
+          "round": 1,
+          "wall_ms": 461.9564070017077,
+          "read_bytes": 62595072,
+          "major_faults": 516,
+          "cpu_ms": 63.157000000003904,
+          "resident_mib_before": 0.0,
+          "exit": 1
+        },
+        {
+          "round": 2,
+          "wall_ms": 478.01902900027926,
+          "read_bytes": 62595072,
+          "major_faults": 516,
+          "cpu_ms": 63.62200000000229,
+          "resident_mib_before": 0.0,
+          "exit": 1
+        }
+      ],
+      "cold_output": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "exit": 1
+      },
+      "hash_run_resident_mib_before": 0.0,
+      "cold_median_ms": 461.9564070017077,
+      "cold_median_read_mib": 59.6953125
+    }
+  ]
+}

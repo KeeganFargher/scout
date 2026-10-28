@@ -1,0 +1,662 @@
+{
+  "complete": true,
+  "exe": "/home/keegan/small/bin-bounded/scout",
+  "binary_sha256": "5de438f4f5bf77daaaea631ad2bce60b547e9abda1a1fd9769cd4f649598ea83",
+  "fixture": {
+    "document_visits": 1131349,
+    "elapsed_secs": 119.276875694,
+    "indexed_bytes": 8714175268,
+    "method": "cycle and repartition existing plain text; no generated filler; no cross-file compression",
+    "repos": 250,
+    "requested_bytes": 8589934592,
+    "source": "/mnt/ebs/idx-subsecond-v9-hybrid-20261027",
+    "source_documents": 650237
+  },
+  "served_repos": 251,
+  "initial_resident_mib": 0.0,
+  "startup_seconds": 1.3601547349971952,
+  "scope": "persistent HTTP server; index reclaimed before each cold request; heap filters stay live; 2 CPU / 4 GiB / 125 MB/s / 3000 IOPS",
+  "rounds": 3,
+  "queries": [
+    {
+      "name": "if",
+      "params": {
+        "q": "if",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 6.52934599929722,
+          "bytes": 11848,
+          "sha256": "f400b2d4b4893b253f3cafbee78dbb751f3f286dc58ed4fad1699d6c47b5e1a5",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        },
+        {
+          "wall_ms": 6.422963000659365,
+          "bytes": 11848,
+          "sha256": "f400b2d4b4893b253f3cafbee78dbb751f3f286dc58ed4fad1699d6c47b5e1a5",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        },
+        {
+          "wall_ms": 6.112214003223926,
+          "bytes": 11848,
+          "sha256": "f400b2d4b4893b253f3cafbee78dbb751f3f286dc58ed4fad1699d6c47b5e1a5",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        }
+      ],
+      "warm": {
+        "wall_ms": 1.0534790053498,
+        "bytes": 11848,
+        "sha256": "f400b2d4b4893b253f3cafbee78dbb751f3f286dc58ed4fad1699d6c47b5e1a5",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 6.422963000659365
+    },
+    {
+      "name": "return",
+      "params": {
+        "q": "return",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 11.040776000299957,
+          "bytes": 12430,
+          "sha256": "3fbf80c0aaf4baad6b1205d0e3cb3f115e77331f17cedb85540810cc157fc9d4",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 1507328
+        },
+        {
+          "wall_ms": 10.891202997299843,
+          "bytes": 12430,
+          "sha256": "3fbf80c0aaf4baad6b1205d0e3cb3f115e77331f17cedb85540810cc157fc9d4",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 1507328
+        },
+        {
+          "wall_ms": 11.272005001956131,
+          "bytes": 12430,
+          "sha256": "3fbf80c0aaf4baad6b1205d0e3cb3f115e77331f17cedb85540810cc157fc9d4",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 1507328
+        }
+      ],
+      "warm": {
+        "wall_ms": 0.7628899984410964,
+        "bytes": 12430,
+        "sha256": "3fbf80c0aaf4baad6b1205d0e3cb3f115e77331f17cedb85540810cc157fc9d4",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 11.040776000299957
+    },
+    {
+      "name": "export",
+      "params": {
+        "q": "export",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 34.46404499845812,
+          "bytes": 20050,
+          "sha256": "6bf94a10beab40f574e8193ad8a4429ce5a6472ec29d894281813d816d059f7b",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 5775360
+        },
+        {
+          "wall_ms": 33.03742700518342,
+          "bytes": 20050,
+          "sha256": "6bf94a10beab40f574e8193ad8a4429ce5a6472ec29d894281813d816d059f7b",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 5775360
+        },
+        {
+          "wall_ms": 34.72762100136606,
+          "bytes": 20050,
+          "sha256": "6bf94a10beab40f574e8193ad8a4429ce5a6472ec29d894281813d816d059f7b",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 5775360
+        }
+      ],
+      "warm": {
+        "wall_ms": 1.4991450007073581,
+        "bytes": 20050,
+        "sha256": "6bf94a10beab40f574e8193ad8a4429ce5a6472ec29d894281813d816d059f7b",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 34.46404499845812
+    },
+    {
+      "name": "todo",
+      "params": {
+        "q": "TODO|FIXME|HACK",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 16.2540200035437,
+          "bytes": 19038,
+          "sha256": "8e6936b4d78d540aa6fd3b31e9e5e1eeafc64be84268e7bafb91628f707641bd",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 2736128
+        },
+        {
+          "wall_ms": 16.861543997947592,
+          "bytes": 19038,
+          "sha256": "8e6936b4d78d540aa6fd3b31e9e5e1eeafc64be84268e7bafb91628f707641bd",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 2736128
+        },
+        {
+          "wall_ms": 17.01734899688745,
+          "bytes": 19038,
+          "sha256": "8e6936b4d78d540aa6fd3b31e9e5e1eeafc64be84268e7bafb91628f707641bd",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 2736128
+        }
+      ],
+      "warm": {
+        "wall_ms": 1.1182119997101836,
+        "bytes": 19038,
+        "sha256": "8e6936b4d78d540aa6fd3b31e9e5e1eeafc64be84268e7bafb91628f707641bd",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 16.861543997947592
+    },
+    {
+      "name": "date",
+      "params": {
+        "q": "\\d{4}-\\d{2}-\\d{2}",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 119.21312999766087,
+          "bytes": 18373,
+          "sha256": "aa25dd6ccd07854301b052751465dfbf5081273e1d3aeb722fc82e2d0f7fd73f",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 14082048
+        },
+        {
+          "wall_ms": 121.57638200005749,
+          "bytes": 18373,
+          "sha256": "aa25dd6ccd07854301b052751465dfbf5081273e1d3aeb722fc82e2d0f7fd73f",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 14082048
+        },
+        {
+          "wall_ms": 120.50244800047949,
+          "bytes": 18373,
+          "sha256": "aa25dd6ccd07854301b052751465dfbf5081273e1d3aeb722fc82e2d0f7fd73f",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 14082048
+        }
+      ],
+      "warm": {
+        "wall_ms": 10.217609000392258,
+        "bytes": 18373,
+        "sha256": "aa25dd6ccd07854301b052751465dfbf5081273e1d3aeb722fc82e2d0f7fd73f",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 120.50244800047949
+    },
+    {
+      "name": "symbol",
+      "params": {
+        "q": "getAsCXXRecordDecl",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 453.769467996608,
+          "bytes": 19846,
+          "sha256": "bdcc96b767210dfe9ff3e204dcad087e3fcd949d95d85fd7b2fcd35aa29e5a7d",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 57163776
+        },
+        {
+          "wall_ms": 453.3883650001371,
+          "bytes": 19846,
+          "sha256": "bdcc96b767210dfe9ff3e204dcad087e3fcd949d95d85fd7b2fcd35aa29e5a7d",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 57163776
+        },
+        {
+          "wall_ms": 452.525988999696,
+          "bytes": 19846,
+          "sha256": "bdcc96b767210dfe9ff3e204dcad087e3fcd949d95d85fd7b2fcd35aa29e5a7d",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 57163776
+        }
+      ],
+      "warm": {
+        "wall_ms": 13.077698000415694,
+        "bytes": 19846,
+        "sha256": "bdcc96b767210dfe9ff3e204dcad087e3fcd949d95d85fd7b2fcd35aa29e5a7d",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100
+      },
+      "median_ms": 453.3883650001371
+    },
+    {
+      "name": "none",
+      "params": {
+        "q": "zqxjvbnm_nothing_here",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 154.3662129988661,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        },
+        {
+          "wall_ms": 151.14483099750942,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        },
+        {
+          "wall_ms": 155.4362399983802,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        }
+      ],
+      "warm": {
+        "wall_ms": 1.0340540029574186,
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "complete": true,
+        "stop": "complete",
+        "matched_lines": 0
+      },
+      "median_ms": 154.3662129988661
+    },
+    {
+      "name": "unindexable_sparse",
+      "params": {
+        "q": "^[A-Za-z_]{173}$",
+        "n": 1,
+        "limit": 100,
+        "max_bytes": 65536,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 1007.6961439990555,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 0,
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 125173760
+        },
+        {
+          "wall_ms": 1006.3717989978613,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 0,
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 125173760
+        },
+        {
+          "wall_ms": 1009.0782499974011,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 0,
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 125173760
+        }
+      ],
+      "warm": {
+        "wall_ms": 1024.5109219977167,
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "complete": false,
+        "stop": "deadline",
+        "matched_lines": 0
+      },
+      "median_ms": 1007.6961439990555
+    },
+    {
+      "name": "count_threshold",
+      "params": {
+        "q": "if",
+        "c": 1,
+        "limit": 100,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 5.940830000326969,
+          "bytes": 89,
+          "sha256": "b40918b07d42ec6f6f2095645ca56ee707efecc0ee57b2a4a4f0e23df2d4e4f2",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "count": {
+            "kind": "lower_bound",
+            "value": 100
+          },
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        },
+        {
+          "wall_ms": 6.191015992953908,
+          "bytes": 89,
+          "sha256": "b40918b07d42ec6f6f2095645ca56ee707efecc0ee57b2a4a4f0e23df2d4e4f2",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "count": {
+            "kind": "lower_bound",
+            "value": 100
+          },
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        },
+        {
+          "wall_ms": 6.777620001230389,
+          "bytes": 89,
+          "sha256": "b40918b07d42ec6f6f2095645ca56ee707efecc0ee57b2a4a4f0e23df2d4e4f2",
+          "complete": false,
+          "stop": "match_limit",
+          "matched_lines": 100,
+          "count": {
+            "kind": "lower_bound",
+            "value": 100
+          },
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 880640
+        }
+      ],
+      "warm": {
+        "wall_ms": 0.9037139971042052,
+        "bytes": 89,
+        "sha256": "b40918b07d42ec6f6f2095645ca56ee707efecc0ee57b2a4a4f0e23df2d4e4f2",
+        "complete": false,
+        "stop": "match_limit",
+        "matched_lines": 100,
+        "count": {
+          "kind": "lower_bound",
+          "value": 100
+        }
+      },
+      "median_ms": 6.191015992953908
+    },
+    {
+      "name": "count_time_budget",
+      "params": {
+        "q": "if",
+        "c": 1,
+        "limit": 1000000000,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 1006.6860860024462,
+          "bytes": 89,
+          "sha256": "3c8a0a823450c9a50f86ca0b602a2db12b8b09d6fb0e04a423aed32c3c2dc044",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 291584,
+          "count": {
+            "kind": "lower_bound",
+            "value": 291584
+          },
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 125198336
+        },
+        {
+          "wall_ms": 1009.243324995623,
+          "bytes": 89,
+          "sha256": "3c8a0a823450c9a50f86ca0b602a2db12b8b09d6fb0e04a423aed32c3c2dc044",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 291584,
+          "count": {
+            "kind": "lower_bound",
+            "value": 291584
+          },
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 125198336
+        },
+        {
+          "wall_ms": 1005.8145259972662,
+          "bytes": 89,
+          "sha256": "da97acbd8e038550f456ec9a739da950c9a4b732c356d18eae01e4667ab4fe2e",
+          "complete": false,
+          "stop": "deadline",
+          "matched_lines": 296499,
+          "count": {
+            "kind": "lower_bound",
+            "value": 296499
+          },
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 137768960
+        }
+      ],
+      "warm": {
+        "wall_ms": 1000.9648260020185,
+        "bytes": 90,
+        "sha256": "ad176c2658a82ac5a5362995a60afa569200b326e32eaf55f9caae439d1f290c",
+        "complete": false,
+        "stop": "deadline",
+        "matched_lines": 1161338,
+        "count": {
+          "kind": "lower_bound",
+          "value": 1161338
+        }
+      },
+      "median_ms": 1006.6860860024462
+    },
+    {
+      "name": "count_none",
+      "params": {
+        "q": "zqxjvbnm_nothing_here",
+        "c": 1,
+        "limit": 1000000000,
+        "timeout_ms": 1000
+      },
+      "samples": [
+        {
+          "wall_ms": 153.3924660034245,
+          "bytes": 77,
+          "sha256": "6d350212f1f08974f3df6f12ae02fb9894a1a8669979042f711f931f3977b0cc",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "count": {
+            "kind": "exact",
+            "value": 0
+          },
+          "round": 0,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        },
+        {
+          "wall_ms": 151.6021829957026,
+          "bytes": 77,
+          "sha256": "6d350212f1f08974f3df6f12ae02fb9894a1a8669979042f711f931f3977b0cc",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "count": {
+            "kind": "exact",
+            "value": 0
+          },
+          "round": 1,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        },
+        {
+          "wall_ms": 153.7744989982457,
+          "bytes": 77,
+          "sha256": "6d350212f1f08974f3df6f12ae02fb9894a1a8669979042f711f931f3977b0cc",
+          "complete": true,
+          "stop": "complete",
+          "matched_lines": 0,
+          "count": {
+            "kind": "exact",
+            "value": 0
+          },
+          "round": 2,
+          "resident_mib_before": 0.0,
+          "read_bytes": 20189184
+        }
+      ],
+      "warm": {
+        "wall_ms": 1.0431740010972135,
+        "bytes": 77,
+        "sha256": "6d350212f1f08974f3df6f12ae02fb9894a1a8669979042f711f931f3977b0cc",
+        "complete": true,
+        "stop": "complete",
+        "matched_lines": 0,
+        "count": {
+          "kind": "exact",
+          "value": 0
+        }
+      },
+      "median_ms": 153.3924660034245
+    }
+  ],
+  "memory_peak_mib": 680.25
+}

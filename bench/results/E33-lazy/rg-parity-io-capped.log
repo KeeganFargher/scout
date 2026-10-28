@@ -1,0 +1,7 @@
+## lazy-blocks-rg-parity  (2 repos, 697675 files, 5126 MiB content, 2354 MiB index)
+
+| query | scout ms | p90 | p99 | rg ms | speedup | candidates | matched files | results | parity | peak WS MiB | peak private MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|---:|---:|
+| common_lines | 571.5 | - | - | 172288.3 | 301.4x | 51043 | 50302 | 194262 | ok | ? | ? |
+Terminated
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=143 cgroup_peak_mib=4096 oom_kills=0 io: rbytes=6385893376 wbytes=0 rios=558217 wios=0 dbytes=0 dios=0

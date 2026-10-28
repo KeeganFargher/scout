@@ -10,13 +10,18 @@ use std::time::{Duration, Instant};
 
 use grep_printer::{Standard, StandardBuilder, Summary, SummaryBuilder, SummaryKind};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
-use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
+use memchr::memmem::Finder;
 use termcolor::NoColor;
 
-use crate::ports::{DocId, RepoSource, Shard, UnitId};
-use crate::query::{PlanCase, Query, plan};
+use crate::indexer::UNIT_TARGET;
+use crate::ports::{DocId, Extent, RepoSource, Shard, UnitId, Want};
+use crate::query::{PlanCase, Query, analyze};
 use crate::trigram::Trigram;
 use crate::{Error, Result};
+
+mod bounded;
+pub use bounded::{BoundedOptions, BoundedReport, CountEstimate, StopReason, search_bounded};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseMode {
@@ -184,7 +189,11 @@ fn search_chunked(
     }
     let pattern = if opts.fixed_strings { regex_syntax::escape(&opts.pattern) } else { opts.pattern.clone() };
     let plan_case = if opts.case == CaseMode::Sensitive { PlanCase::Sensitive } else { PlanCase::Insensitive };
-    let query = plan(&pattern, plan_case)?;
+    let analysis = analyze(&pattern, plan_case)?;
+    let query = analysis.query;
+    // Inline flags are already reflected in the HIR: a folded letter class is not a
+    // literal. Word-boundary matching and runtime case folding use the regex strategy.
+    let literal = if opts.case == CaseMode::Sensitive && !opts.word { analysis.literal } else { None };
     let matcher = build_matcher(&pattern, opts)?;
     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
     // One thread verifies chunks in order whatever their size, so finding boundaries (a
@@ -197,7 +206,7 @@ fn search_chunked(
     let planned = parallel_indexed(opts.threads, repos.len(), |i| {
         let repo = repos[i];
         let mut s = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
-        let plan = plan_repo(repo, &query, opts, &mut s).map_err(|e| in_repo(repo, e))?;
+        let plan = plan_repo(repo, &query, analysis.shape.as_ref(), opts, &mut s).map_err(|e| in_repo(repo, e))?;
         let chunks = chunk_repo(repo, &plan, chunk_bytes).map_err(|e| in_repo(repo, e))?;
         Ok((plan, s, chunks))
     })?;
@@ -215,6 +224,8 @@ fn search_chunked(
     // 0..k, so output is the same as verifying everything in order on one thread.
     let phase2 = Verify {
         opts,
+        reading: if analysis.whole_file { Reading::Whole } else { Reading::Units },
+        literal: literal.as_deref().map(Finder::new),
         repos,
         plans: &plans,
         chunks: &chunks,
@@ -238,6 +249,8 @@ fn search_chunked(
 /// Phase 2 of a search: the planned chunks and what verifying one needs.
 struct Verify<'a> {
     opts: &'a SearchOptions,
+    reading: Reading,
+    literal: Option<Finder<'a>>,
     repos: &'a [&'a RepoHandle],
     plans: &'a [RepoPlan],
     chunks: &'a [Chunk],
@@ -246,9 +259,15 @@ struct Verify<'a> {
 }
 
 impl Verify<'_> {
-    fn verify(&self, chunk: &Chunk, matcher: &RegexMatcher, searcher: &mut Searcher) -> Result<(Vec<u8>, SearchStats)> {
+    fn verify(
+        &self,
+        chunk: &Chunk,
+        matcher: &RegexMatcher,
+        searcher: &mut Searcher,
+        buf: Vec<u8>,
+    ) -> Result<(Vec<u8>, SearchStats)> {
         let repo = self.repos[chunk.repo];
-        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self.opts, &self.produced)
+        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self, buf)
             .map_err(|e| in_repo(repo, e))
     }
 
@@ -256,17 +275,21 @@ impl Verify<'_> {
     /// server a 5 ms search would otherwise pay a spawn per phase (E16).
     fn inline(&self, out: &mut dyn Write, stats: &mut SearchStats) -> Result<()> {
         let mut searcher = build_searcher(self.opts);
+        let mut spare = Vec::new();
         for chunk in self.chunks {
-            let (buf, s) = self.verify(chunk, self.matcher, &mut searcher)?;
+            let (buf, s) = self.verify(chunk, self.matcher, &mut searcher, std::mem::take(&mut spare))?;
             stats.merge(&s);
             out.write_all(&buf).map_err(|e| Error::io("<stdout>", e))?;
+            if buf.capacity() <= REUSE_OUTPUT_BYTES {
+                spare = buf;
+            }
         }
         Ok(())
     }
 
     fn parallel(&self, workers: usize, out: &mut dyn Write, stats: &mut SearchStats) -> Result<()> {
         let next = AtomicUsize::new(0);
-        let flow = Mutex::new(Flow { emit: 0, buffered: 0, done: false });
+        let flow = Mutex::new(Flow { emit: 0, buffered: 0, done: false, spares: Vec::new() });
         let advanced = Condvar::new();
         // Set on the first error: no point claiming more chunks.
         let stop = AtomicBool::new(false);
@@ -285,7 +308,7 @@ impl Verify<'_> {
                     while !stop.load(Ordering::Relaxed) {
                         let k = next.fetch_add(1, Ordering::Relaxed);
                         let Some(chunk) = self.chunks.get(k) else { break };
-                        {
+                        let buf = {
                             let mut f = flow.lock().unwrap_or_else(PoisonError::into_inner);
                             // The next chunk to print always runs, so the printer always
                             // progresses; so does every chunk before a failing one, which is
@@ -296,8 +319,9 @@ impl Verify<'_> {
                             if f.done {
                                 return;
                             }
-                        }
-                        let r = self.verify(chunk, &matcher, &mut searcher);
+                            f.spares.pop().unwrap_or_default()
+                        };
+                        let r = self.verify(chunk, &matcher, &mut searcher, buf);
                         if let Ok((buf, _)) = &r {
                             flow.lock().unwrap_or_else(PoisonError::into_inner).buffered += buf.len();
                         }
@@ -326,6 +350,9 @@ impl Verify<'_> {
                         let mut f = flow.lock().unwrap_or_else(PoisonError::into_inner);
                         f.emit = emit;
                         f.buffered -= buf.len();
+                        if f.spares.len() < workers.min(4) && buf.capacity() <= REUSE_OUTPUT_BYTES {
+                            f.spares.push(buf);
+                        }
                         advanced.notify_all();
                     }
                 }
@@ -347,6 +374,10 @@ impl Verify<'_> {
 /// search holds at most one more chunk's output per worker.
 const REORDER_BYTES: usize = 64 << 20;
 
+// Recycling avoids growing and copying a fresh Vec for every output chunk. Retain
+// at most four ordinary chunks (32 MiB), never a giant single file's output buffer.
+const REUSE_OUTPUT_BYTES: usize = 8 << 20;
+
 /// The printer's progress, shared with the workers.
 struct Flow {
     /// The next chunk to print.
@@ -355,6 +386,8 @@ struct Flow {
     buffered: usize,
     /// The printer has returned: nothing more will be consumed.
     done: bool,
+    /// Already printed buffers, cleared when the next printer takes ownership.
+    spares: Vec<Vec<u8>>,
 }
 
 fn release(stop: &AtomicBool, flow: &Mutex<Flow>, advanced: &Condvar) {
@@ -416,6 +449,7 @@ fn parallel_indexed<T: Send>(threads: usize, n: usize, f: impl Fn(usize) -> Resu
 fn chunk_repo(repo: &RepoHandle, plan: &RepoPlan, chunk_bytes: u64) -> Result<Vec<Part>> {
     let mut parts = Vec::new();
     for (si, docs) in plan.candidates.iter().enumerate() {
+        let docs = &docs.docs;
         if chunk_bytes == u64::MAX {
             if !docs.is_empty() {
                 parts.push(Part::Docs { shard: si, range: 0..docs.len() });
@@ -424,9 +458,9 @@ fn chunk_repo(repo: &RepoHandle, plan: &RepoPlan, chunk_bytes: u64) -> Result<Ve
         }
         let shard = repo.shards[si].as_ref();
         let (mut start, mut bytes) = (0usize, 0u64);
-        for (k, &doc) in docs.iter().enumerate() {
+        for (k, c) in docs.iter().enumerate() {
             // An empty file still costs a visit; count it as one byte.
-            bytes += shard.meta(doc)?.size.max(1);
+            bytes += shard.meta(c.doc)?.size.max(1);
             if bytes >= chunk_bytes {
                 parts.push(Part::Docs { shard: si, range: start..k + 1 });
                 (start, bytes) = (k + 1, 0);
@@ -475,7 +509,12 @@ pub(crate) enum Printer {
 
 impl Printer {
     pub(crate) fn new(mode: OutputMode) -> Self {
-        let buf = NoColor::new(Vec::new());
+        Self::with_buffer(mode, Vec::new())
+    }
+
+    fn with_buffer(mode: OutputMode, mut bytes: Vec<u8>) -> Self {
+        bytes.clear();
+        let buf = NoColor::new(bytes);
         match mode {
             OutputMode::Lines => Self::Lines(StandardBuilder::new().heading(false).path(true).build(buf)),
             OutputMode::FilesWithMatches => {
@@ -491,6 +530,7 @@ impl Printer {
     /// (binary detection per 64 KiB fill, warning line) and is used wherever rg's exact
     /// binary behaviour matters: late-NUL docs and files read fresh from the source.
     pub(crate) fn search(&mut self, searcher: &mut Searcher, matcher: &RegexMatcher, doc: Doc<'_>) -> Result<bool> {
+        searcher.set_first_line_number(doc.first_line);
         let r = match self {
             Self::Lines(p) => {
                 let mut sink = p.sink_with_path(matcher, doc.path);
@@ -502,6 +542,59 @@ impl Printer {
             }
         };
         r.map_err(|e| Error::io(doc.path, e))
+    }
+
+    fn search_indexed(
+        &mut self,
+        searcher: &mut Searcher,
+        matcher: &RegexMatcher,
+        doc: IndexedDoc<'_>,
+        buf: &mut Vec<u8>,
+        opts: &SearchOptions,
+        literal: Option<&Finder<'_>>,
+    ) -> Result<bool> {
+        // The reader owns binary warnings, BOM removal and transcoding. Indexed plain
+        // text needs only filenames, line numbers and bytes, without a printer path
+        // allocation and general-purpose sink construction for every file.
+        if matches!(doc.mode, Mode::Reader) {
+            let content = doc.shard.content(doc.want.doc, buf)?;
+            return self.search(searcher, matcher, Doc { path: doc.path, content, mode: doc.mode, first_line: 1 });
+        }
+        if opts.max_count == Some(0) {
+            return Ok(false);
+        }
+        let path = doc.path;
+        let path_len = path.len();
+        if opts.output == OutputMode::Lines {
+            // Copy the separator with the filename instead of pushing it millions of
+            // times. display_path reserves this extra byte in its original allocation.
+            path.push(':');
+        }
+        let mut sink = TextSink { out: self.bytes_mut(), path, opts, matches: 0, keep_going: true };
+        let mut visit = |bytes: &[u8], first_line| -> Result<bool> {
+            check_deadline(opts)?;
+            if let Some(finder) = literal {
+                sink.literal(finder, bytes, first_line);
+            } else {
+                searcher.set_first_line_number(first_line);
+                searcher.search_slice(matcher, bytes, &mut sink).map_err(|e| Error::io(&path[..path_len], e))?;
+            }
+            Ok(sink.keep_going)
+        };
+        if !doc.split || doc.size <= UNIT_TARGET as u64 {
+            visit(doc.shard.content(doc.want.doc, buf)?, 1)?;
+        } else {
+            doc.shard.visit_content(doc.want, buf, &mut visit)?;
+        }
+        sink.finish_file();
+        Ok(sink.matches > 0)
+    }
+
+    fn bytes_mut(&mut self) -> &mut Vec<u8> {
+        match self {
+            Self::Lines(p) => p.get_mut().get_mut(),
+            Self::Summary(p) => p.get_mut().get_mut(),
+        }
     }
 
     // grep_printer exposes the writer only mutably.
@@ -520,6 +613,98 @@ impl Printer {
     }
 }
 
+/// The exact output contract for indexed plain text. One state spans the file's runs,
+/// so one matched line counts once even if the literal occurs many times on that line.
+struct TextSink<'a> {
+    out: &'a mut Vec<u8>,
+    path: &'a str,
+    opts: &'a SearchOptions,
+    matches: u64,
+    keep_going: bool,
+}
+
+impl TextSink<'_> {
+    fn line(&mut self, bytes: &[u8], number: u64) {
+        self.matches += 1;
+        if self.opts.output == OutputMode::Lines {
+            self.out.extend_from_slice(self.path.as_bytes());
+            if self.opts.line_number {
+                self.out.extend_from_slice(itoa::Buffer::new().format(number).as_bytes());
+                self.out.push(b':');
+            }
+            self.out.extend_from_slice(bytes);
+            if !bytes.ends_with(b"\n") {
+                self.out.push(b'\n');
+            }
+        }
+        self.keep_going = self.opts.output != OutputMode::FilesWithMatches
+            && self.opts.max_count.is_none_or(|limit| self.matches < limit);
+    }
+
+    fn finish_file(&mut self) {
+        if self.matches == 0 || self.opts.output == OutputMode::Lines {
+            return;
+        }
+        self.out.extend_from_slice(self.path.as_bytes());
+        if self.opts.output == OutputMode::Count {
+            self.out.push(b':');
+            self.out.extend_from_slice(itoa::Buffer::new().format(self.matches).as_bytes());
+        }
+        self.out.push(b'\n');
+    }
+
+    fn literal(&mut self, finder: &Finder<'_>, bytes: &[u8], first_line: u64) {
+        if self.opts.output == OutputMode::FilesWithMatches {
+            if finder.find(bytes).is_some() {
+                self.line(&[], first_line);
+            }
+            return;
+        }
+        let (mut at, mut number) = (0, first_line);
+        // The iterator retains memmem's prefilter state across hits. Starting a fresh
+        // search at every matching line repeatedly initializes that state on broad terms.
+        for found in finder.find_iter(bytes) {
+            if found < at {
+                continue;
+            }
+            let start = if self.opts.output == OutputMode::Lines {
+                if let Some(nl) = memchr::memrchr(b'\n', &bytes[at..found]) {
+                    if self.opts.line_number {
+                        number += 1 + memchr::memchr_iter(b'\n', &bytes[at..at + nl]).count() as u64;
+                    }
+                    at + nl + 1
+                } else {
+                    at
+                }
+            } else {
+                found
+            };
+            let end = memchr::memchr(b'\n', &bytes[found..]).map_or(bytes.len(), |nl| found + nl + 1);
+            self.line(&bytes[start..end], number);
+            if !self.keep_going || end == bytes.len() {
+                break;
+            }
+            at = end;
+            number += 1;
+        }
+    }
+}
+
+impl Sink for TextSink<'_> {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> std::io::Result<bool> {
+        let number = if self.opts.line_number {
+            mat.line_number()
+                .ok_or_else(|| std::io::Error::other("text search did not supply requested line numbers"))?
+        } else {
+            0
+        };
+        self.line(mat.bytes(), number);
+        Ok(self.keep_going)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Mode {
     Slice,
@@ -529,8 +714,11 @@ pub(crate) enum Mode {
 #[derive(Clone, Copy)]
 pub(crate) struct Doc<'a> {
     pub(crate) path: &'a str,
+    /// The whole doc, or a run of its lines (E32).
     pub(crate) content: &'a [u8],
     pub(crate) mode: Mode,
+    /// The 1-based line number of `content`'s first line in the doc.
+    pub(crate) first_line: u64,
 }
 
 fn run<S: grep_searcher::Sink<Error = std::io::Error>>(
@@ -554,8 +742,15 @@ fn run<S: grep_searcher::Sink<Error = std::io::Error>>(
 }
 
 fn display_path(root: &str, rel: &str) -> String {
+    let mut s = String::new();
+    display_path_into(&mut s, root, rel);
+    s
+}
+
+fn display_path_into(s: &mut String, root: &str, rel: &str) {
     let sep = std::path::MAIN_SEPARATOR;
-    let mut s = String::with_capacity(root.len() + rel.len() + 1);
+    s.clear();
+    s.reserve(root.len() + rel.len() + 2);
     s.push_str(root);
     s.push(sep);
     if sep == '/' {
@@ -563,7 +758,6 @@ fn display_path(root: &str, rel: &str) -> String {
     } else {
         s.extend(rel.chars().map(|c| if c == '/' { sep } else { c }));
     }
-    s
 }
 
 /// Which indexed docs must be ignored (changed/deleted) and which source files must be
@@ -634,17 +828,53 @@ pub(crate) enum Loc<'a> {
 /// Every document one repo's search must verify, decided before any is read: each shard's
 /// candidates (strict freshness's masked docs removed) and the files changed since indexing.
 pub(crate) struct RepoPlan {
-    /// Per shard, in doc order.
-    candidates: Vec<Vec<DocId>>,
+    /// Per shard.
+    candidates: Vec<ShardCandidates>,
     /// Searched from the source, after every shard.
     dirty: Vec<String>,
     /// What the source wants stored for next time.
     snapshot: Option<Vec<u8>>,
 }
 
+/// A shard's candidates: the docs to verify, in doc order, and the units that can match.
+pub(crate) struct ShardCandidates {
+    docs: Vec<Candidate>,
+    /// The candidate units, sorted; a doc's are a run of them.
+    units: Vec<UnitId>,
+}
+
+/// A doc to verify, and where its candidate units sit in [`ShardCandidates::units`]. An
+/// empty range: no units say where it can match (an always-searched doc, a query that
+/// scans), so it is read whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Candidate {
+    doc: DocId,
+    units: std::ops::Range<u32>,
+}
+
+/// How much of a candidate verification reads (E32).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Reading {
+    /// Ranking and haystack anchors need the complete document.
+    Whole,
+    /// Plain text may be visited lazily, restricting reads to candidate units where the
+    /// planner knows them. Counts and match limits are maintained across blocks.
+    Units,
+}
+
+struct IndexedDoc<'a> {
+    shard: &'a dyn Shard,
+    want: Want<'a>,
+    path: &'a mut String,
+    mode: Mode,
+    size: u64,
+    split: bool,
+}
+
 pub(crate) fn plan_repo(
     repo: &RepoHandle,
     query: &Query,
+    shape: Option<&crate::shape::ShapeQuery>,
     opts: &SearchOptions,
     stats: &mut SearchStats,
 ) -> Result<RepoPlan> {
@@ -656,20 +886,13 @@ pub(crate) fn plan_repo(
     let mut plan = RepoPlan { candidates: Vec::new(), dirty: Vec::new(), snapshot: None };
     let t = Instant::now();
     for (si, shard) in repo.shards.iter().enumerate() {
-        stats.docs += u64::from(shard.doc_count());
-        let (units, filtered) = shard_units(shard.as_ref(), query)?;
-        stats.shards_filtered += usize::from(filtered);
-        // A filtered shard still verifies its always-searched docs: their matches are not
-        // described by the shard's trigrams, so no filter can rule them out.
-        let mut docs = match units {
-            Some(units) => union(&to_docs(shard.as_ref(), &units)?, &shard.markers().always_search),
-            None => (0..shard.doc_count()).collect(),
-        };
-        if let Some(o) = &overlay {
-            docs.retain(|&d| !o.masked[si][d as usize]);
-        }
-        stats.candidates += docs.len() as u64;
-        plan.candidates.push(docs);
+        plan.candidates.push(plan_shard(
+            shard.as_ref(),
+            query,
+            shape,
+            overlay.as_ref().map(|o| o.masked[si].as_slice()),
+            stats,
+        )?);
     }
     stats.postings_time += t.elapsed();
     if let Some(o) = overlay {
@@ -679,32 +902,174 @@ pub(crate) fn plan_repo(
     Ok(plan)
 }
 
-/// Verifies `docs`, a run of shard `si`'s planned candidates, in order. `visit` returns
-/// whether the document matched.
-pub(crate) fn visit_docs<F>(
+/// A bounded caller plans only the next shard, so reaching its result budget never
+/// reads postings or document summaries for the rest of the corpus.
+fn plan_shard(
+    shard: &dyn Shard,
+    query: &Query,
+    shape: Option<&crate::shape::ShapeQuery>,
+    masked: Option<&[bool]>,
+    stats: &mut SearchStats,
+) -> Result<ShardCandidates> {
+    stats.docs += u64::from(shard.doc_count());
+    let (units, filtered) = shard_units(shard, query)?;
+    stats.shards_filtered += usize::from(filtered);
+    // A filtered shard still verifies its always-searched docs: their matches are not
+    // described by the shard's trigrams, so no filter can rule them out.
+    let mut cands = match units {
+        Some(units) => ShardCandidates {
+            docs: with_always_searched(to_candidates(shard, &units)?, &shard.markers().always_search),
+            units,
+        },
+        None => ShardCandidates {
+            docs: (0..shard.doc_count()).map(|doc| Candidate { doc, units: 0..0 }).collect(),
+            units: Vec::new(),
+        },
+    };
+    if let Some(masked) = masked {
+        cands.docs.retain(|c| !masked[c.doc as usize]);
+    }
+    if let Some(shape) = shape {
+        let mut kept = Vec::with_capacity(cands.docs.len());
+        for candidate in cands.docs {
+            // Reader-mode data may be transcoded or binary-truncated. Its source
+            // byte shapes do not constrain the matcher's transformed input.
+            if shard.markers().reader_mode.binary_search(&candidate.doc).is_ok()
+                || shape.accepts(shard.shape_mask(candidate.doc)?)
+            {
+                kept.push(candidate);
+            }
+        }
+        cands.docs = kept;
+    }
+    stats.candidates += cands.docs.len() as u64;
+    Ok(cands)
+}
+
+/// Verifies `docs`, a run of shard `si`'s planned candidates, in order, reading as much of
+/// each as `reading` says. `visit` is called once per document and owns its read policy,
+/// so a printer can stop decoding while ranking can read the complete content.
+fn visit_docs<F>(
     repo: &RepoHandle,
     si: usize,
-    docs: &[DocId],
+    cands: &ShardCandidates,
+    docs: std::ops::Range<usize>,
+    reading: Reading,
     stats: &mut SearchStats,
     visit: &mut F,
 ) -> Result<()>
 where
-    F: FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
+    F: FnMut(Loc<'_>, &str, IndexedDoc<'_>, &mut Vec<u8>) -> Result<bool>,
 {
     let root = repo.source.display_root();
     let shard = repo.shards[si].as_ref();
-    for &doc in docs {
+    let wants = cands.docs[docs].iter().map(|c| want(shard, cands, c, reading)).collect::<Result<Vec<_>>>()?;
+    let mut ahead = ReadAhead::new(shard, &wants)?;
+    // Where compressed docs decode (E29); reused across the run.
+    let mut buf = Vec::new();
+    // Reuse path storage too: broad scans visit hundreds of thousands of files.
+    let mut path = String::new();
+    for (at, w) in wants.iter().enumerate() {
+        ahead.before(at)?;
+        let doc = w.doc;
         let meta = shard.meta(doc)?;
-        let content = shard.content(doc)?;
         // The shard's marker list, sorted: the docs rg reads through its reader (binary, BOM).
         let mode = if shard.markers().reader_mode.binary_search(&doc).is_ok() { Mode::Reader } else { Mode::Slice };
-        let path = display_path(root, &meta.path);
+        display_path_into(&mut path, root, &meta.path);
         let loc = Loc::Indexed { shard: si, doc, mode };
-        if visit(loc, &meta.path, Doc { path: &path, content: &content, mode })? {
+        let indexed = IndexedDoc {
+            shard,
+            want: *w,
+            path: &mut path,
+            mode,
+            size: meta.size,
+            split: matches!(reading, Reading::Units),
+        };
+        let matched = visit(loc, &meta.path, indexed, &mut buf)?;
+        if matched {
             stats.matched_files += 1;
         }
     }
     Ok(())
+}
+
+/// What verification reads of candidate `c` (E32). Units only where that can save
+/// something and is exact: a doc of one unit (a file of at most `UNIT_TARGET`, which
+/// `unit_spans` never splits) is read whole, the same bytes without looking up its units;
+/// a doc rg reads through its reader (binary, BOM) is read whole, because its units are not
+/// its stored blocks and rg's output depends on everything before a match.
+fn want<'a>(shard: &dyn Shard, cands: &'a ShardCandidates, c: &Candidate, reading: Reading) -> Result<Want<'a>> {
+    let whole = Want { doc: c.doc, extent: Extent::Whole };
+    if matches!(reading, Reading::Whole)
+        || c.units.is_empty()
+        || shard.markers().reader_mode.binary_search(&c.doc).is_ok()
+        || shard.meta(c.doc)?.size <= UNIT_TARGET as u64
+    {
+        return Ok(whole);
+    }
+    let units = &cands.units[c.units.start as usize..c.units.end as usize];
+    Ok(Want { doc: c.doc, extent: Extent::Units(units) })
+}
+
+/// Candidate content queued for reading per block, ahead of the thread verifying it (E28).
+/// The thread reads a block while the next one is in flight, so it keeps one to two blocks
+/// ahead: 4-8 MiB, about 32-64 ms of a gp3 volume's 125 MB/s, enough reads in flight to
+/// cover the volume's latency, and per thread small next to the page cache of a 2 GiB box.
+/// It is a window, not the whole candidate list, so a search stopped early by an output
+/// limit has not read the rest of a full scan, and pages read ahead are verified before
+/// memory pressure can evict them. Counted in content bytes (`meta.size`), the only size
+/// the port exposes: on an lz4 index (E29) a block is ~1.3 MiB of disk, so the window
+/// holds ~3x fewer bytes in flight; E29 measured it as is rather than tuned for that. A
+/// doc bigger than a block is a block by itself and advised whole, which only queues page
+/// cache reads, reclaimable, not process memory.
+const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
+
+/// Queues the content of a run of candidates for reading, block by block, ahead of the
+/// thread that verifies them in order (E28). Entering a block queues the next one.
+struct ReadAhead<'a> {
+    shard: &'a dyn Shard,
+    docs: &'a [Want<'a>],
+    /// `docs[..end]` are queued.
+    end: usize,
+    /// Where the block after the current one starts: reaching it queues another.
+    trigger: usize,
+}
+
+impl<'a> ReadAhead<'a> {
+    fn new(shard: &'a dyn Shard, docs: &'a [Want<'a>]) -> Result<Self> {
+        let mut r = Self { shard, docs, end: 0, trigger: 0 };
+        r.end = r.queue_block(0)?;
+        Ok(r)
+    }
+
+    /// Call before verifying `docs[at]`, for every `at` in order.
+    fn before(&mut self, at: usize) -> Result<()> {
+        if at == self.trigger && self.end < self.docs.len() {
+            let start = self.end;
+            self.end = self.queue_block(start)?;
+            self.trigger = start;
+        }
+        Ok(())
+    }
+
+    /// Queues docs from `start` until a block's worth of bytes, at least one doc; returns
+    /// where it stopped.
+    fn queue_block(&self, start: usize) -> Result<usize> {
+        let (mut end, mut bytes) = (start, 0u64);
+        while end < self.docs.len() && (end == start || bytes < READ_AHEAD_BLOCK_BYTES) {
+            let w = self.docs[end];
+            let size = self.shard.meta(w.doc)?.size;
+            // A doc read by units reads at most a unit's target size per unit, one long
+            // line aside.
+            bytes += match w.extent {
+                Extent::Whole => size,
+                Extent::Units(units) => size.min(units.len() as u64 * UNIT_TARGET as u64),
+            };
+            end += 1;
+        }
+        self.shard.prefetch(&self.docs[start..end])?;
+        Ok(end)
+    }
 }
 
 /// Verifies the files strict freshness found changed, read from the source.
@@ -717,7 +1082,7 @@ where
         stats.dirty_files += 1;
         let content = repo.source.read(rel)?;
         let path = display_path(root, rel);
-        if visit(Loc::Dirty(rel), rel, Doc { path: &path, content: &content, mode: Mode::Reader })? {
+        if visit(Loc::Dirty(rel), rel, Doc { path: &path, content: &content, mode: Mode::Reader, first_line: 1 })? {
             stats.matched_files += 1;
         }
     }
@@ -734,9 +1099,13 @@ pub(crate) fn walk_repo(
     stats: &mut SearchStats,
     mut visit: impl FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
 ) -> Result<Option<Vec<u8>>> {
-    let mut plan = plan_repo(repo, query, opts, stats)?;
-    for si in 0..plan.candidates.len() {
-        visit_docs(repo, si, &plan.candidates[si], stats, &mut visit)?;
+    let mut plan = plan_repo(repo, query, None, opts, stats)?;
+    for (si, cands) in plan.candidates.iter().enumerate() {
+        // Ranking scores whole docs.
+        visit_docs(repo, si, cands, 0..cands.docs.len(), Reading::Whole, stats, &mut |loc, rel, indexed, buf| {
+            let content = indexed.shard.content(indexed.want.doc, buf)?;
+            visit(loc, rel, Doc { path: indexed.path, content, mode: indexed.mode, first_line: 1 })
+        })?;
     }
     visit_dirty(repo, &plan, stats, &mut visit)?;
     Ok(plan.snapshot.take())
@@ -748,9 +1117,11 @@ fn search_chunk(
     part: &Part,
     matcher: &RegexMatcher,
     searcher: &mut Searcher,
-    opts: &SearchOptions,
-    produced: &AtomicUsize,
+    context: &Verify<'_>,
+    buf: Vec<u8>,
 ) -> Result<(Vec<u8>, SearchStats)> {
+    let opts = context.opts;
+    let produced = &context.produced;
     let mut counted = 0usize;
     // Adds what this chunk printed since the last call to the shared count, then checks
     // both limits.
@@ -777,19 +1148,28 @@ fn search_chunk(
     };
     let mut stats = SearchStats::default();
     let t = Instant::now();
-    let mut printer = Printer::new(opts.output);
-    {
-        let mut visit = |_: Loc<'_>, _: &str, doc: Doc<'_>| -> Result<bool> {
+    let mut printer = Printer::with_buffer(opts.output, buf);
+    match part {
+        Part::Docs { shard, range } => {
+            visit_docs(
+                repo,
+                *shard,
+                &plan.candidates[*shard],
+                range.clone(),
+                context.reading,
+                &mut stats,
+                &mut |_, _, doc, buf| {
+                    let hit = printer.search_indexed(searcher, matcher, doc, buf, opts, context.literal.as_ref())?;
+                    check(&mut printer)?;
+                    Ok(hit)
+                },
+            )?;
+        }
+        Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut |_, _, doc| {
             let hit = printer.search(searcher, matcher, doc)?;
             check(&mut printer)?;
             Ok(hit)
-        };
-        match part {
-            Part::Docs { shard, range } => {
-                visit_docs(repo, *shard, &plan.candidates[*shard][range.clone()], &mut stats, &mut visit)?;
-            }
-            Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut visit)?,
-        }
+        })?,
     }
     stats.verify_time = t.elapsed();
     Ok((printer.into_bytes(), stats))
@@ -802,17 +1182,42 @@ pub(crate) fn check_deadline(opts: &SearchOptions) -> Result<()> {
     Ok(())
 }
 
-/// Maps sorted unit ids to the sorted, distinct docs they belong to. A doc's units are
-/// contiguous, so duplicates are always adjacent.
-fn to_docs(shard: &dyn Shard, units: &[UnitId]) -> Result<Vec<DocId>> {
-    let mut docs: Vec<DocId> = Vec::with_capacity(units.len());
-    for &u in units {
-        let d = shard.unit_doc(u)?;
-        if docs.last() != Some(&d) {
-            docs.push(d);
+/// Maps sorted unit ids to the sorted, distinct docs they belong to, each with the run of
+/// `units` that is its own. A doc's units are contiguous, so its run is too.
+fn to_candidates(shard: &dyn Shard, units: &[UnitId]) -> Result<Vec<Candidate>> {
+    let mut docs: Vec<Candidate> = Vec::with_capacity(units.len());
+    for (i, &u) in units.iter().enumerate() {
+        let doc = shard.unit_doc(u)?;
+        // Candidate units are a u32 count of a shard's units.
+        let i = i as u32;
+        match docs.last_mut() {
+            Some(c) if c.doc == doc => c.units.end = i + 1,
+            _ => docs.push(Candidate { doc, units: i..i + 1 }),
         }
     }
     Ok(docs)
+}
+
+/// `cands` plus the always-searched docs, in doc order. Those are read whole: their
+/// matches are not described by their units' trigrams.
+fn with_always_searched(cands: Vec<Candidate>, always: &[DocId]) -> Vec<Candidate> {
+    if always.is_empty() {
+        return cands;
+    }
+    let mut out = Vec::with_capacity(cands.len() + always.len());
+    let mut always = always.iter().copied().peekable();
+    for c in cands {
+        while let Some(doc) = always.next_if(|&d| d < c.doc) {
+            out.push(Candidate { doc, units: 0..0 });
+        }
+        if always.next_if_eq(&c.doc).is_some() {
+            out.push(Candidate { doc: c.doc, units: 0..0 });
+        } else {
+            out.push(c);
+        }
+    }
+    out.extend(always.map(|doc| Candidate { doc, units: 0..0 }));
+    out
 }
 
 /// Whether the shard's trigram filter lets `query` through (E24): `false` means no unit can
@@ -921,7 +1326,9 @@ const VERIFY_COST_POSTINGS: u64 = 4096;
 const LIST_COST_POSTINGS: u64 = 512;
 
 /// `tris` with their unit counts, rarest first; `None` when one is absent from the shard,
-/// which empties the AND without decoding anything.
+/// which empties the AND without decoding anything. Every trigram is counted: counting
+/// only those the shard before ranked rarest (E31) saved no cold reads and cost
+/// candidates.
 fn count_trigrams(shard: &dyn Shard, tris: &[Trigram]) -> Result<Option<Vec<(u32, Trigram)>>> {
     let mut counted = Vec::with_capacity(tris.len());
     for &t in tris {
@@ -979,6 +1386,7 @@ fn union(a: &[u32], b: &[u32]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::BlockVisitor;
 
     /// An in-memory shard where every unit is a candidate for every trigram: the regex
     /// alone decides what matches, which is all the chunking test needs.
@@ -988,6 +1396,9 @@ mod tests {
         crate::ports::Markers { always_search: Vec::new(), reader_mode: Vec::new() };
 
     impl Shard for MemShard {
+        fn shape_mask(&self, doc: DocId) -> Result<crate::shape::ShapeMask> {
+            Ok(crate::shape::ShapeMask::from_content(self.content(doc, &mut Vec::new())?))
+        }
         fn doc_count(&self) -> u32 {
             u32::try_from(self.0.len()).unwrap()
         }
@@ -1011,12 +1422,20 @@ mod tests {
             Ok(unit)
         }
         /// A doc named `fail-*` cannot be read, to test which error a search reports.
-        fn content(&self, doc: DocId) -> Result<std::borrow::Cow<'_, [u8]>> {
+        fn content<'a>(&'a self, doc: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
             let (path, content) = &self.0[doc as usize];
             if path.starts_with("fail-") {
                 return Err(Error::Corrupt { shard: "mem".into(), reason: path.clone() });
             }
-            Ok(content.as_slice().into())
+            Ok(content)
+        }
+        /// Memory storage has one borrowed span per document.
+        fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()> {
+            visit(self.content(want.doc, buf)?, 1)?;
+            Ok(())
+        }
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -1035,6 +1454,72 @@ mod tests {
         }
         fn read(&self, _: &str) -> Result<Vec<u8>> {
             Err(Error::Invalid("not read with freshness off".into()))
+        }
+    }
+
+    #[test]
+    fn indexed_text_output_matches_the_rg_printers_on_byte_and_line_edges() {
+        let mut content =
+            b"needle needle\r\nhay\r\n\nNEEDLE\ninvalid \xff needle\nreturn return\nmetachar a.b\n".to_vec();
+        content.extend(std::iter::repeat_n(b'x', UNIT_TARGET + 17));
+        content.extend_from_slice(b"needle at unterminated end");
+        let repo = RepoHandle {
+            name: "memory".into(),
+            source: Box::new(MemSource("/root".into())),
+            shards: vec![Box::new(MemShard(vec![("name:colon.txt".into(), content.clone())]))],
+            snapshot: None,
+            listing_digest: None,
+        };
+        let path = display_path("/root", "name:colon.txt");
+        for (pattern, fixed) in [
+            ("needle", false),
+            ("e", false),
+            ("ee", false),
+            ("(?:needle)", false),
+            ("needle|xy", false),
+            ("(?i)needle", false),
+            ("", false),
+            (r"(?-u:\xFF)", false),
+            ("^needle", false),
+            (r"needle\b", false),
+            ("a.b", true),
+        ] {
+            for case in [CaseMode::Sensitive, CaseMode::Insensitive] {
+                for word in [false, true] {
+                    for output in [OutputMode::Lines, OutputMode::Count, OutputMode::FilesWithMatches] {
+                        for line_number in [false, true] {
+                            for max_count in [None, Some(0), Some(1), Some(2)] {
+                                let opts = SearchOptions {
+                                    pattern: pattern.into(),
+                                    fixed_strings: fixed,
+                                    case,
+                                    word,
+                                    line_number,
+                                    output,
+                                    max_count,
+                                    threads: 1,
+                                    freshness: Freshness::Off,
+                                    limits: Limits::default(),
+                                };
+                                let regex = if fixed { regex_syntax::escape(pattern) } else { pattern.into() };
+                                let matcher = build_matcher(&regex, &opts).unwrap();
+                                let mut printer = Printer::new(output);
+                                let expected_hit = printer
+                                    .search(
+                                        &mut build_searcher(&opts),
+                                        &matcher,
+                                        Doc { path: &path, content: &content, mode: Mode::Slice, first_line: 1 },
+                                    )
+                                    .unwrap();
+                                let mut actual = Vec::new();
+                                let report = search(&opts, &[&repo], &mut actual).unwrap();
+                                assert_eq!(actual, printer.into_bytes(), "{opts:?}");
+                                assert_eq!(report.stats.matched_files, u64::from(expected_hit), "{opts:?}");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1174,6 +1659,9 @@ mod tests {
     }
 
     impl Shard for ListShard {
+        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
+            unreachable!("posting tests do not filter shapes")
+        }
         fn doc_count(&self) -> u32 {
             100
         }
@@ -1197,7 +1685,13 @@ mod tests {
         fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
             Ok(unit)
         }
-        fn content(&self, _: DocId) -> Result<std::borrow::Cow<'_, [u8]>> {
+        fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+            unreachable!("candidates never reads content")
+        }
+        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+            unreachable!("candidates never reads content")
+        }
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
             unreachable!("candidates never reads content")
         }
     }
@@ -1292,6 +1786,61 @@ mod tests {
         assert_eq!(candidates(&shard, &mixed).unwrap(), Some(vec![5, 11, 40]));
     }
 
+    /// Only maps units to docs.
+    struct UnitDocs(Vec<DocId>);
+
+    impl Shard for UnitDocs {
+        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
+            unreachable!("unit mapping does not filter shapes")
+        }
+        fn doc_count(&self) -> u32 {
+            self.0.last().map_or(0, |d| d + 1)
+        }
+        fn meta(&self, _: DocId) -> Result<crate::ports::DocMeta<'_>> {
+            unreachable!("planning units never reads metadata")
+        }
+        fn postings(&self, _: Trigram) -> Result<Vec<UnitId>> {
+            unreachable!("units are given")
+        }
+        fn count(&self, _: Trigram) -> Result<u32> {
+            unreachable!("units are given")
+        }
+        fn may_contain(&self, _: Trigram) -> bool {
+            unreachable!("units are given")
+        }
+        fn markers(&self) -> &crate::ports::Markers {
+            unreachable!("markers are given")
+        }
+        fn unit_doc(&self, unit: UnitId) -> Result<DocId> {
+            Ok(self.0[unit as usize])
+        }
+        fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+            unreachable!("planning never reads content")
+        }
+        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+            unreachable!("planning never reads content")
+        }
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+            unreachable!("planning never reads content")
+        }
+    }
+
+    #[test]
+    fn candidates_keep_their_units_and_always_searched_docs_are_read_whole() {
+        let c = |doc, units: std::ops::Range<u32>| Candidate { doc, units };
+        // Units 0-1 are doc 0's, 2-3 doc 1's, 4 doc 3's, 5-7 doc 4's.
+        let shard = UnitDocs(vec![0, 0, 1, 1, 3, 4, 4, 4]);
+        // Candidate units 1, 4, 5, 7: their positions in that list make each doc's run.
+        let cands = to_candidates(&shard, &[1, 4, 5, 7]).unwrap();
+        assert_eq!(cands, vec![c(0, 0..1), c(3, 1..2), c(4, 2..4)]);
+        // Always-searched docs before, between, on and after the candidates.
+        assert_eq!(
+            with_always_searched(cands, &[0, 2, 4, 9]),
+            vec![c(0, 0..0), c(2, 0..0), c(3, 1..2), c(4, 0..0), c(9, 0..0)]
+        );
+        assert_eq!(with_always_searched(vec![c(1, 0..1)], &[]), vec![c(1, 0..1)]);
+    }
+
     #[test]
     fn set_ops() {
         assert_eq!(intersect(&[1, 3, 5, 7], &[3, 4, 7]), vec![3, 7]);
@@ -1300,7 +1849,7 @@ mod tests {
 
     fn lines_output(searcher: &mut Searcher, matcher: &RegexMatcher, content: &[u8]) -> String {
         let mut printer = Printer::new(OutputMode::Lines);
-        printer.search(searcher, matcher, Doc { path: "f", content, mode: Mode::Reader }).unwrap();
+        printer.search(searcher, matcher, Doc { path: "f", content, mode: Mode::Reader, first_line: 1 }).unwrap();
         String::from_utf8(printer.into_bytes()).unwrap()
     }
 
@@ -1332,5 +1881,77 @@ mod tests {
         let huge_line = vec![b'y'; 4 << 20];
         lines_output(&mut searcher, &matcher, &huge_line);
         assert_eq!(lines_output(&mut searcher, &matcher, &late_nul), expected);
+    }
+
+    /// Docs of given sizes; records every prefetch call.
+    struct SizedShard {
+        sizes: Vec<u64>,
+        queued: Mutex<Vec<Vec<DocId>>>,
+    }
+
+    impl Shard for SizedShard {
+        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
+            unreachable!("read ahead does not filter shapes")
+        }
+        fn doc_count(&self) -> u32 {
+            u32::try_from(self.sizes.len()).unwrap()
+        }
+        fn meta(&self, doc: DocId) -> Result<crate::ports::DocMeta<'_>> {
+            Ok(crate::ports::DocMeta { path: "f".into(), size: self.sizes[doc as usize], mtime_ns: 0 })
+        }
+        fn postings(&self, _: Trigram) -> Result<Vec<UnitId>> {
+            unreachable!("read-ahead never decodes postings")
+        }
+        fn count(&self, _: Trigram) -> Result<u32> {
+            unreachable!("read-ahead never counts postings")
+        }
+        fn may_contain(&self, _: Trigram) -> bool {
+            unreachable!("read-ahead never probes the filter")
+        }
+        fn markers(&self) -> &crate::ports::Markers {
+            unreachable!("read-ahead never reads markers")
+        }
+        fn unit_doc(&self, _: UnitId) -> Result<DocId> {
+            unreachable!("read-ahead never maps units")
+        }
+        fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+            unreachable!("read-ahead only queues content")
+        }
+        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+            unreachable!("read-ahead only queues content")
+        }
+        fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+            self.queued.lock().unwrap().push(wants.iter().map(|w| w.doc).collect());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_ahead_queues_every_doc_once_before_it_is_verified_and_stays_bounded() {
+        const B: u64 = READ_AHEAD_BLOCK_BYTES;
+        // Small files around one bigger than a block, which closes the block it lands in;
+        // a subset in order, as a chunk of candidates is.
+        let mut sizes = vec![B / 5; 23];
+        sizes[10] = 3 * B;
+        let shard = SizedShard { sizes, queued: Mutex::new(Vec::new()) };
+        let docs: Vec<DocId> = (0..23).filter(|d| d % 4 != 3).collect();
+        let wants: Vec<Want<'_>> = docs.iter().map(|&doc| Want { doc, extent: Extent::Whole }).collect();
+        let mut ahead = ReadAhead::new(&shard, &wants).unwrap();
+        let queued = || shard.queued.lock().unwrap().concat();
+        for at in 0..docs.len() {
+            ahead.before(at).unwrap();
+            let q = queued();
+            assert!(q.len() > at, "doc {} verified before it was queued", docs[at]);
+            let ahead_bytes: u64 = q[at..].iter().map(|&d| shard.sizes[d as usize]).sum();
+            // Two blocks, each of which may overshoot by its last doc.
+            assert!(ahead_bytes <= 2 * B + 3 * B + B / 5, "{ahead_bytes} bytes queued ahead of doc {at}");
+        }
+        assert_eq!(queued(), docs, "queued once each, in order");
+        let calls = shard.queued.lock().unwrap().clone();
+        assert!(calls.iter().any(|c| c.last() == Some(&10)), "the big file ends its block: {calls:?}");
+        // Nothing to queue still makes one empty call, which the backend ignores.
+        let none: Vec<Want<'_>> = Vec::new();
+        let mut ahead = ReadAhead::new(&shard, &none).unwrap();
+        ahead.before(0).unwrap();
     }
 }

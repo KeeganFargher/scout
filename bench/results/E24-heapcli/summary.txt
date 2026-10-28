@@ -1,0 +1,25 @@
+
+## 1cpu: query | map | heap | heap/map | rounds heap faster
+literal_rare | 32.2 | 35.4 | 1.100 | 1/5
+literal_common | 563.7 | 567.7 | 1.007 | 1/5
+literal_none | 9.6 | 13.2 | 1.371 | 0/5
+literal_long | 66.0 | 69.3 | 1.050 | 0/5
+ident_regex | 98.2 | 101.0 | 1.028 | 0/5
+alternation | 146.2 | 149.4 | 1.022 | 0/5
+case_insensitive | 138.7 | 161.4 | 1.163 | 0/5
+smart_case | 134.7 | 139.4 | 1.035 | 0/5
+word | 271.1 | 270.5 | 0.998 | 3/5
+short_unindexable | 875.8 | 883.9 | 1.009 | 1/5
+anchored | 28.8 | 32.6 | 1.131 | 0/5
+date_regex | 736.4 | 733.2 | 0.996 | 3/5
+email_regex | 200.9 | 203.6 | 1.013 | 1/5
+count_mode | 55.0 | 57.9 | 1.051 | 0/5
+files_mode | 78.3 | 84.2 | 1.076 | 0/5
+rare_regex | 44.5 | 47.7 | 1.071 | 0/5
+selective_one | 12.1 | 16.2 | 1.343 | 0/5
+selective_long | 10.1 | 13.9 | 1.374 | 0/5
+selective_vendored | 15.8 | 19.5 | 1.230 | 0/5
+selective_common_trigrams | 26.7 | 30.3 | 1.134 | 0/5
+geomean heap/map: 1.104
+
+parity {'heap-1cpu': True, 'map-1cpu': True}

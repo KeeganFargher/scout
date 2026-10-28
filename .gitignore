@@ -12,3 +12,5 @@ target/
 bench/golden/
 # Claude Code's local session state.
 .claude/
+# Python bytecode from the bench harness scripts.
+__pycache__/

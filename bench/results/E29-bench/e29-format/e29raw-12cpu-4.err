@@ -1,0 +1,2 @@
+short_unindexable: re-verified 1 NUL file(s) against fresh-buffer rg
+profile cpus=12 mem=infinity rc=0 cgroup_peak_mib=1032 oom_kills=0

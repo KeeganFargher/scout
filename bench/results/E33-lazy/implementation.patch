@@ -1,0 +1,927 @@
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-cli/src/main.rs" b/crates/scout-cli/src/main.rs
+index 57fc4f4..355a75c 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-cli/src/main.rs"
++++ b/crates/scout-cli/src/main.rs
+@@ -382,7 +382,9 @@ fn cmd_index(
+     let format = match (backend, content) {
+         (Backend::Native, content) => ingest::Format::Native(content.into()),
+         (Backend::Sqlite, ContentArg::Auto | ContentArg::Raw) => ingest::Format::Sqlite,
+-        (Backend::Sqlite, ContentArg::Lz4) => bail!("--content lz4 is a native-backend format; sqlite stores content as is"),
++        (Backend::Sqlite, ContentArg::Lz4) => {
++            bail!("--content lz4 is a native-backend format; sqlite stores content as is")
++        }
+     };
+     let held = store.lock_writer()?;
+     let catalog = store.load_catalog()?;
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-cli/tests/units.rs" b/crates/scout-cli/tests/units.rs
+index 1c754ae..c880eb2 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-cli/tests/units.rs"
++++ b/crates/scout-cli/tests/units.rs
+@@ -56,7 +56,7 @@ fn run(index_args: &[&str]) {
+     assert_eq!(stat(&err, "candidates"), 2, "{err}");
+     assert_eq!(scout(&index, &["search", "-l", "nedl"]).0, format!("{big}\n{twice}\n"));
+     assert_eq!(scout(&index, &["search", "-c", "nedl"]).0, format!("{big}:1\n{twice}:2\n"));
+-    // `-m 1` stops at a file's first match, which reading the file whole keeps exact.
++    // `-m 1` stops at the file's first matching line, across all decoded blocks.
+     let first = scout(&index, &["search", "-n", "-m", "1", "nedl"]).0;
+     assert_eq!(first, format!("{big}:1302:beta nedl here\n{twice}:1:alpha nedl\n"));
+ }
+@@ -77,3 +77,61 @@ fn native_lz4_units_filter_and_keep_line_numbers() {
+ fn sqlite_units_filter_and_keep_line_numbers() {
+     run(&["--backend", "sqlite"]);
+ }
++
++fn block_semantics(index_args: &[&str]) {
++    let tmp = tempfile::tempdir().unwrap();
++    let repo = tmp.path().join("repo");
++    let index = tmp.path().join("index");
++    std::fs::create_dir_all(&repo).unwrap();
++    let content = format!("needle needle\n{}needle middle\n{}needle", filler(), filler());
++    std::fs::write(repo.join("big.txt"), content).unwrap();
++    scout(&index, &["add", repo.to_str().unwrap()]);
++    scout(&index, &[&["index"], index_args].concat());
++    let path = format!("{}{}big.txt", repo.display(), std::path::MAIN_SEPARATOR);
++    let lines =
++        [format!("{path}:1:needle needle\n"), format!("{path}:1302:needle middle\n"), format!("{path}:2603:needle\n")];
++    // The short alternation branch makes the plan All. It must still decode lazily,
++    // share a match budget across blocks, and emit one count/path per file.
++    for pattern in ["needle", "needle|xy"] {
++        for limit in [0, 1, 2, 3, 9] {
++            let count = limit.min(3);
++            let n = limit.to_string();
++            for threads in ["1", "2"] {
++                let prefix = ["search", "--freshness", "off", "--threads", threads, "-m", &n];
++                let actual = scout(&index, &[&prefix[..], &["-n", pattern]].concat()).0;
++                assert_eq!(actual, lines[..count].concat(), "{pattern}, -m {limit}, threads={threads}");
++                let actual = scout(&index, &[&prefix[..], &["-c", pattern]].concat()).0;
++                let expected = if count == 0 { String::new() } else { format!("{path}:{count}\n") };
++                assert_eq!(actual, expected, "{pattern}, -c -m {limit}");
++                let actual = scout(&index, &[&prefix[..], &["-l", pattern]].concat()).0;
++                let expected = if count == 0 { String::new() } else { format!("{path}\n") };
++                assert_eq!(actual, expected, "{pattern}, -l -m {limit}");
++            }
++        }
++        assert_eq!(scout(&index, &["search", "-n", pattern]).0, lines.concat());
++        assert_eq!(scout(&index, &["search", "-c", pattern]).0, format!("{path}:3\n"));
++    }
++    // Keep rg's line-oriented anchor behavior: these assertions are evaluated against
++    // individual lines, including the unterminated final line.
++    for pattern in [r"\Aneedle", r"(?-m:^needle)"] {
++        assert_eq!(scout(&index, &["search", "-n", pattern]).0, lines.concat());
++    }
++    for pattern in [r"needle\z", r"(?-m:needle$)"] {
++        assert_eq!(scout(&index, &["search", "-n", pattern]).0, format!("{}{}", lines[0], lines[2]));
++    }
++}
++
++#[test]
++fn raw_blocks_keep_file_wide_printer_semantics() {
++    block_semantics(&["--backend", "native", "--content", "raw"]);
++}
++
++#[test]
++fn lz4_blocks_keep_file_wide_printer_semantics() {
++    block_semantics(&["--backend", "native", "--content", "lz4"]);
++}
++
++#[test]
++fn sqlite_keeps_file_wide_printer_semantics() {
++    block_semantics(&["--backend", "sqlite"]);
++}
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/ports.rs" b/crates/scout-core/src/ports.rs
+index b6ac6e0..5fb99e0 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/ports.rs"
++++ b/crates/scout-core/src/ports.rs
+@@ -131,20 +131,9 @@ pub struct Want<'a> {
+     pub extent: Extent<'a>,
+ }
+ 
+-/// Some of a doc's content (see [`Shard::unit_content`]).
+-#[derive(Debug)]
+-pub struct Pieces<'a> {
+-    pub bytes: &'a [u8],
+-    /// In content order, disjoint, each a range of `bytes` that starts at a line start.
+-    pub runs: Vec<Run>,
+-}
+-
+-#[derive(Debug, Clone, PartialEq, Eq)]
+-pub struct Run {
+-    /// The 1-based line number of the run's first line in the doc.
+-    pub first_line: u64,
+-    pub range: std::ops::Range<usize>,
+-}
++/// Visits line-aligned content in file order. `false` stops before the next block is
++/// decoded; the line number is relative to the whole file, including skipped units.
++pub type BlockVisitor<'a> = dyn FnMut(&[u8], u64) -> Result<bool> + 'a;
+ 
+ /// Encodes and decodes shards. Trigram extraction happens in core, so every backend
+ /// indexes exactly the same keys and differs only in storage.
+@@ -201,15 +190,13 @@ pub trait Shard: Send + Sync {
+     /// compressed index costs a decode per read, not an allocation too.
+     fn content<'a>(&'a self, doc: DocId, buf: &'a mut Vec<u8>) -> Result<&'a [u8]>;
+ 
+-    /// The content of `units`, some of text doc `doc`'s own units (sorted, not empty):
+-    /// runs of whole lines that hold at least those units, each with the line number it
+-    /// starts on, so a search can verify a few units of a large file without reading or
+-    /// decoding the rest (E32). Decoded into `buf` like [`Shard::content`]. A backend may
+-    /// return more than asked, up to the whole doc as one run from line 1.
+-    fn unit_content<'a>(&'a self, doc: DocId, units: &[UnitId], buf: &'a mut Vec<u8>) -> Result<Pieces<'a>>;
++    /// Visits `want`'s text a block at a time, borrowing raw storage or reusing `buf` to
++    /// decode it. A visitor can stop decoding after its first match or a file-wide limit.
++    /// A backend's storage granularity may require reading the whole doc as one block.
++    fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()>;
+ 
+     /// Starts reading what `wants` will read from disk in the background, ahead of the
+-    /// [`Shard::content`] and [`Shard::unit_content`] calls that will need it (E28).
++    /// [`Shard::content`] and [`Shard::visit_content`] calls that will need it (E28).
+     /// Without it a search whose index is not in the page cache waits on one read at a time
+     /// per verifying thread, each a page fault; on a network volume (EBS) every one of those
+     /// pays the volume's latency. A hint: it reads nothing a later read would not, and a
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/query.rs" b/crates/scout-core/src/query.rs
+index 3010fcf..e6ae36a 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/query.rs"
++++ b/crates/scout-core/src/query.rs
+@@ -90,6 +90,12 @@ pub enum PlanCase {
+ 
+ /// Plans a trigram query for `pattern`, parsed with the same flags rg gives its matcher.
+ pub fn plan(pattern: &str, case: PlanCase) -> Result<Query> {
++    analyze(pattern, case).map(|(query, _)| query)
++}
++
++/// Planning and whether the matcher has haystack anchors. Keep those on the existing
++/// whole-file search path: their exact behavior depends on the searcher's line strategy.
++pub(crate) fn analyze(pattern: &str, case: PlanCase) -> Result<(Query, bool)> {
+     let hir = regex_syntax::ParserBuilder::new()
+         .case_insensitive(case == PlanCase::Insensitive)
+         .multi_line(true)
+@@ -100,7 +106,8 @@ pub fn plan(pattern: &str, case: PlanCase) -> Result<Query> {
+         .build()
+         .parse(pattern)
+         .map_err(|e| Error::Pattern(e.to_string()))?;
+-    Ok(info(&hir).into_query())
++    let whole = hir.properties().look_set().contains_anchor_haystack();
++    Ok((info(&hir).into_query(), whole))
+ }
+ 
+ /// Upper bound on set sizes before we give up exactness. Keeps planning O(pattern) and
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/ranked.rs" b/crates/scout-core/src/ranked.rs
+index f169ba6..d3b50ac 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/ranked.rs"
++++ b/crates/scout-core/src/ranked.rs
+@@ -139,7 +139,11 @@ pub fn search_ranked(
+             }
+             OwnedLoc::Dirty(rel) => {
+                 let content = repo.source.read(rel)?;
+-                printer.search(&mut searcher, &matcher, Doc { path, content: &content, mode: Mode::Reader, first_line: 1 })?;
++                printer.search(
++                    &mut searcher,
++                    &matcher,
++                    Doc { path, content: &content, mode: Mode::Reader, first_line: 1 },
++                )?;
+             }
+         }
+         if let Some(cap) = opts.limits.output_bytes
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/search.rs" b/crates/scout-core/src/search.rs
+index 8df8051..8284439 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-core/src/search.rs"
++++ b/crates/scout-core/src/search.rs
+@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
+ 
+ use grep_printer::{Standard, StandardBuilder, Summary, SummaryBuilder, SummaryKind};
+ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+-use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
++use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch};
+ use termcolor::NoColor;
+ 
+ use crate::indexer::UNIT_TARGET;
+ use crate::ports::{DocId, Extent, RepoSource, Shard, UnitId, Want};
+-use crate::query::{PlanCase, Query, plan};
++use crate::query::{PlanCase, Query, analyze};
+ use crate::trigram::Trigram;
+ use crate::{Error, Result};
+ 
+@@ -185,7 +185,7 @@ fn search_chunked(
+     }
+     let pattern = if opts.fixed_strings { regex_syntax::escape(&opts.pattern) } else { opts.pattern.clone() };
+     let plan_case = if opts.case == CaseMode::Sensitive { PlanCase::Sensitive } else { PlanCase::Insensitive };
+-    let query = plan(&pattern, plan_case)?;
++    let (query, whole_file) = analyze(&pattern, plan_case)?;
+     let matcher = build_matcher(&pattern, opts)?;
+     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
+     // One thread verifies chunks in order whatever their size, so finding boundaries (a
+@@ -216,6 +216,7 @@ fn search_chunked(
+     // 0..k, so output is the same as verifying everything in order on one thread.
+     let phase2 = Verify {
+         opts,
++        reading: if whole_file { Reading::Whole } else { Reading::Units },
+         repos,
+         plans: &plans,
+         chunks: &chunks,
+@@ -239,6 +240,7 @@ fn search_chunked(
+ /// Phase 2 of a search: the planned chunks and what verifying one needs.
+ struct Verify<'a> {
+     opts: &'a SearchOptions,
++    reading: Reading,
+     repos: &'a [&'a RepoHandle],
+     plans: &'a [RepoPlan],
+     chunks: &'a [Chunk],
+@@ -249,8 +251,7 @@ struct Verify<'a> {
+ impl Verify<'_> {
+     fn verify(&self, chunk: &Chunk, matcher: &RegexMatcher, searcher: &mut Searcher) -> Result<(Vec<u8>, SearchStats)> {
+         let repo = self.repos[chunk.repo];
+-        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self.opts, &self.produced)
+-            .map_err(|e| in_repo(repo, e))
++        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self).map_err(|e| in_repo(repo, e))
+     }
+ 
+     /// No thread to spawn and nothing to reorder: verify in order on this thread. In a
+@@ -507,6 +508,32 @@ impl Printer {
+         r.map_err(|e| Error::io(doc.path, e))
+     }
+ 
++    fn search_indexed(
++        &mut self,
++        searcher: &mut Searcher,
++        matcher: &RegexMatcher,
++        doc: IndexedDoc<'_>,
++        buf: &mut Vec<u8>,
++        opts: &SearchOptions,
++    ) -> Result<bool> {
++        // Reader-mode binary/BOM behavior and haystack anchors depend on the entire
++        // document. Small files already occupy one block and need no visitor machinery.
++        if !doc.split || matches!(doc.mode, Mode::Reader) || doc.size <= UNIT_TARGET as u64 {
++            let content = doc.shard.content(doc.want.doc, buf)?;
++            return self.search(searcher, matcher, Doc { path: doc.path, content, mode: doc.mode, first_line: 1 });
++        }
++        match self {
++            Self::Lines(p) => {
++                let sink = p.sink_with_path(matcher, doc.path);
++                search_blocks(searcher, matcher, sink, doc, buf, opts)
++            }
++            Self::Summary(p) => {
++                let sink = p.sink_with_path(matcher, doc.path);
++                search_blocks(searcher, matcher, sink, doc, buf, opts)
++            }
++        }
++    }
++
+     // grep_printer exposes the writer only mutably.
+     pub(crate) fn len(&mut self) -> usize {
+         match self {
+@@ -523,6 +550,60 @@ impl Printer {
+     }
+ }
+ 
++/// A printer sink lives for the whole file: restarting it for each decoded block would
++/// print several counts/filenames and reset `-m`. Only line-aligned plain text uses this;
++/// its finish metadata carries no binary offset and the printers do not request stats.
++struct BlockSink<S> {
++    sink: S,
++    matches: u64,
++    limit: Option<u64>,
++    keep_going: bool,
++    finish: Option<SinkFinish>,
++}
++
++impl<S: Sink<Error = std::io::Error>> Sink for BlockSink<S> {
++    type Error = std::io::Error;
++
++    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> std::io::Result<bool> {
++        self.matches += 1;
++        self.keep_going = self.sink.matched(searcher, mat)? && self.limit.is_none_or(|n| self.matches < n);
++        Ok(self.keep_going)
++    }
++
++    fn finish(&mut self, _: &Searcher, finish: &SinkFinish) -> std::io::Result<()> {
++        self.finish = Some(finish.clone());
++        Ok(())
++    }
++}
++
++fn search_blocks<S: Sink<Error = std::io::Error>>(
++    searcher: &mut Searcher,
++    matcher: &RegexMatcher,
++    mut sink: S,
++    doc: IndexedDoc<'_>,
++    buf: &mut Vec<u8>,
++    opts: &SearchOptions,
++) -> Result<bool> {
++    if opts.max_count == Some(0) {
++        return Ok(false);
++    }
++    let io = |e| Error::io(doc.path, e);
++    let keep_going = sink.begin(searcher).map_err(io)?;
++    let mut sink = BlockSink { sink, matches: 0, limit: opts.max_count, keep_going, finish: None };
++    if keep_going {
++        doc.shard.visit_content(doc.want, buf, &mut |bytes, first_line| {
++            check_deadline(opts)?;
++            searcher.set_first_line_number(first_line);
++            searcher.search_slice(matcher, bytes, &mut sink).map_err(io)?;
++            Ok(sink.keep_going)
++        })?;
++    }
++    if let Some(finish) = &sink.finish {
++        sink.sink.finish(searcher, finish).map_err(io)?;
++    }
++    Ok(sink.matches > 0)
++}
++
+ #[derive(Debug, Clone, Copy)]
+ pub(crate) enum Mode {
+     Slice,
+@@ -667,25 +748,21 @@ pub(crate) struct Candidate {
+ /// How much of a candidate verification reads (E32).
+ #[derive(Debug, Clone, Copy)]
+ pub(crate) enum Reading {
+-    /// Every candidate whole: what ranking scores, and what a per-file count or match
+-    /// limit needs, since those span a file's runs.
++    /// Ranking and haystack anchors need the complete document.
+     Whole,
+-    /// Only a large doc's candidate units, searched run by run: a line can match only in
+-    /// a unit holding all its trigrams, and units end at newlines. `first_match_only`: a
+-    /// doc's later runs are skipped once one matched (`-l`).
+-    Units { first_match_only: bool },
++    /// Plain text may be visited lazily, restricting reads to candidate units where the
++    /// planner knows them. Counts and match limits are maintained across blocks.
++    Units,
+ }
+ 
+-impl Reading {
+-    pub(crate) fn for_search(opts: &SearchOptions) -> Self {
+-        match (opts.output, opts.max_count) {
+-            (OutputMode::Lines, None) => Self::Units { first_match_only: false },
+-            (OutputMode::FilesWithMatches, None) => Self::Units { first_match_only: true },
+-            // A count is printed once per search, and `-m` counts across the doc: both
+-            // would need summing over runs, so these read whole.
+-            (OutputMode::Count, _) | (_, Some(_)) => Self::Whole,
+-        }
+-    }
++#[derive(Clone, Copy)]
++struct IndexedDoc<'a> {
++    shard: &'a dyn Shard,
++    want: Want<'a>,
++    path: &'a str,
++    mode: Mode,
++    size: u64,
++    split: bool,
+ }
+ 
+ pub(crate) fn plan_repo(
+@@ -733,9 +810,9 @@ pub(crate) fn plan_repo(
+ }
+ 
+ /// Verifies `docs`, a run of shard `si`'s planned candidates, in order, reading as much of
+-/// each as `reading` says. `visit` is called once per doc read whole, or once per run of
+-/// lines read (E32), and returns whether that matched.
+-pub(crate) fn visit_docs<F>(
++/// each as `reading` says. `visit` is called once per document and owns its read policy,
++/// so a printer can stop decoding while ranking can read the complete content.
++fn visit_docs<F>(
+     repo: &RepoHandle,
+     si: usize,
+     cands: &ShardCandidates,
+@@ -745,7 +822,7 @@ pub(crate) fn visit_docs<F>(
+     visit: &mut F,
+ ) -> Result<()>
+ where
+-    F: FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
++    F: FnMut(Loc<'_>, &str, IndexedDoc<'_>, &mut Vec<u8>) -> Result<bool>,
+ {
+     let root = repo.source.display_root();
+     let shard = repo.shards[si].as_ref();
+@@ -761,26 +838,15 @@ where
+         let mode = if shard.markers().reader_mode.binary_search(&doc).is_ok() { Mode::Reader } else { Mode::Slice };
+         let path = display_path(root, &meta.path);
+         let loc = Loc::Indexed { shard: si, doc, mode };
+-        let matched = match w.extent {
+-            Extent::Whole => {
+-                let content = shard.content(doc, &mut buf)?;
+-                visit(loc, &meta.path, Doc { path: &path, content, mode, first_line: 1 })?
+-            }
+-            Extent::Units(units) => {
+-                let pieces = shard.unit_content(doc, units, &mut buf)?;
+-                let mut hit = false;
+-                for run in &pieces.runs {
+-                    let content = &pieces.bytes[run.range.clone()];
+-                    if visit(loc, &meta.path, Doc { path: &path, content, mode, first_line: run.first_line })? {
+-                        hit = true;
+-                        if matches!(reading, Reading::Units { first_match_only: true }) {
+-                            break;
+-                        }
+-                    }
+-                }
+-                hit
+-            }
++        let indexed = IndexedDoc {
++            shard,
++            want: *w,
++            path: &path,
++            mode,
++            size: meta.size,
++            split: matches!(reading, Reading::Units),
+         };
++        let matched = visit(loc, &meta.path, indexed, &mut buf)?;
+         if matched {
+             stats.matched_files += 1;
+         }
+@@ -897,7 +963,10 @@ pub(crate) fn walk_repo(
+     let mut plan = plan_repo(repo, query, opts, stats)?;
+     for (si, cands) in plan.candidates.iter().enumerate() {
+         // Ranking scores whole docs.
+-        visit_docs(repo, si, cands, 0..cands.docs.len(), Reading::Whole, stats, &mut visit)?;
++        visit_docs(repo, si, cands, 0..cands.docs.len(), Reading::Whole, stats, &mut |loc, rel, indexed, buf| {
++            let content = indexed.shard.content(indexed.want.doc, buf)?;
++            visit(loc, rel, Doc { path: indexed.path, content, mode: indexed.mode, first_line: 1 })
++        })?;
+     }
+     visit_dirty(repo, &plan, stats, &mut visit)?;
+     Ok(plan.snapshot.take())
+@@ -909,9 +978,10 @@ fn search_chunk(
+     part: &Part,
+     matcher: &RegexMatcher,
+     searcher: &mut Searcher,
+-    opts: &SearchOptions,
+-    produced: &AtomicUsize,
++    context: &Verify<'_>,
+ ) -> Result<(Vec<u8>, SearchStats)> {
++    let opts = context.opts;
++    let produced = &context.produced;
+     let mut counted = 0usize;
+     // Adds what this chunk printed since the last call to the shared count, then checks
+     // both limits.
+@@ -939,19 +1009,27 @@ fn search_chunk(
+     let mut stats = SearchStats::default();
+     let t = Instant::now();
+     let mut printer = Printer::new(opts.output);
+-    {
+-        let mut visit = |_: Loc<'_>, _: &str, doc: Doc<'_>| -> Result<bool> {
++    match part {
++        Part::Docs { shard, range } => {
++            visit_docs(
++                repo,
++                *shard,
++                &plan.candidates[*shard],
++                range.clone(),
++                context.reading,
++                &mut stats,
++                &mut |_, _, doc, buf| {
++                    let hit = printer.search_indexed(searcher, matcher, doc, buf, opts)?;
++                    check(&mut printer)?;
++                    Ok(hit)
++                },
++            )?;
++        }
++        Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut |_, _, doc| {
+             let hit = printer.search(searcher, matcher, doc)?;
+             check(&mut printer)?;
+             Ok(hit)
+-        };
+-        match part {
+-            Part::Docs { shard, range } => {
+-                let reading = Reading::for_search(opts);
+-                visit_docs(repo, *shard, &plan.candidates[*shard], range.clone(), reading, &mut stats, &mut visit)?;
+-            }
+-            Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut visit)?,
+-        }
++        })?,
+     }
+     stats.verify_time = t.elapsed();
+     Ok((printer.into_bytes(), stats))
+@@ -1189,7 +1267,7 @@ fn union(a: &[u32], b: &[u32]) -> Vec<u32> {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::ports::Pieces;
++    use crate::ports::BlockVisitor;
+ 
+     /// An in-memory shard where every unit is a candidate for every trigram: the regex
+     /// alone decides what matches, which is all the chunking test needs.
+@@ -1230,7 +1308,7 @@ mod tests {
+             Ok(content)
+         }
+         /// Every doc is small, so a search reads them whole and never asks for units.
+-        fn unit_content<'a>(&'a self, _: DocId, _: &[UnitId], _: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
++        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+             unreachable!("small docs are read whole")
+         }
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+@@ -1418,7 +1496,7 @@ mod tests {
+         fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+             unreachable!("candidates never reads content")
+         }
+-        fn unit_content<'a>(&'a self, _: DocId, _: &[UnitId], _: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
++        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+             unreachable!("candidates never reads content")
+         }
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+@@ -1577,7 +1655,7 @@ mod tests {
+         fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+             unreachable!("planning never reads content")
+         }
+-        fn unit_content<'a>(&'a self, _: DocId, _: &[UnitId], _: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
++        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+             unreachable!("planning never reads content")
+         }
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+@@ -1674,7 +1752,7 @@ mod tests {
+         fn content<'a>(&'a self, _: DocId, _: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+             unreachable!("read-ahead only queues content")
+         }
+-        fn unit_content<'a>(&'a self, _: DocId, _: &[UnitId], _: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
++        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+             unreachable!("read-ahead only queues content")
+         }
+         fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-index-native/src/lib.rs" b/crates/scout-index-native/src/lib.rs
+index 2fb4847..7bb68ab 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-index-native/src/lib.rs"
++++ b/crates/scout-index-native/src/lib.rs
+@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
+ 
+ use scout_core::indexer::{UNIT_TARGET, unit_spans};
+ use scout_core::ports::{
+-    DocId, DocMeta, Extent, FileMeta, IndexBackend, Markers, Pieces, Run, Shard, ShardWriter, UnitId, Want,
++    BlockVisitor, DocId, DocMeta, Extent, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+ };
+ use scout_core::trigram::Trigram;
+ use scout_core::{Error, Result};
+@@ -474,8 +474,7 @@ impl NativeShard {
+         if le_u32(&map, 8) != VERSION {
+             return Err(corrupt("unsupported version"));
+         }
+-        let off =
+-            |i: usize| usize::try_from(le_u64(&map, OFFSETS_AT + i * 8)).map_err(|_| corrupt("offset overflow"));
++        let off = |i: usize| usize::try_from(le_u64(&map, OFFSETS_AT + i * 8)).map_err(|_| corrupt("offset overflow"));
+         let (fence_off, filter_off) = (off(7)?, off(8)?);
+         let mut shard = Self {
+             doc_count: le_u32(&map, 12),
+@@ -678,8 +677,11 @@ impl Shard for NativeShard {
+         if stored.raw {
+             return Ok(&self.map[stored.bytes]);
+         }
+-        buf.clear();
+-        buf.resize(stored.len, 0);
++        // Keep initialized bytes between files: decoding overwrites the entire returned
++        // slice, so clearing first would zero the same memory on every read.
++        if buf.len() < stored.len {
++            buf.resize(stored.len, 0);
++        }
+         let (mut from, mut to) = (stored.bytes.start, 0usize);
+         for b in stored.blocks {
+             let (packed, len) = self.block(b);
+@@ -687,32 +689,41 @@ impl Shard for NativeShard {
+             from += packed;
+             to += len;
+         }
+-        Ok(buf)
++        Ok(&buf[..stored.len])
+     }
+ 
+-    fn unit_content<'a>(&'a self, doc: DocId, units: &[UnitId], buf: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
+-        let stored = self.stored(doc)?;
+-        let blocks = self.unit_blocks(doc, &stored, units)?;
+-        let offs = self.offsets(&stored);
+-        let first_line = |k: usize| self.block_lines(stored.blocks.start + k) + 1;
+-        if stored.raw {
+-            let runs = blocks.iter().map(|r| Run { first_line: first_line(r.start), range: offs[r.start].1..offs[r.end].1 });
+-            return Ok(Pieces { runs: runs.collect(), bytes: &self.map[stored.bytes] });
+-        }
+-        buf.clear();
+-        let mut runs = Vec::with_capacity(blocks.len());
+-        for r in blocks {
+-            let start = buf.len();
+-            for k in r.clone() {
+-                let (packed, len) = self.block(stored.blocks.start + k);
+-                let src = stored.bytes.start + offs[k].0;
+-                let at = buf.len();
+-                buf.resize(at + len, 0);
+-                self.decode(&self.map[src..src + packed], &mut buf[at..])?;
++    fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()> {
++        let stored = self.stored(want.doc)?;
++        match want.extent {
++            Extent::Whole if stored.raw => {
++                visit(&self.map[stored.bytes], 1)?;
++            }
++            Extent::Whole => {
++                self.visit_blocks(stored.blocks, stored.bytes.start, buf, visit)?;
++            }
++            Extent::Units(units) => {
++                let blocks = self.unit_blocks(want.doc, &stored, units)?;
++                let offs = self.offsets(&stored);
++                for r in blocks {
++                    let start = stored.bytes.start + offs[r.start].0;
++                    let keep_going = if stored.raw {
++                        let end = stored.bytes.start + offs[r.end].0;
++                        visit(&self.map[start..end], self.block_lines(stored.blocks.start + r.start) + 1)?
++                    } else {
++                        self.visit_blocks(
++                            stored.blocks.start + r.start..stored.blocks.start + r.end,
++                            start,
++                            buf,
++                            visit,
++                        )?
++                    };
++                    if !keep_going {
++                        break;
++                    }
++                }
+             }
+-            runs.push(Run { first_line: first_line(r.start), range: start..buf.len() });
+         }
+-        Ok(Pieces { bytes: buf, runs })
++        Ok(())
+     }
+ 
+     fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+@@ -761,6 +772,35 @@ struct Stored {
+ }
+ 
+ impl NativeShard {
++    /// One initialized scratch buffer serves every compressed block. The visitor sees
++    /// only the decoded slice, and can stop before any later payload is read or decoded.
++    fn visit_blocks(
++        &self,
++        blocks: std::ops::Range<usize>,
++        mut from: usize,
++        buf: &mut Vec<u8>,
++        visit: &mut BlockVisitor<'_>,
++    ) -> Result<bool> {
++        for b in blocks {
++            let (packed, len) = self.block(b);
++            let src = &self.map[from..from + packed];
++            let bytes = if packed == len {
++                src
++            } else {
++                if buf.len() < len {
++                    buf.resize(len, 0);
++                }
++                self.decode(src, &mut buf[..len])?;
++                &buf[..len]
++            };
++            if !visit(bytes, self.block_lines(b) + 1)? {
++                return Ok(false);
++            }
++            from += packed;
++        }
++        Ok(true)
++    }
++
+     /// Where `doc` is stored. Checked and held to the content section: a corrupt row's u64
+     /// offset could wrap into a valid range of the map and return some other bytes as this
+     /// document, and corrupt block lengths could decode past its buffer.
+@@ -888,9 +928,7 @@ impl NativeShard {
+         if range.is_empty() {
+             return Ok(());
+         }
+-        self.map
+-            .advise_range(memmap2::Advice::WillNeed, range.start, range.len())
+-            .map_err(|e| Error::io(&self.name, e))
++        self.map.advise_range(memmap2::Advice::WillNeed, range.start, range.len()).map_err(|e| Error::io(&self.name, e))
+     }
+ 
+     /// `madvise(MADV_RANDOM)`: a fault in the range reads its own page, no read-around.
+@@ -899,9 +937,7 @@ impl NativeShard {
+         if range.is_empty() {
+             return Ok(());
+         }
+-        self.map
+-            .advise_range(memmap2::Advice::Random, range.start, range.len())
+-            .map_err(|e| Error::io(&self.name, e))
++        self.map.advise_range(memmap2::Advice::Random, range.start, range.len()).map_err(|e| Error::io(&self.name, e))
+     }
+ 
+     /// Windows has no read-around to turn off for a mapping, short of FFI (see below).
+@@ -1197,8 +1233,16 @@ mod tests {
+     fn rejects_an_lz4_block_that_does_not_decode() {
+         let dir = tempfile::tempdir().unwrap();
+         let path = dir.path().join("s.native");
+-        let text: Vec<u8> = (0..2_000).flat_map(|i| format!("let value_{i} = compute({});
+-", i % 7).into_bytes()).collect();
++        let text: Vec<u8> = (0..2_000)
++            .flat_map(|i| {
++                format!(
++                    "let value_{i} = compute({});
++",
++                    i % 7
++                )
++                .into_bytes()
++            })
++            .collect();
+         let mut w = LZ4.create(&path).unwrap();
+         let units = vec![TrigramExtractor::default().extract(&text).to_vec()];
+         w.add(&FileMeta { path: "a.rs".into(), size: text.len() as u64, mtime_ns: 0 }, &text, &units).unwrap();
+@@ -1222,9 +1266,11 @@ mod tests {
+         let dir = tempfile::tempdir().unwrap();
+         // Source-like text over several blocks, bytes lz4 cannot shrink (stored as is, next
+         // to compressed blocks of the same shard), and an empty file.
+-        let text: Vec<u8> = (0..20_000).flat_map(|i| format!("let value_{i} = compute(input, {});\n", i % 7).into_bytes()).collect();
++        let text: Vec<u8> =
++            (0..20_000).flat_map(|i| format!("let value_{i} = compute(input, {});\n", i % 7).into_bytes()).collect();
+         let noise: Vec<u8> = (0u32..70_000).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+-        let files: [(&str, &[u8]); 4] = [("big.rs", &text), ("noise.bin", &noise), ("empty", b""), ("small.rs", b"fn x() {}\n")];
++        let files: [(&str, &[u8]); 4] =
++            [("big.rs", &text), ("noise.bin", &noise), ("empty", b""), ("small.rs", b"fn x() {}\n")];
+         let mut sizes = Vec::new();
+         for backend in [MAPPED, LZ4] {
+             let path = dir.path().join(format!("{:?}.native", backend.codec));
+@@ -1235,7 +1281,11 @@ mod tests {
+                     unit_spans(c, UNIT_TARGET).into_iter().map(|r| ex.extract(&c[r]).to_vec()).collect();
+                 w.add(&FileMeta { path: p.into(), size: c.len() as u64, mtime_ns: 0 }, c, &units).unwrap();
+             }
+-            assert_eq!(w.content_bytes(), files.iter().map(|(_, c)| c.len() as u64).sum::<u64>(), "raw bytes, for the cap");
++            assert_eq!(
++                w.content_bytes(),
++                files.iter().map(|(_, c)| c.len() as u64).sum::<u64>(),
++                "raw bytes, for the cap"
++            );
+             w.finish().unwrap();
+             let s = MAPPED.open(&path).unwrap();
+             let mut buf = Vec::new();
+@@ -1250,7 +1300,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn unit_content_reads_only_the_asked_units_with_their_line_numbers() {
++    fn visits_only_the_asked_units_with_their_line_numbers() {
+         let dir = tempfile::tempdir().unwrap();
+         // A small doc, then one of many units, as the indexer splits it.
+         let big: Vec<u8> = (0..30_000).flat_map(|i| format!("line {i} = value({});\n", i % 13).into_bytes()).collect();
+@@ -1270,33 +1320,132 @@ mod tests {
+             let s = MAPPED.open(&path).unwrap();
+             // big.rs is doc 1 and its units start at 1, after small.rs's one.
+             let unit = |k: usize| UnitId::try_from(1 + k).unwrap();
+-            let line_of = |at: usize| big[..at].iter().filter(|&&b| b == b'\n').count() as u64 + 1;
+-            // Units 1 and 2 are adjacent and come back as one run; 4 is its own; the last
+-            // unit ends the doc.
++            let line_of = |at: usize| memchr::memchr_iter(b'\n', &big[..at]).count() as u64 + 1;
++            // Raw adjacent units can be borrowed together; compressed units are decoded
++            // one at a time. Both must cover exactly the requested lines, in file order.
+             let last = spans.len() - 1;
+             let asked = [unit(1), unit(2), unit(4), unit(last)];
+             let mut buf = Vec::new();
+-            let pieces = s.unit_content(1, &asked, &mut buf).unwrap();
+-            let want = [spans[1].start..spans[2].end, spans[4].clone(), spans[last].clone()];
+-            assert_eq!(pieces.runs.len(), want.len(), "{:?}", backend.codec);
+-            for (run, w) in pieces.runs.iter().zip(&want) {
+-                assert_eq!(&pieces.bytes[run.range.clone()], &big[w.clone()], "{:?}", backend.codec);
+-                assert_eq!(run.first_line, line_of(w.start), "{:?}", backend.codec);
+-            }
++            let mut actual = Vec::new();
++            let mut next = 0;
++            s.visit_content(Want { doc: 1, extent: Extent::Units(&asked) }, &mut buf, &mut |bytes, line| {
++                let at = asked[next] as usize - 1;
++                assert_eq!(line, line_of(spans[at].start));
++                actual.extend_from_slice(bytes);
++                let mut consumed = 0;
++                while consumed < bytes.len() {
++                    consumed += spans[asked[next] as usize - 1].len();
++                    next += 1;
++                }
++                assert_eq!(consumed, bytes.len());
++                Ok(true)
++            })
++            .unwrap();
++            let expected: Vec<u8> =
++                asked.iter().flat_map(|&u| big[spans[u as usize - 1].clone()].iter().copied()).collect();
++            assert_eq!(actual, expected);
++            assert_eq!(next, asked.len());
+             // The first unit starts on line 1; the small doc is its own single unit.
+-            let first = s.unit_content(1, &[unit(0)], &mut buf).unwrap();
+-            assert_eq!(first.runs, vec![Run { first_line: 1, range: spans[0].clone() }]);
+-            let small = s.unit_content(0, &[0], &mut buf).unwrap();
+-            assert_eq!(&small.bytes[small.runs[0].range.clone()], b"fn x() {}\n");
++            s.visit_content(Want { doc: 1, extent: Extent::Units(&[unit(0)]) }, &mut buf, &mut |bytes, line| {
++                assert_eq!(line, 1);
++                assert_eq!(bytes, &big[spans[0].clone()]);
++                Ok(true)
++            })
++            .unwrap();
++            s.visit_content(Want { doc: 0, extent: Extent::Units(&[0]) }, &mut buf, &mut |bytes, line| {
++                assert_eq!(line, 1);
++                assert_eq!(bytes, b"fn x() {}\n");
++                Ok(true)
++            })
++            .unwrap();
+             // A unit of another doc, unsorted units and no units are refused.
+-            assert!(s.unit_content(0, &[1], &mut buf).is_err());
+-            assert!(s.unit_content(1, &[unit(2), unit(1)], &mut buf).is_err());
+-            assert!(s.unit_content(1, &[], &mut buf).is_err());
++            for (doc, units) in [(0, vec![1]), (1, vec![unit(2), unit(1)]), (1, vec![])] {
++                assert!(
++                    s.visit_content(Want { doc, extent: Extent::Units(&units) }, &mut buf, &mut |_, _| Ok(true))
++                        .is_err()
++                );
++            }
+             s.prefetch(&[Want { doc: 1, extent: Extent::Units(&asked) }, Want { doc: 0, extent: Extent::Whole }])
+                 .unwrap();
+         }
+     }
+ 
++    #[test]
++    fn stopped_visits_never_decode_later_payloads() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("lazy.native");
++        let text = b"needle in a compressible line\n".repeat(12_000);
++        let spans = unit_spans(&text, UNIT_TARGET);
++        assert!(spans.len() > 2);
++        let mut ex = TrigramExtractor::default();
++        let units: Vec<Vec<Trigram>> = spans.iter().map(|r| ex.extract(&text[r.clone()]).to_vec()).collect();
++        let mut w = LZ4.create(&path).unwrap();
++        w.add(&FileMeta { path: "large.txt".into(), size: text.len() as u64, mtime_ns: 0 }, &text, &units).unwrap();
++        w.finish().unwrap();
++        let shard = NativeShard::open(&path, FilterHome::Map).unwrap();
++        let stored = shard.stored(0).unwrap();
++        let second = stored.blocks.start + 1;
++        let start = stored.bytes.start + shard.block(stored.blocks.start).0;
++        let packed = shard.block(second).0;
++        drop(shard);
++        // Metadata remains valid; only decoding the second block can discover the bad
++        // payload. An eager implementation therefore fails even when the visitor stops.
++        let mut bytes = std::fs::read(&path).unwrap();
++        bytes[start..start + packed].fill(0);
++        std::fs::write(&path, bytes).unwrap();
++        let shard = NativeShard::open(&path, FilterHome::Map).unwrap();
++        let mut buf = Vec::new();
++        for extent in [Extent::Whole, Extent::Units(&[0, 1])] {
++            let mut calls = 0;
++            shard
++                .visit_content(Want { doc: 0, extent }, &mut buf, &mut |bytes, line| {
++                    calls += 1;
++                    assert_eq!(bytes, &text[spans[0].clone()]);
++                    assert_eq!(line, 1);
++                    Ok(false)
++                })
++                .unwrap();
++            assert_eq!(calls, 1);
++            assert!(shard.visit_content(Want { doc: 0, extent }, &mut buf, &mut |_, _| Ok(true)).is_err());
++        }
++        assert!(shard.content(0, &mut buf).is_err());
++    }
++
++    #[test]
++    fn initialized_decode_storage_survives_smaller_reads_without_exposing_stale_bytes() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("reuse.native");
++        let big = b"a long repeated line of text\n".repeat(9_000);
++        let small = b"different short line\n".repeat(8);
++        let files: [&[u8]; 3] = [&big, &small, b""];
++        let mut ex = TrigramExtractor::default();
++        let mut w = LZ4.create(&path).unwrap();
++        for text in files {
++            let units: Vec<Vec<Trigram>> =
++                unit_spans(text, UNIT_TARGET).iter().map(|r| ex.extract(&text[r.clone()]).to_vec()).collect();
++            w.add(&FileMeta { path: "text".into(), size: text.len() as u64, mtime_ns: 0 }, text, &units).unwrap();
++        }
++        w.finish().unwrap();
++        let shard = LZ4.open(&path).unwrap();
++        let mut buf = vec![0xA5; big.len() + 7];
++        let (ptr, initialized) = (buf.as_ptr(), buf.len());
++        for doc in [0, 1, 2, 1, 0] {
++            assert_eq!(shard.content(doc, &mut buf).unwrap(), files[doc as usize]);
++            assert_eq!(buf.as_ptr(), ptr);
++            assert_eq!(buf.len(), initialized, "smaller reads must retain initialized storage");
++        }
++        let mut actual = Vec::new();
++        shard
++            .visit_content(Want { doc: 0, extent: Extent::Whole }, &mut buf, &mut |bytes, _| {
++                actual.extend_from_slice(bytes);
++                Ok(true)
++            })
++            .unwrap();
++        assert_eq!(actual, big);
++        assert_eq!(buf.as_ptr(), ptr);
++        assert_eq!(buf.len(), initialized);
++    }
++
+     #[test]
+     fn rejects_garbage() {
+         let dir = tempfile::tempdir().unwrap();
+diff --git "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-index-sqlite/src/lib.rs" b/crates/scout-index-sqlite/src/lib.rs
+index 89d8670..9a042ae 100644
+--- "a/\\\\wsl.localhost\\Ubuntu\\home\\keegan\\scout-lazy-baseline-20261027\\crates/scout-index-sqlite/src/lib.rs"
++++ b/crates/scout-index-sqlite/src/lib.rs
+@@ -11,7 +11,7 @@ use std::sync::Mutex;
+ 
+ use rusqlite::{Connection, OpenFlags, params};
+ use scout_core::ports::{
+-    DocId, DocMeta, FileMeta, IndexBackend, Markers, Pieces, Run, Shard, ShardWriter, UnitId, Want,
++    BlockVisitor, DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+ };
+ use scout_core::trigram::Trigram;
+ use scout_core::{Error, Result};
+@@ -285,11 +285,10 @@ impl Shard for SqliteShard {
+         Ok(buf)
+     }
+ 
+-    /// SQLite stores a doc as one row with no unit boundaries, so the whole doc is the one
+-    /// run, from line 1: the contract allows more than asked.
+-    fn unit_content<'a>(&'a self, doc: DocId, _: &[UnitId], buf: &'a mut Vec<u8>) -> Result<Pieces<'a>> {
+-        let bytes = self.content(doc, buf)?;
+-        Ok(Pieces { runs: vec![Run { first_line: 1, range: 0..bytes.len() }], bytes })
++    /// SQLite stores a document as one BLOB, so that row is its read granularity.
++    fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()> {
++        visit(self.content(want.doc, buf)?, 1)?;
++        Ok(())
+     }
+ 
+     /// SQLite reads a page when a query asks for it, with no call that queues reads ahead,

@@ -90,6 +90,20 @@ pub enum PlanCase {
 
 /// Plans a trigram query for `pattern`, parsed with the same flags rg gives its matcher.
 pub fn plan(pattern: &str, case: PlanCase) -> Result<Query> {
+    analyze(pattern, case).map(|analysis| analysis.query)
+}
+
+pub(crate) struct Analysis {
+    pub query: Query,
+    pub whole_file: bool,
+    /// Only an exact, nonempty literal with no line terminator can use byte search.
+    pub literal: Option<Vec<u8>>,
+    pub shape: Option<crate::shape::ShapeQuery>,
+}
+
+/// Planning and whether the matcher has haystack anchors. Keep those on the existing
+/// whole-file search path: their exact behavior depends on the searcher's line strategy.
+pub(crate) fn analyze(pattern: &str, case: PlanCase) -> Result<Analysis> {
     let hir = regex_syntax::ParserBuilder::new()
         .case_insensitive(case == PlanCase::Insensitive)
         .multi_line(true)
@@ -100,7 +114,14 @@ pub fn plan(pattern: &str, case: PlanCase) -> Result<Query> {
         .build()
         .parse(pattern)
         .map_err(|e| Error::Pattern(e.to_string()))?;
-    Ok(info(&hir).into_query())
+    let whole_file = hir.properties().look_set().contains_anchor_haystack();
+    let literal = match hir.kind() {
+        HirKind::Literal(literal) if !literal.0.is_empty() && !literal.0.contains(&b'\n') => Some(literal.0.to_vec()),
+        _ => None,
+    };
+    let query = info(&hir).into_query();
+    let shape = if query == Query::All { crate::shape::ShapeQuery::from_hir(&hir) } else { None };
+    Ok(Analysis { query, whole_file, literal, shape })
 }
 
 /// Upper bound on set sizes before we give up exactness. Keeps planning O(pattern) and
@@ -195,12 +216,16 @@ impl Info {
     }
 }
 
-/// OR over strings, each string an AND of its trigrams. A string shorter than 3 bytes
-/// constrains nothing, which makes the whole OR unconstrained.
+/// OR over strings, each string an AND of its trigrams, or one tagged pair for a
+/// two-byte literal. A one-byte alternative leaves the OR unconstrained.
 fn or_trigrams(set: &Set) -> Query {
     let mut alts = Vec::with_capacity(set.len());
     for s in set {
-        if s.len() < 3 {
+        if s.len() == 2 {
+            alts.push(Query::Tri(Trigram::from_pair(s[0], s[1])));
+            continue;
+        }
+        if s.len() < 2 {
             return Query::All;
         }
         alts.push(Query::and(s.windows(3).map(|w| Query::Tri(Trigram::from_bytes(w[0], w[1], w[2]))).collect()));
@@ -371,7 +396,7 @@ mod tests {
 
     #[test]
     fn short_or_unbounded_patterns_are_unconstrained() {
-        assert_eq!(p("ab"), Query::All);
+        assert_eq!(p("ab"), Query::Tri(Trigram::from_pair(b'a', b'b')));
         assert_eq!(p("."), Query::All);
         assert_eq!(p(".*"), Query::All);
         assert_eq!(p("a*b*c*"), Query::All);

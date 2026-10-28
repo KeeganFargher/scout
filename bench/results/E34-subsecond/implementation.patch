@@ -1,0 +1,1678 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 0f3ddd1..a69a530 100755
+--- a/Cargo.toml
++++ b/Cargo.toml	
+@@ -27,8 +27,10 @@ ignore = { path = "vendor/ripgrep/crates/ignore" }
+ 
+ regex-syntax = "0.8.11"
+ memchr = "2.8"
++itoa = "1"
++lz4 = "1.28.1"
+ memmap2 = "0.9"
+-# Safe encoder and decoder only (no unsafe paths); block format, no frames.
++# Safe Rust block encoder (no frames). Reads use the bounds-checked reference decoder.
+ lz4_flex = { version = "0.11.6", default-features = false, features = [
+   "std",
+   "safe-encode",
+diff --git a/Cargo.lock b/Cargo.lock
+index cd9f44c..d4881a7 100755
+--- a/Cargo.lock
++++ b/Cargo.lock	
+@@ -612,6 +612,25 @@ version = "0.4.34"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+ 
++[[package]]
++name = "lz4"
++version = "1.28.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a20b523e860d03443e98350ceaac5e71c6ba89aea7d960769ec3ce37f4de5af4"
++dependencies = [
++ "lz4-sys",
++]
++
++[[package]]
++name = "lz4-sys"
++version = "1.11.1+lz4-1.10.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6bd8c0d6c6ed0cd30b3652886bb8711dc4bb01d637a68105a3d5158039b418e6"
++dependencies = [
++ "cc",
++ "libc",
++]
++
+ [[package]]
+ name = "lz4_flex"
+ version = "0.11.6"
+@@ -873,6 +892,7 @@ dependencies = [
+  "grep-printer",
+  "grep-regex",
+  "grep-searcher",
++ "itoa",
+  "memchr",
+  "regex-syntax",
+  "serde",
+@@ -885,6 +905,9 @@ dependencies = [
+ name = "scout-index-native"
+ version = "0.1.0"
+ dependencies = [
++ "grep-matcher",
++ "grep-regex",
++ "lz4",
+  "lz4_flex",
+  "memchr",
+  "memmap2",
+diff --git a/crates/scout-cli/tests/units.rs b/crates/scout-cli/tests/units.rs
+index c880eb2..8594355 100755
+--- a/crates/scout-cli/tests/units.rs
++++ b/crates/scout-cli/tests/units.rs	
+@@ -92,7 +92,7 @@ fn block_semantics(index_args: &[&str]) {
+         [format!("{path}:1:needle needle\n"), format!("{path}:1302:needle middle\n"), format!("{path}:2603:needle\n")];
+     // The short alternation branch makes the plan All. It must still decode lazily,
+     // share a match budget across blocks, and emit one count/path per file.
+-    for pattern in ["needle", "needle|xy"] {
++    for pattern in ["needle", "needle|z"] {
+         for limit in [0, 1, 2, 3, 9] {
+             let count = limit.min(3);
+             let n = limit.to_string();
+@@ -135,3 +135,58 @@ fn lz4_blocks_keep_file_wide_printer_semantics() {
+ fn sqlite_keeps_file_wide_printer_semantics() {
+     block_semantics(&["--backend", "sqlite"]);
+ }
++
++fn shape_semantics(index_args: &[&str]) {
++    let tmp = tempfile::tempdir().unwrap();
++    let repo = tmp.path().join("repo");
++    let index = tmp.path().join("index");
++    std::fs::create_dir_all(&repo).unwrap();
++    let dates = ["2026-10-27", "٢٠٢٦-١٠-٢٧", "２０２６-１０-２７"];
++    for (i, date) in dates.iter().enumerate() {
++        std::fs::write(repo.join(format!("{i}.txt")), format!("{}date {date}\n", filler())).unwrap();
++    }
++    std::fs::write(repo.join("negative.txt"), "Copyright 2012-2026\nordinary code\n").unwrap();
++    let utf16: Vec<u8> =
++        [0xFF, 0xFE].into_iter().chain("date 2026-10-27\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
++    std::fs::write(repo.join("utf16.txt"), utf16).unwrap();
++    scout(&index, &["add", repo.to_str().unwrap()]);
++    scout(&index, &[&["index"], index_args].concat());
++    let path = |name: &str| format!("{}{}{name}", repo.display(), std::path::MAIN_SEPARATOR);
++    let expected: String = dates
++        .iter()
++        .enumerate()
++        .map(|(i, date)| format!("{}:1301:date {date}\n", path(&format!("{i}.txt"))))
++        .chain(std::iter::once(format!("{}:1:date 2026-10-27\n", path("utf16.txt"))))
++        .collect();
++    let pattern = r"\d{4}-\d{2}-\d{2}";
++    let (actual, stats) = scout(&index, &["search", "--freshness", "off", "--stats", "-n", pattern]);
++    assert_eq!(actual, expected);
++    assert_eq!(stat(&stats, "candidates"), 4, "the negative file must be rejected before verification");
++    let mut files = String::new();
++    for file in (0..3).map(|i| path(&format!("{i}.txt"))).chain(std::iter::once(path("utf16.txt"))) {
++        files.push_str(&file);
++        files.push('\n');
++    }
++    assert_eq!(scout(&index, &["search", "-l", pattern]).0, files);
++    let mut counts = String::new();
++    for file in files.lines() {
++        counts.push_str(file);
++        counts.push_str(":1\n");
++    }
++    assert_eq!(scout(&index, &["search", "-c", pattern]).0, counts);
++}
++
++#[test]
++fn raw_shape_filter_keeps_unicode_and_reader_matches() {
++    shape_semantics(&["--content", "raw"]);
++}
++
++#[test]
++fn lz4_shape_filter_keeps_unicode_and_reader_matches() {
++    shape_semantics(&["--content", "lz4"]);
++}
++
++#[test]
++fn sqlite_shape_filter_keeps_unicode_and_reader_matches() {
++    shape_semantics(&["--backend", "sqlite"]);
++}
+diff --git a/crates/scout-core/Cargo.toml b/crates/scout-core/Cargo.toml
+index 2dd42b4..5a8154a 100755
+--- a/crates/scout-core/Cargo.toml
++++ b/crates/scout-core/Cargo.toml	
+@@ -12,6 +12,7 @@ grep-printer.workspace = true
+ grep-regex.workspace = true
+ grep-searcher.workspace = true
+ memchr.workspace = true
++itoa.workspace = true
+ regex-syntax.workspace = true
+ serde.workspace = true
+ termcolor = "1.4"
+diff --git a/crates/scout-core/src/lib.rs b/crates/scout-core/src/lib.rs
+index 33c8fe4..610868c 100755
+--- a/crates/scout-core/src/lib.rs
++++ b/crates/scout-core/src/lib.rs	
+@@ -13,6 +13,7 @@ pub mod query;
+ pub mod rank;
+ pub mod ranked;
+ pub mod search;
++pub mod shape;
+ pub mod snapshots;
+ pub mod trigram;
+ 
+diff --git a/crates/scout-core/src/ports.rs b/crates/scout-core/src/ports.rs
+index 5fb99e0..f1aff0e 100755
+--- a/crates/scout-core/src/ports.rs
++++ b/crates/scout-core/src/ports.rs	
+@@ -163,6 +163,9 @@ pub trait Shard: Send + Sync {
+ 
+     fn meta(&self, doc: DocId) -> Result<DocMeta<'_>>;
+ 
++    /// Conservative character-shape summary, read without decoding document content.
++    fn shape_mask(&self, doc: DocId) -> Result<crate::shape::ShapeMask>;
++
+     /// Sorted ids of units containing `tri`; empty when the trigram is absent.
+     fn postings(&self, tri: Trigram) -> Result<Vec<UnitId>>;
+ 
+diff --git a/crates/scout-core/src/query.rs b/crates/scout-core/src/query.rs
+index e6ae36a..0c92477 100755
+--- a/crates/scout-core/src/query.rs
++++ b/crates/scout-core/src/query.rs	
+@@ -90,12 +90,20 @@ pub enum PlanCase {
+ 
+ /// Plans a trigram query for `pattern`, parsed with the same flags rg gives its matcher.
+ pub fn plan(pattern: &str, case: PlanCase) -> Result<Query> {
+-    analyze(pattern, case).map(|(query, _)| query)
++    analyze(pattern, case).map(|analysis| analysis.query)
++}
++
++pub(crate) struct Analysis {
++    pub query: Query,
++    pub whole_file: bool,
++    /// Only an exact, nonempty literal with no line terminator can use byte search.
++    pub literal: Option<Vec<u8>>,
++    pub shape: Option<crate::shape::ShapeQuery>,
+ }
+ 
+ /// Planning and whether the matcher has haystack anchors. Keep those on the existing
+ /// whole-file search path: their exact behavior depends on the searcher's line strategy.
+-pub(crate) fn analyze(pattern: &str, case: PlanCase) -> Result<(Query, bool)> {
++pub(crate) fn analyze(pattern: &str, case: PlanCase) -> Result<Analysis> {
+     let hir = regex_syntax::ParserBuilder::new()
+         .case_insensitive(case == PlanCase::Insensitive)
+         .multi_line(true)
+@@ -106,8 +114,14 @@ pub(crate) fn analyze(pattern: &str, case: PlanCase) -> Result<(Query, bool)> {
+         .build()
+         .parse(pattern)
+         .map_err(|e| Error::Pattern(e.to_string()))?;
+-    let whole = hir.properties().look_set().contains_anchor_haystack();
+-    Ok((info(&hir).into_query(), whole))
++    let whole_file = hir.properties().look_set().contains_anchor_haystack();
++    let literal = match hir.kind() {
++        HirKind::Literal(literal) if !literal.0.is_empty() && !literal.0.contains(&b'\n') => Some(literal.0.to_vec()),
++        _ => None,
++    };
++    let query = info(&hir).into_query();
++    let shape = if query == Query::All { crate::shape::ShapeQuery::from_hir(&hir) } else { None };
++    Ok(Analysis { query, whole_file, literal, shape })
+ }
+ 
+ /// Upper bound on set sizes before we give up exactness. Keeps planning O(pattern) and
+@@ -202,12 +216,16 @@ impl Info {
+     }
+ }
+ 
+-/// OR over strings, each string an AND of its trigrams. A string shorter than 3 bytes
+-/// constrains nothing, which makes the whole OR unconstrained.
++/// OR over strings, each string an AND of its trigrams, or one tagged pair for a
++/// two-byte literal. A one-byte alternative leaves the OR unconstrained.
+ fn or_trigrams(set: &Set) -> Query {
+     let mut alts = Vec::with_capacity(set.len());
+     for s in set {
+-        if s.len() < 3 {
++        if s.len() == 2 {
++            alts.push(Query::Tri(Trigram::from_pair(s[0], s[1])));
++            continue;
++        }
++        if s.len() < 2 {
+             return Query::All;
+         }
+         alts.push(Query::and(s.windows(3).map(|w| Query::Tri(Trigram::from_bytes(w[0], w[1], w[2]))).collect()));
+@@ -378,7 +396,7 @@ mod tests {
+ 
+     #[test]
+     fn short_or_unbounded_patterns_are_unconstrained() {
+-        assert_eq!(p("ab"), Query::All);
++        assert_eq!(p("ab"), Query::Tri(Trigram::from_pair(b'a', b'b')));
+         assert_eq!(p("."), Query::All);
+         assert_eq!(p(".*"), Query::All);
+         assert_eq!(p("a*b*c*"), Query::All);
+diff --git a/crates/scout-core/src/search.rs b/crates/scout-core/src/search.rs
+index 8284439..c1b8c82 100755
+--- a/crates/scout-core/src/search.rs
++++ b/crates/scout-core/src/search.rs	
+@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
+ 
+ use grep_printer::{Standard, StandardBuilder, Summary, SummaryBuilder, SummaryKind};
+ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+-use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch};
++use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
++use memchr::memmem::Finder;
+ use termcolor::NoColor;
+ 
+ use crate::indexer::UNIT_TARGET;
+@@ -185,7 +186,11 @@ fn search_chunked(
+     }
+     let pattern = if opts.fixed_strings { regex_syntax::escape(&opts.pattern) } else { opts.pattern.clone() };
+     let plan_case = if opts.case == CaseMode::Sensitive { PlanCase::Sensitive } else { PlanCase::Insensitive };
+-    let (query, whole_file) = analyze(&pattern, plan_case)?;
++    let analysis = analyze(&pattern, plan_case)?;
++    let query = analysis.query;
++    // Inline flags are already reflected in the HIR: a folded letter class is not a
++    // literal. Word-boundary matching and runtime case folding use the regex strategy.
++    let literal = if opts.case == CaseMode::Sensitive && !opts.word { analysis.literal } else { None };
+     let matcher = build_matcher(&pattern, opts)?;
+     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
+     // One thread verifies chunks in order whatever their size, so finding boundaries (a
+@@ -198,7 +203,7 @@ fn search_chunked(
+     let planned = parallel_indexed(opts.threads, repos.len(), |i| {
+         let repo = repos[i];
+         let mut s = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
+-        let plan = plan_repo(repo, &query, opts, &mut s).map_err(|e| in_repo(repo, e))?;
++        let plan = plan_repo(repo, &query, analysis.shape.as_ref(), opts, &mut s).map_err(|e| in_repo(repo, e))?;
+         let chunks = chunk_repo(repo, &plan, chunk_bytes).map_err(|e| in_repo(repo, e))?;
+         Ok((plan, s, chunks))
+     })?;
+@@ -216,7 +221,8 @@ fn search_chunked(
+     // 0..k, so output is the same as verifying everything in order on one thread.
+     let phase2 = Verify {
+         opts,
+-        reading: if whole_file { Reading::Whole } else { Reading::Units },
++        reading: if analysis.whole_file { Reading::Whole } else { Reading::Units },
++        literal: literal.as_deref().map(Finder::new),
+         repos,
+         plans: &plans,
+         chunks: &chunks,
+@@ -241,6 +247,7 @@ fn search_chunked(
+ struct Verify<'a> {
+     opts: &'a SearchOptions,
+     reading: Reading,
++    literal: Option<Finder<'a>>,
+     repos: &'a [&'a RepoHandle],
+     plans: &'a [RepoPlan],
+     chunks: &'a [Chunk],
+@@ -249,26 +256,37 @@ struct Verify<'a> {
+ }
+ 
+ impl Verify<'_> {
+-    fn verify(&self, chunk: &Chunk, matcher: &RegexMatcher, searcher: &mut Searcher) -> Result<(Vec<u8>, SearchStats)> {
++    fn verify(
++        &self,
++        chunk: &Chunk,
++        matcher: &RegexMatcher,
++        searcher: &mut Searcher,
++        buf: Vec<u8>,
++    ) -> Result<(Vec<u8>, SearchStats)> {
+         let repo = self.repos[chunk.repo];
+-        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self).map_err(|e| in_repo(repo, e))
++        search_chunk(repo, &self.plans[chunk.repo], &chunk.part, matcher, searcher, self, buf)
++            .map_err(|e| in_repo(repo, e))
+     }
+ 
+     /// No thread to spawn and nothing to reorder: verify in order on this thread. In a
+     /// server a 5 ms search would otherwise pay a spawn per phase (E16).
+     fn inline(&self, out: &mut dyn Write, stats: &mut SearchStats) -> Result<()> {
+         let mut searcher = build_searcher(self.opts);
++        let mut spare = Vec::new();
+         for chunk in self.chunks {
+-            let (buf, s) = self.verify(chunk, self.matcher, &mut searcher)?;
++            let (buf, s) = self.verify(chunk, self.matcher, &mut searcher, std::mem::take(&mut spare))?;
+             stats.merge(&s);
+             out.write_all(&buf).map_err(|e| Error::io("<stdout>", e))?;
++            if buf.capacity() <= REUSE_OUTPUT_BYTES {
++                spare = buf;
++            }
+         }
+         Ok(())
+     }
+ 
+     fn parallel(&self, workers: usize, out: &mut dyn Write, stats: &mut SearchStats) -> Result<()> {
+         let next = AtomicUsize::new(0);
+-        let flow = Mutex::new(Flow { emit: 0, buffered: 0, done: false });
++        let flow = Mutex::new(Flow { emit: 0, buffered: 0, done: false, spares: Vec::new() });
+         let advanced = Condvar::new();
+         // Set on the first error: no point claiming more chunks.
+         let stop = AtomicBool::new(false);
+@@ -287,7 +305,7 @@ impl Verify<'_> {
+                     while !stop.load(Ordering::Relaxed) {
+                         let k = next.fetch_add(1, Ordering::Relaxed);
+                         let Some(chunk) = self.chunks.get(k) else { break };
+-                        {
++                        let buf = {
+                             let mut f = flow.lock().unwrap_or_else(PoisonError::into_inner);
+                             // The next chunk to print always runs, so the printer always
+                             // progresses; so does every chunk before a failing one, which is
+@@ -298,8 +316,9 @@ impl Verify<'_> {
+                             if f.done {
+                                 return;
+                             }
+-                        }
+-                        let r = self.verify(chunk, &matcher, &mut searcher);
++                            f.spares.pop().unwrap_or_default()
++                        };
++                        let r = self.verify(chunk, &matcher, &mut searcher, buf);
+                         if let Ok((buf, _)) = &r {
+                             flow.lock().unwrap_or_else(PoisonError::into_inner).buffered += buf.len();
+                         }
+@@ -328,6 +347,9 @@ impl Verify<'_> {
+                         let mut f = flow.lock().unwrap_or_else(PoisonError::into_inner);
+                         f.emit = emit;
+                         f.buffered -= buf.len();
++                        if f.spares.len() < workers.min(4) && buf.capacity() <= REUSE_OUTPUT_BYTES {
++                            f.spares.push(buf);
++                        }
+                         advanced.notify_all();
+                     }
+                 }
+@@ -349,6 +371,10 @@ impl Verify<'_> {
+ /// search holds at most one more chunk's output per worker.
+ const REORDER_BYTES: usize = 64 << 20;
+ 
++// Recycling avoids growing and copying a fresh Vec for every output chunk. Retain
++// at most four ordinary chunks (32 MiB), never a giant single file's output buffer.
++const REUSE_OUTPUT_BYTES: usize = 8 << 20;
++
+ /// The printer's progress, shared with the workers.
+ struct Flow {
+     /// The next chunk to print.
+@@ -357,6 +383,8 @@ struct Flow {
+     buffered: usize,
+     /// The printer has returned: nothing more will be consumed.
+     done: bool,
++    /// Already printed buffers, cleared when the next printer takes ownership.
++    spares: Vec<Vec<u8>>,
+ }
+ 
+ fn release(stop: &AtomicBool, flow: &Mutex<Flow>, advanced: &Condvar) {
+@@ -478,7 +506,12 @@ pub(crate) enum Printer {
+ 
+ impl Printer {
+     pub(crate) fn new(mode: OutputMode) -> Self {
+-        let buf = NoColor::new(Vec::new());
++        Self::with_buffer(mode, Vec::new())
++    }
++
++    fn with_buffer(mode: OutputMode, mut bytes: Vec<u8>) -> Self {
++        bytes.clear();
++        let buf = NoColor::new(bytes);
+         match mode {
+             OutputMode::Lines => Self::Lines(StandardBuilder::new().heading(false).path(true).build(buf)),
+             OutputMode::FilesWithMatches => {
+@@ -515,22 +548,49 @@ impl Printer {
+         doc: IndexedDoc<'_>,
+         buf: &mut Vec<u8>,
+         opts: &SearchOptions,
++        literal: Option<&Finder<'_>>,
+     ) -> Result<bool> {
+-        // Reader-mode binary/BOM behavior and haystack anchors depend on the entire
+-        // document. Small files already occupy one block and need no visitor machinery.
+-        if !doc.split || matches!(doc.mode, Mode::Reader) || doc.size <= UNIT_TARGET as u64 {
++        // The reader owns binary warnings, BOM removal and transcoding. Indexed plain
++        // text needs only filenames, line numbers and bytes, without a printer path
++        // allocation and general-purpose sink construction for every file.
++        if matches!(doc.mode, Mode::Reader) {
+             let content = doc.shard.content(doc.want.doc, buf)?;
+             return self.search(searcher, matcher, Doc { path: doc.path, content, mode: doc.mode, first_line: 1 });
+         }
+-        match self {
+-            Self::Lines(p) => {
+-                let sink = p.sink_with_path(matcher, doc.path);
+-                search_blocks(searcher, matcher, sink, doc, buf, opts)
+-            }
+-            Self::Summary(p) => {
+-                let sink = p.sink_with_path(matcher, doc.path);
+-                search_blocks(searcher, matcher, sink, doc, buf, opts)
++        if opts.max_count == Some(0) {
++            return Ok(false);
++        }
++        let path = doc.path;
++        let path_len = path.len();
++        if opts.output == OutputMode::Lines {
++            // Copy the separator with the filename instead of pushing it millions of
++            // times. display_path reserves this extra byte in its original allocation.
++            path.push(':');
++        }
++        let mut sink = TextSink { out: self.bytes_mut(), path, opts, matches: 0, keep_going: true };
++        let mut visit = |bytes: &[u8], first_line| -> Result<bool> {
++            check_deadline(opts)?;
++            if let Some(finder) = literal {
++                sink.literal(finder, bytes, first_line);
++            } else {
++                searcher.set_first_line_number(first_line);
++                searcher.search_slice(matcher, bytes, &mut sink).map_err(|e| Error::io(&path[..path_len], e))?;
+             }
++            Ok(sink.keep_going)
++        };
++        if !doc.split || doc.size <= UNIT_TARGET as u64 {
++            visit(doc.shard.content(doc.want.doc, buf)?, 1)?;
++        } else {
++            doc.shard.visit_content(doc.want, buf, &mut visit)?;
++        }
++        sink.finish_file();
++        Ok(sink.matches > 0)
++    }
++
++    fn bytes_mut(&mut self) -> &mut Vec<u8> {
++        match self {
++            Self::Lines(p) => p.get_mut().get_mut(),
++            Self::Summary(p) => p.get_mut().get_mut(),
+         }
+     }
+ 
+@@ -550,58 +610,96 @@ impl Printer {
+     }
+ }
+ 
+-/// A printer sink lives for the whole file: restarting it for each decoded block would
+-/// print several counts/filenames and reset `-m`. Only line-aligned plain text uses this;
+-/// its finish metadata carries no binary offset and the printers do not request stats.
+-struct BlockSink<S> {
+-    sink: S,
++/// The exact output contract for indexed plain text. One state spans the file's runs,
++/// so one matched line counts once even if the literal occurs many times on that line.
++struct TextSink<'a> {
++    out: &'a mut Vec<u8>,
++    path: &'a str,
++    opts: &'a SearchOptions,
+     matches: u64,
+-    limit: Option<u64>,
+     keep_going: bool,
+-    finish: Option<SinkFinish>,
+ }
+ 
+-impl<S: Sink<Error = std::io::Error>> Sink for BlockSink<S> {
+-    type Error = std::io::Error;
+-
+-    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> std::io::Result<bool> {
++impl TextSink<'_> {
++    fn line(&mut self, bytes: &[u8], number: u64) {
+         self.matches += 1;
+-        self.keep_going = self.sink.matched(searcher, mat)? && self.limit.is_none_or(|n| self.matches < n);
+-        Ok(self.keep_going)
++        if self.opts.output == OutputMode::Lines {
++            self.out.extend_from_slice(self.path.as_bytes());
++            if self.opts.line_number {
++                self.out.extend_from_slice(itoa::Buffer::new().format(number).as_bytes());
++                self.out.push(b':');
++            }
++            self.out.extend_from_slice(bytes);
++            if !bytes.ends_with(b"\n") {
++                self.out.push(b'\n');
++            }
++        }
++        self.keep_going = self.opts.output != OutputMode::FilesWithMatches
++            && self.opts.max_count.is_none_or(|limit| self.matches < limit);
+     }
+ 
+-    fn finish(&mut self, _: &Searcher, finish: &SinkFinish) -> std::io::Result<()> {
+-        self.finish = Some(finish.clone());
+-        Ok(())
++    fn finish_file(&mut self) {
++        if self.matches == 0 || self.opts.output == OutputMode::Lines {
++            return;
++        }
++        self.out.extend_from_slice(self.path.as_bytes());
++        if self.opts.output == OutputMode::Count {
++            self.out.push(b':');
++            self.out.extend_from_slice(itoa::Buffer::new().format(self.matches).as_bytes());
++        }
++        self.out.push(b'\n');
+     }
+-}
+ 
+-fn search_blocks<S: Sink<Error = std::io::Error>>(
+-    searcher: &mut Searcher,
+-    matcher: &RegexMatcher,
+-    mut sink: S,
+-    doc: IndexedDoc<'_>,
+-    buf: &mut Vec<u8>,
+-    opts: &SearchOptions,
+-) -> Result<bool> {
+-    if opts.max_count == Some(0) {
+-        return Ok(false);
+-    }
+-    let io = |e| Error::io(doc.path, e);
+-    let keep_going = sink.begin(searcher).map_err(io)?;
+-    let mut sink = BlockSink { sink, matches: 0, limit: opts.max_count, keep_going, finish: None };
+-    if keep_going {
+-        doc.shard.visit_content(doc.want, buf, &mut |bytes, first_line| {
+-            check_deadline(opts)?;
+-            searcher.set_first_line_number(first_line);
+-            searcher.search_slice(matcher, bytes, &mut sink).map_err(io)?;
+-            Ok(sink.keep_going)
+-        })?;
++    fn literal(&mut self, finder: &Finder<'_>, bytes: &[u8], first_line: u64) {
++        if self.opts.output == OutputMode::FilesWithMatches {
++            if finder.find(bytes).is_some() {
++                self.line(&[], first_line);
++            }
++            return;
++        }
++        let (mut at, mut number) = (0, first_line);
++        // The iterator retains memmem's prefilter state across hits. Starting a fresh
++        // search at every matching line repeatedly initializes that state on broad terms.
++        for found in finder.find_iter(bytes) {
++            if found < at {
++                continue;
++            }
++            let start = if self.opts.output == OutputMode::Lines {
++                if let Some(nl) = memchr::memrchr(b'\n', &bytes[at..found]) {
++                    if self.opts.line_number {
++                        number += 1 + memchr::memchr_iter(b'\n', &bytes[at..at + nl]).count() as u64;
++                    }
++                    at + nl + 1
++                } else {
++                    at
++                }
++            } else {
++                found
++            };
++            let end = memchr::memchr(b'\n', &bytes[found..]).map_or(bytes.len(), |nl| found + nl + 1);
++            self.line(&bytes[start..end], number);
++            if !self.keep_going || end == bytes.len() {
++                break;
++            }
++            at = end;
++            number += 1;
++        }
+     }
+-    if let Some(finish) = &sink.finish {
+-        sink.sink.finish(searcher, finish).map_err(io)?;
++}
++
++impl Sink for TextSink<'_> {
++    type Error = std::io::Error;
++
++    fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> std::io::Result<bool> {
++        let number = if self.opts.line_number {
++            mat.line_number()
++                .ok_or_else(|| std::io::Error::other("text search did not supply requested line numbers"))?
++        } else {
++            0
++        };
++        self.line(mat.bytes(), number);
++        Ok(self.keep_going)
+     }
+-    Ok(sink.matches > 0)
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+@@ -641,8 +739,15 @@ fn run<S: grep_searcher::Sink<Error = std::io::Error>>(
+ }
+ 
+ fn display_path(root: &str, rel: &str) -> String {
++    let mut s = String::new();
++    display_path_into(&mut s, root, rel);
++    s
++}
++
++fn display_path_into(s: &mut String, root: &str, rel: &str) {
+     let sep = std::path::MAIN_SEPARATOR;
+-    let mut s = String::with_capacity(root.len() + rel.len() + 1);
++    s.clear();
++    s.reserve(root.len() + rel.len() + 2);
+     s.push_str(root);
+     s.push(sep);
+     if sep == '/' {
+@@ -650,7 +755,6 @@ fn display_path(root: &str, rel: &str) -> String {
+     } else {
+         s.extend(rel.chars().map(|c| if c == '/' { sep } else { c }));
+     }
+-    s
+ }
+ 
+ /// Which indexed docs must be ignored (changed/deleted) and which source files must be
+@@ -755,11 +859,10 @@ pub(crate) enum Reading {
+     Units,
+ }
+ 
+-#[derive(Clone, Copy)]
+ struct IndexedDoc<'a> {
+     shard: &'a dyn Shard,
+     want: Want<'a>,
+-    path: &'a str,
++    path: &'a mut String,
+     mode: Mode,
+     size: u64,
+     split: bool,
+@@ -768,6 +871,7 @@ struct IndexedDoc<'a> {
+ pub(crate) fn plan_repo(
+     repo: &RepoHandle,
+     query: &Query,
++    shape: Option<&crate::shape::ShapeQuery>,
+     opts: &SearchOptions,
+     stats: &mut SearchStats,
+ ) -> Result<RepoPlan> {
+@@ -798,6 +902,19 @@ pub(crate) fn plan_repo(
+         if let Some(o) = &overlay {
+             cands.docs.retain(|c| !o.masked[si][c.doc as usize]);
+         }
++        if let Some(shape) = shape {
++            let mut kept = Vec::with_capacity(cands.docs.len());
++            for candidate in cands.docs {
++                // Reader-mode data may be transcoded or binary-truncated. Its source
++                // byte shapes do not constrain the matcher's transformed input.
++                if shard.markers().reader_mode.binary_search(&candidate.doc).is_ok()
++                    || shape.accepts(shard.shape_mask(candidate.doc)?)
++                {
++                    kept.push(candidate);
++                }
++            }
++            cands.docs = kept;
++        }
+         stats.candidates += cands.docs.len() as u64;
+         plan.candidates.push(cands);
+     }
+@@ -830,18 +947,20 @@ where
+     let mut ahead = ReadAhead::new(shard, &wants)?;
+     // Where compressed docs decode (E29); reused across the run.
+     let mut buf = Vec::new();
++    // Reuse path storage too: broad scans visit hundreds of thousands of files.
++    let mut path = String::new();
+     for (at, w) in wants.iter().enumerate() {
+         ahead.before(at)?;
+         let doc = w.doc;
+         let meta = shard.meta(doc)?;
+         // The shard's marker list, sorted: the docs rg reads through its reader (binary, BOM).
+         let mode = if shard.markers().reader_mode.binary_search(&doc).is_ok() { Mode::Reader } else { Mode::Slice };
+-        let path = display_path(root, &meta.path);
++        display_path_into(&mut path, root, &meta.path);
+         let loc = Loc::Indexed { shard: si, doc, mode };
+         let indexed = IndexedDoc {
+             shard,
+             want: *w,
+-            path: &path,
++            path: &mut path,
+             mode,
+             size: meta.size,
+             split: matches!(reading, Reading::Units),
+@@ -960,7 +1079,7 @@ pub(crate) fn walk_repo(
+     stats: &mut SearchStats,
+     mut visit: impl FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
+ ) -> Result<Option<Vec<u8>>> {
+-    let mut plan = plan_repo(repo, query, opts, stats)?;
++    let mut plan = plan_repo(repo, query, None, opts, stats)?;
+     for (si, cands) in plan.candidates.iter().enumerate() {
+         // Ranking scores whole docs.
+         visit_docs(repo, si, cands, 0..cands.docs.len(), Reading::Whole, stats, &mut |loc, rel, indexed, buf| {
+@@ -979,6 +1098,7 @@ fn search_chunk(
+     matcher: &RegexMatcher,
+     searcher: &mut Searcher,
+     context: &Verify<'_>,
++    buf: Vec<u8>,
+ ) -> Result<(Vec<u8>, SearchStats)> {
+     let opts = context.opts;
+     let produced = &context.produced;
+@@ -1008,7 +1128,7 @@ fn search_chunk(
+     };
+     let mut stats = SearchStats::default();
+     let t = Instant::now();
+-    let mut printer = Printer::new(opts.output);
++    let mut printer = Printer::with_buffer(opts.output, buf);
+     match part {
+         Part::Docs { shard, range } => {
+             visit_docs(
+@@ -1019,7 +1139,7 @@ fn search_chunk(
+                 context.reading,
+                 &mut stats,
+                 &mut |_, _, doc, buf| {
+-                    let hit = printer.search_indexed(searcher, matcher, doc, buf, opts)?;
++                    let hit = printer.search_indexed(searcher, matcher, doc, buf, opts, context.literal.as_ref())?;
+                     check(&mut printer)?;
+                     Ok(hit)
+                 },
+@@ -1277,6 +1397,9 @@ mod tests {
+         crate::ports::Markers { always_search: Vec::new(), reader_mode: Vec::new() };
+ 
+     impl Shard for MemShard {
++        fn shape_mask(&self, doc: DocId) -> Result<crate::shape::ShapeMask> {
++            Ok(crate::shape::ShapeMask::from_content(self.content(doc, &mut Vec::new())?))
++        }
+         fn doc_count(&self) -> u32 {
+             u32::try_from(self.0.len()).unwrap()
+         }
+@@ -1307,9 +1430,10 @@ mod tests {
+             }
+             Ok(content)
+         }
+-        /// Every doc is small, so a search reads them whole and never asks for units.
+-        fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
+-            unreachable!("small docs are read whole")
++        /// Memory storage has one borrowed span per document.
++        fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()> {
++            visit(self.content(want.doc, buf)?, 1)?;
++            Ok(())
+         }
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+             Ok(())
+@@ -1334,6 +1458,72 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn indexed_text_output_matches_the_rg_printers_on_byte_and_line_edges() {
++        let mut content =
++            b"needle needle\r\nhay\r\n\nNEEDLE\ninvalid \xff needle\nreturn return\nmetachar a.b\n".to_vec();
++        content.extend(std::iter::repeat_n(b'x', UNIT_TARGET + 17));
++        content.extend_from_slice(b"needle at unterminated end");
++        let repo = RepoHandle {
++            name: "memory".into(),
++            source: Box::new(MemSource("/root".into())),
++            shards: vec![Box::new(MemShard(vec![("name:colon.txt".into(), content.clone())]))],
++            snapshot: None,
++            listing_digest: None,
++        };
++        let path = display_path("/root", "name:colon.txt");
++        for (pattern, fixed) in [
++            ("needle", false),
++            ("e", false),
++            ("ee", false),
++            ("(?:needle)", false),
++            ("needle|xy", false),
++            ("(?i)needle", false),
++            ("", false),
++            (r"(?-u:\xFF)", false),
++            ("^needle", false),
++            (r"needle\b", false),
++            ("a.b", true),
++        ] {
++            for case in [CaseMode::Sensitive, CaseMode::Insensitive] {
++                for word in [false, true] {
++                    for output in [OutputMode::Lines, OutputMode::Count, OutputMode::FilesWithMatches] {
++                        for line_number in [false, true] {
++                            for max_count in [None, Some(0), Some(1), Some(2)] {
++                                let opts = SearchOptions {
++                                    pattern: pattern.into(),
++                                    fixed_strings: fixed,
++                                    case,
++                                    word,
++                                    line_number,
++                                    output,
++                                    max_count,
++                                    threads: 1,
++                                    freshness: Freshness::Off,
++                                    limits: Limits::default(),
++                                };
++                                let regex = if fixed { regex_syntax::escape(pattern) } else { pattern.into() };
++                                let matcher = build_matcher(&regex, &opts).unwrap();
++                                let mut printer = Printer::new(output);
++                                let expected_hit = printer
++                                    .search(
++                                        &mut build_searcher(&opts),
++                                        &matcher,
++                                        Doc { path: &path, content: &content, mode: Mode::Slice, first_line: 1 },
++                                    )
++                                    .unwrap();
++                                let mut actual = Vec::new();
++                                let report = search(&opts, &[&repo], &mut actual).unwrap();
++                                assert_eq!(actual, printer.into_bytes(), "{opts:?}");
++                                assert_eq!(report.stats.matched_files, u64::from(expected_hit), "{opts:?}");
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
+     #[test]
+     fn output_does_not_depend_on_chunking_or_threads() {
+         // Three repos of two shards; docs of varied sizes so chunk boundaries land
+@@ -1470,6 +1660,9 @@ mod tests {
+     }
+ 
+     impl Shard for ListShard {
++        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
++            unreachable!("posting tests do not filter shapes")
++        }
+         fn doc_count(&self) -> u32 {
+             100
+         }
+@@ -1631,6 +1824,9 @@ mod tests {
+     struct UnitDocs(Vec<DocId>);
+ 
+     impl Shard for UnitDocs {
++        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
++            unreachable!("unit mapping does not filter shapes")
++        }
+         fn doc_count(&self) -> u32 {
+             self.0.last().map_or(0, |d| d + 1)
+         }
+@@ -1728,6 +1924,9 @@ mod tests {
+     }
+ 
+     impl Shard for SizedShard {
++        fn shape_mask(&self, _: DocId) -> Result<crate::shape::ShapeMask> {
++            unreachable!("read ahead does not filter shapes")
++        }
+         fn doc_count(&self) -> u32 {
+             u32::try_from(self.sizes.len()).unwrap()
+         }
+diff --git a/crates/scout-core/src/shape.rs b/crates/scout-core/src/shape.rs
+new file mode 100755
+index 0000000..0187b37
+--- /dev/null
++++ b/crates/scout-core/src/shape.rs	
+@@ -0,0 +1,245 @@
++//! A conservative character-shape filter for regexes without literal trigrams.
++//! Four normalized characters retain punctuation around digit runs while collapsing
++//! letters and Unicode characters. A Bloom hit is only a candidate, never a match.
++
++use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, literal::Extractor};
++
++use crate::{Error, Result};
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct ShapeMask(pub [u64; 4]);
++
++impl ShapeMask {
++    #[must_use]
++    pub fn from_content(content: &[u8]) -> Self {
++        let mut mask = Self([0; 4]);
++        let (mut gram, mut width, mut previous) = (0u32, 0usize, None);
++        let mut push = |ch: Option<char>| {
++            let ch = match ch {
++                Some(ch) if ch != '\n' => ch,
++                _ => {
++                    // A Unicode regex cannot match across invalid bytes, and Scout's
++                    // matches never cross newlines. Do not invent adjacency there.
++                    width = 0;
++                    previous = None;
++                    return;
++                }
++            };
++            gram = (gram << 8) | u32::from(normalize(ch));
++            width += 1;
++            if width >= 4 && previous != Some(gram) {
++                mask.insert(gram);
++                previous = Some(gram);
++            }
++        };
++        for chunk in content.utf8_chunks() {
++            for ch in chunk.valid().chars() {
++                push(Some(ch));
++            }
++            if !chunk.invalid().is_empty() {
++                push(None);
++            }
++        }
++        mask
++    }
++
++    fn insert(&mut self, gram: u32) {
++        // Ordinary letter/punctuation shapes saturate a small Bloom filter. Numeric
++        // quads retain the useful constraints of class-heavy numeric regexes without
++        // spending its bits on ubiquitous source-code syntax.
++        let [a, b, c, d] = gram.to_be_bytes();
++        let digits = u8::from(a == b'0') + u8::from(b == b'0') + u8::from(c == b'0') + u8::from(d == b'0');
++        if digits < 2 {
++            return;
++        }
++        let mut hash = gram.wrapping_mul(0x9E37_79B9);
++        hash ^= hash >> 16;
++        hash = hash.wrapping_mul(0x85EB_CA6B);
++        for bit in [hash & 255, (hash >> 16) & 255] {
++            self.0[(bit >> 6) as usize] |= 1 << (bit & 63);
++        }
++    }
++
++    #[must_use]
++    pub fn to_bytes(self) -> [u8; 32] {
++        let mut bytes = [0; 32];
++        for (word, dest) in self.0.iter().zip(bytes.chunks_exact_mut(8)) {
++            dest.copy_from_slice(&word.to_le_bytes());
++        }
++        bytes
++    }
++
++    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
++        let array: &[u8; 32] =
++            bytes.try_into().map_err(|_| Error::Invalid("shape mask must contain 32 bytes".into()))?;
++        Ok(Self(std::array::from_fn(|i| {
++            let word = &array[i * 8..i * 8 + 8];
++            u64::from_le_bytes([word[0], word[1], word[2], word[3], word[4], word[5], word[6], word[7]])
++        })))
++    }
++}
++
++fn normalize(ch: char) -> u8 {
++    if ch.is_ascii_alphabetic() {
++        b'a'
++    } else if ch.is_ascii_digit() || !ch.is_ascii() {
++        b'0'
++    } else {
++        ch as u8
++    }
++}
++
++#[derive(Debug)]
++pub struct ShapeQuery(Vec<ShapeMask>);
++
++impl ShapeQuery {
++    #[must_use]
++    pub fn accepts(&self, mask: ShapeMask) -> bool {
++        self.0.iter().any(|required| mask.0.iter().zip(required.0).all(|(have, need)| have & need == need))
++    }
++
++    pub(crate) fn from_hir(hir: &Hir) -> Option<Self> {
++        let mut classes = false;
++        let normalized = project(hir, &mut classes)?;
++        if !classes {
++            return None;
++        }
++        let literals = Extractor::new()
++            .limit_total(64)
++            .limit_class(16)
++            .limit_repeat(16)
++            .limit_literal_len(64)
++            .extract(&normalized);
++        let mut alternatives = Vec::new();
++        for literal in literals.literals()? {
++            let bytes = literal.as_bytes();
++            // A short alternative imposes no quad constraint. Keeping the other
++            // alternatives alone would silently remove its matches.
++            if bytes.len() < 4 {
++                return None;
++            }
++            let mut mask = ShapeMask([0; 4]);
++            for gram in bytes.windows(4) {
++                mask.insert(u32::from_be_bytes(gram.try_into().expect("four-byte window")));
++            }
++            if mask.0 == [0; 4] {
++                return None;
++            }
++            alternatives.push(mask);
++        }
++        if alternatives.is_empty() { None } else { Some(Self(alternatives)) }
++    }
++}
++
++fn project(hir: &Hir, classes: &mut bool) -> Option<Hir> {
++    Some(match hir.kind() {
++        HirKind::Empty | HirKind::Look(_) => Hir::empty(),
++        HirKind::Literal(literal) => {
++            let text = std::str::from_utf8(&literal.0).ok()?;
++            Hir::literal(text.chars().map(normalize).collect::<Vec<_>>())
++        }
++        HirKind::Class(class) => {
++            *classes = true;
++            let mut symbols = Vec::new();
++            match class {
++                Class::Unicode(class) => {
++                    for byte in 0..=127u8 {
++                        if class.ranges().iter().any(|r| r.start() <= char::from(byte) && char::from(byte) <= r.end()) {
++                            symbols.push(normalize(char::from(byte)));
++                        }
++                    }
++                    if class.ranges().iter().any(|r| r.end() > '\u{7F}') {
++                        symbols.push(b'0');
++                    }
++                }
++                Class::Bytes(class) => {
++                    if class.ranges().iter().any(|r| r.end() > 127) {
++                        return None;
++                    }
++                    for range in class.ranges() {
++                        symbols.extend((range.start()..=range.end()).map(|b| normalize(char::from(b))));
++                    }
++                }
++            }
++            symbols.sort_unstable();
++            symbols.dedup();
++            Hir::class(Class::Bytes(ClassBytes::new(symbols.into_iter().map(|b| ClassBytesRange::new(b, b)))))
++        }
++        HirKind::Repetition(rep) => Hir::repetition(rep.with(project(&rep.sub, classes)?)),
++        HirKind::Capture(capture) => project(&capture.sub, classes)?,
++        HirKind::Concat(parts) => {
++            Hir::concat(parts.iter().map(|part| project(part, classes)).collect::<Option<Vec<_>>>()?)
++        }
++        HirKind::Alternation(parts) => {
++            Hir::alternation(parts.iter().map(|part| project(part, classes)).collect::<Option<Vec<_>>>()?)
++        }
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn digits_include_every_unicode_character_without_relying_on_a_unicode_version() {
++        let hir = regex_syntax::parse(r"\d{4}-\d{2}-\d{2}").unwrap();
++        let query = ShapeQuery::from_hir(&hir).unwrap();
++        for text in ["2026-10-27", "٢٠٢٦-١٠-٢٧", "２０２６-１０-２７", "2026-١٠-２７"] {
++            let mask = ShapeMask::from_content(format!("prefix {text} suffix").as_bytes());
++            assert!(query.accepts(mask), "{text}");
++            assert_eq!(ShapeMask::from_bytes(&mask.to_bytes()).unwrap(), mask);
++        }
++        assert!(!query.accepts(ShapeMask::from_content(b"Copyright 2012-2026\nordinary letters\n")));
++    }
++
++    #[test]
++    fn short_alternatives_and_raw_invalid_byte_patterns_impose_no_filter() {
++        for pattern in [r"\d{4}|x", r"\d+", r"(?-u:\xFF)\d{4}", "literal"] {
++            let hir = regex_syntax::ParserBuilder::new().utf8(false).build().parse(pattern).unwrap();
++            assert!(ShapeQuery::from_hir(&hir).is_none(), "{pattern}");
++        }
++        assert!(ShapeMask::from_bytes(&[0; 31]).is_err());
++    }
++
++    #[test]
++    fn projected_prefixes_never_reject_real_unicode_or_byte_edge_matches() {
++        use grep_matcher::Matcher;
++        use grep_regex::RegexMatcherBuilder;
++        let samples: &[&[u8]] = &[
++            b"2026-10-27",
++            "٢٠٢٦-١٠-٢٧".as_bytes(),
++            "２０２６-１０-２７".as_bytes(),
++            "αβγδ-１２".as_bytes(),
++            "2026�12".as_bytes(),
++            b"invalid\xff2026-10-27",
++            b"2026-10-27\xf0\x90",
++            b"2026\xff10-27",
++            b"abcd",
++            b"2026abcd",
++            b"1234-56\r\n2026-10-27\n",
++            b"word-1234",
++        ];
++        for pattern in [
++            r"\d{4}-\d{2}-\d{2}",
++            r"\p{Greek}{4}-\d{2}",
++            r"\d{4}�\d{2}",
++            r"(?:\d{4})?abcd",
++            r"\d{4}[-_]\d{2}",
++            r"\d{4}|abcd",
++            r"\b\d{4}-\d{2}",
++            r"\D{4}-\d{2}",
++        ] {
++            let hir = regex_syntax::ParserBuilder::new().multi_line(true).utf8(false).build().parse(pattern).unwrap();
++            let query = ShapeQuery::from_hir(&hir);
++            let matcher =
++                RegexMatcherBuilder::new().multi_line(true).line_terminator(Some(b'\n')).build(pattern).unwrap();
++            for &sample in samples {
++                if matcher.is_match(sample).unwrap()
++                    && let Some(query) = &query
++                {
++                    assert!(query.accepts(ShapeMask::from_content(sample)), "{pattern}: {sample:?}");
++                }
++            }
++        }
++    }
++}
+diff --git a/crates/scout-core/src/trigram.rs b/crates/scout-core/src/trigram.rs
+index 2e01555..48f2f2e 100755
+--- a/crates/scout-core/src/trigram.rs
++++ b/crates/scout-core/src/trigram.rs	
+@@ -1,7 +1,8 @@
+ //! Trigram keys and extraction, shared by the indexer and the query planner so the two
+ //! can never disagree about what gets indexed.
+ 
+-/// A 3-byte sequence packed into the low 24 bits, after ASCII case folding.
++/// A 3-byte sequence packed into the low 24 bits, or a tagged 2-byte sequence,
++/// after ASCII case folding.
+ ///
+ /// Folding at index time means one index serves both case-sensitive and insensitive
+ /// queries; the regex engine re-checks case on the (few) candidates afterwards.
+@@ -19,6 +20,8 @@ pub const READER_MODE: Trigram = Trigram(u32::MAX - 1);
+ 
+ /// Number of distinct trigram keys (2^24).
+ pub const TRIGRAM_SPACE: usize = 1 << 24;
++const PAIR_TAG: u32 = 1 << 24;
++const PAIR_SPACE: usize = 1 << 16;
+ 
+ #[inline]
+ #[must_use]
+@@ -27,6 +30,11 @@ pub fn fold(byte: u8) -> u8 {
+ }
+ 
+ impl Trigram {
++    #[inline]
++    #[must_use]
++    pub fn from_pair(a: u8, b: u8) -> Self {
++        Self(PAIR_TAG | (u32::from(fold(a)) << 8) | u32::from(fold(b)))
++    }
+     #[inline]
+     #[must_use]
+     pub fn from_bytes(a: u8, b: u8, c: u8) -> Self {
+@@ -44,18 +52,19 @@ fn indexable(a: u8, b: u8, c: u8) -> bool {
+     a != b'\n' && b != b'\n' && c != b'\n'
+ }
+ 
+-/// Reusable per-thread scratch space for extracting the *distinct* trigrams of a doc.
++/// Reusable per-thread scratch space for extracting distinct three- and two-byte keys.
+ ///
+-/// A 2^24-bit set (2 MiB) gives O(1) dedup without hashing; only the bits that were set
++/// A 2^24-bit set (2 MiB), plus 8 KiB for pairs, gives O(1) dedup without hashing; only the bits that were set
+ /// are cleared afterwards, so cost is proportional to the doc, not the bitset.
+ pub struct TrigramExtractor {
+     seen: Vec<u64>,
++    pairs_seen: Vec<u64>,
+     found: Vec<Trigram>,
+ }
+ 
+ impl Default for TrigramExtractor {
+     fn default() -> Self {
+-        Self { seen: vec![0; TRIGRAM_SPACE / 64], found: Vec::new() }
++        Self { seen: vec![0; TRIGRAM_SPACE / 64], pairs_seen: vec![0; PAIR_SPACE / 64], found: Vec::new() }
+     }
+ }
+ 
+@@ -63,10 +72,15 @@ impl TrigramExtractor {
+     /// Returns the distinct indexable trigrams of `content`, sorted ascending.
+     pub fn extract(&mut self, content: &[u8]) -> &[Trigram] {
+         for tri in &self.found {
+-            self.seen[(tri.0 >> 6) as usize] = 0;
++            if tri.0 & PAIR_TAG != 0 {
++                self.pairs_seen[((tri.0 & 0xFFFF) >> 6) as usize] = 0;
++            } else {
++                self.seen[(tri.0 >> 6) as usize] = 0;
++            }
+         }
+         self.found.clear();
+         for w in content.windows(3) {
++            self.pair(w[0], w[1]);
+             if !indexable(w[0], w[1], w[2]) {
+                 continue;
+             }
+@@ -77,9 +91,26 @@ impl TrigramExtractor {
+                 self.found.push(t);
+             }
+         }
++        if let Some(pair) = content.windows(2).next_back() {
++            self.pair(pair[0], pair[1]);
++        }
+         self.found.sort_unstable();
+         &self.found
+     }
++
++    #[inline]
++    fn pair(&mut self, a: u8, b: u8) {
++        if a == b'\n' || b == b'\n' {
++            return;
++        }
++        let key = Trigram::from_pair(a, b);
++        let packed = key.0 & 0xFFFF;
++        let (word, bit) = ((packed >> 6) as usize, 1u64 << (packed & 63));
++        if self.pairs_seen[word] & bit == 0 {
++            self.pairs_seen[word] |= bit;
++            self.found.push(key);
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -95,12 +126,19 @@ mod tests {
+                 Trigram::from_bytes(b'a', b'b', b'c'),
+                 Trigram::from_bytes(b'b', b'c', b'a'),
+                 Trigram::from_bytes(b'c', b'a', b'b'),
++                Trigram::from_pair(b'a', b'b'),
++                Trigram::from_pair(b'b', b'c'),
++                Trigram::from_pair(b'c', b'a'),
+             ];
+             v.sort_unstable();
+             v
+         };
+         assert_eq!(got, want);
+         // Scratch state must not leak into the next doc.
+-        assert_eq!(ex.extract(b"xyz").to_vec(), vec![Trigram::from_bytes(b'x', b'y', b'z')]);
++        assert_eq!(
++            ex.extract(b"xyz").to_vec(),
++            vec![Trigram::from_bytes(b'x', b'y', b'z'), Trigram::from_pair(b'x', b'y'), Trigram::from_pair(b'y', b'z')]
++        );
++        assert_eq!(ex.extract(b"IF").to_vec(), vec![Trigram::from_pair(b'i', b'f')]);
+     }
+ }
+diff --git a/crates/scout-index-native/Cargo.toml b/crates/scout-index-native/Cargo.toml
+index 4eb0493..7c91f4c 100755
+--- a/crates/scout-index-native/Cargo.toml
++++ b/crates/scout-index-native/Cargo.toml	
+@@ -8,11 +8,14 @@ license.workspace = true
+ 
+ [dependencies]
+ lz4_flex.workspace = true
++lz4.workspace = true
+ memchr.workspace = true
+ memmap2.workspace = true
+ scout-core.workspace = true
+ 
+ [dev-dependencies]
++grep-matcher.workspace = true
++grep-regex.workspace = true
+ tempfile = "3"
+ 
+ [lints]
+diff --git a/crates/scout-index-native/examples/scan-cost.rs b/crates/scout-index-native/examples/scan-cost.rs
+new file mode 100755
+index 0000000..88fd868
+--- /dev/null
++++ b/crates/scout-index-native/examples/scan-cost.rs	
+@@ -0,0 +1,109 @@
++//! Separates metadata, decoding and byte-search cost on a real native index.
++
++use std::hint::black_box;
++use std::io::Write;
++use std::path::PathBuf;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::time::Instant;
++
++use grep_matcher::Matcher;
++use grep_regex::RegexMatcherBuilder;
++
++use scout_core::ports::{IndexBackend, Shard};
++use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let args: Vec<String> = std::env::args().collect();
++    if args.len() != 4 {
++        return Err("usage: scan-cost <shards-directory> <threads> <runs>".into());
++    }
++    let threads: usize = args[2].parse()?;
++    let runs: usize = args[3].parse()?;
++    if threads == 0 || runs == 0 {
++        return Err("threads and runs must be positive".into());
++    }
++    let backend = NativeBackend::new(FilterHome::Map, ContentCodec::Raw);
++    let mut paths: Vec<PathBuf> =
++        std::fs::read_dir(&args[1])?.map(|entry| entry.map(|entry| entry.path())).collect::<std::io::Result<_>>()?;
++    paths.retain(|path| path.extension().is_some_and(|ext| ext == "native"));
++    paths.sort();
++    if paths.is_empty() {
++        return Err("no native shards".into());
++    }
++    let shards: Vec<Box<dyn Shard>> = paths.iter().map(|path| backend.open(path)).collect::<scout_core::Result<_>>()?;
++    let mut out = std::io::stdout().lock();
++    for mode in ["metadata", "decode", "decode-newlines", "decode-if", "decode-date-unicode", "decode-date-ascii"] {
++        for run in 0..=runs {
++            let next = AtomicUsize::new(0);
++            let started = Instant::now();
++            let totals = std::thread::scope(|scope| {
++                let workers: Vec<_> = (0..threads)
++                    .map(|_| {
++                        let (shards, next) = (&shards, &next);
++                        scope.spawn(move || -> scout_core::Result<(u64, u64)> {
++                            let mut buf = Vec::new();
++                            let (mut bytes, mut hits) = (0, 0);
++                            let finder = memchr::memmem::Finder::new(b"if");
++                            let regex = RegexMatcherBuilder::new()
++                                .multi_line(true)
++                                .line_terminator(Some(b'\n'))
++                                .build(if mode == "decode-date-ascii" {
++                                    r"(?-u:\d{4}-\d{2}-\d{2})"
++                                } else {
++                                    r"\d{4}-\d{2}-\d{2}"
++                                })
++                                .map_err(|e| scout_core::Error::Pattern(e.to_string()))?;
++                            loop {
++                                let index = next.fetch_add(1, Ordering::Relaxed);
++                                let Some(shard) = shards.get(index) else { break };
++                                for doc in 0..shard.doc_count() {
++                                    if mode == "metadata" {
++                                        let meta = shard.meta(doc)?;
++                                        bytes += meta.size;
++                                        hits += meta.path.len() as u64;
++                                        black_box(meta);
++                                    } else {
++                                        let content = shard.content(doc, &mut buf)?;
++                                        bytes += content.len() as u64;
++                                        hits += match mode {
++                                            "decode-newlines" => memchr::memchr_iter(b'\n', content).count() as u64,
++                                            "decode-if" => finder.find_iter(content).count() as u64,
++                                            "decode-date-unicode" | "decode-date-ascii" => {
++                                                let mut count = 0;
++                                                regex
++                                                    .find_iter(content, |_| {
++                                                        count += 1;
++                                                        true
++                                                    })
++                                                    .map_err(|e| scout_core::Error::Invalid(e.to_string()))?;
++                                                count
++                                            }
++                                            _ => 0,
++                                        };
++                                        black_box(content);
++                                    }
++                                }
++                            }
++                            Ok((bytes, hits))
++                        })
++                    })
++                    .collect();
++                workers
++                    .into_iter()
++                    .map(|worker| worker.join().expect("scan worker panicked"))
++                    .collect::<scout_core::Result<Vec<_>>>()
++            })?;
++            let bytes: u64 = totals.iter().map(|t| t.0).sum();
++            let hits: u64 = totals.iter().map(|t| t.1).sum();
++            if run > 0 {
++                writeln!(
++                    out,
++                    "mode={mode} run={run} elapsed_ms={:.3} bytes={bytes} hits={hits}",
++                    started.elapsed().as_secs_f64() * 1000.0
++                )?;
++                out.flush()?;
++            }
++        }
++    }
++    Ok(())
++}
+diff --git a/crates/scout-index-native/src/lib.rs b/crates/scout-index-native/src/lib.rs
+index 7bb68ab..d488056 100755
+--- a/crates/scout-index-native/src/lib.rs
++++ b/crates/scout-index-native/src/lib.rs	
+@@ -1,17 +1,18 @@
+-//! Native shard format (v7).
++//! Native shard format (v9).
+ //!
+ //! One file per shard, read through `mmap` so the OS decides what stays in RAM. That is
+ //! what keeps scout usable on a 2 GB machine with an index far larger than memory.
+ //!
+ //! ```text
+-//! magic    8  b"SCOUTNI7"
++//! magic    8  b"SCOUTNI9"
+ //! header 104  u32 version, u32 doc_count, u32 trigram_count, u32 unit_count,
+ //!             u32 block_count, u32 pad, u64 content_off, u64 docs_off, u64 blocks_off,
+ //!             u64 paths_off, u64 units_off, u64 keys_off, u64 vals_off, u64 fence_off,
+ //!             u64 filter_off, u64 postings_off
+ //! content     corpus bin: every document's blocks, back to back in doc order
+-//! docs        doc_count × 40: u64 stored offset of its first block, u64 size,
+-//!             u64 mtime_ns, u32 content_len, u32 path_off, u32 path_len, u32 first block
++//! docs        doc_count × 72: u64 stored offset of its first block, u64 size,
++//!             u64 mtime_ns, u32 content_len, u32 path_off, u32 path_len, u32 first block,
++//!             32-byte conservative character-shape mask
+ //! blocks      block_count × 12: u32 stored length, u32 content length, u32 lines of the
+ //!             doc before it; a block whose two lengths are equal is stored as is, any
+ //!             other is an lz4 block
+@@ -60,8 +61,9 @@
+ //! before it ends. All integers are little-endian.
+ //!
+ //! v4 was E20's positional-mask format, rejected but built: its shards still exist (bench
+-//! indexes), so E24's layout took v5; v6 added blocks (E29), v7 their line counts (E32). A
+-//! shard of an older version is refused with a "rebuild" message instead of being misparsed
++//! indexes), so E24's layout took v5; v6 added blocks (E29), v7 their line counts (E32),
++//! v8 prototyped character-shape masks, and v9 adds tagged pairs and numeric shape
++//! filtering (E34). A shard of an older version is refused with a "rebuild" message instead of being misparsed
+ //! as this one.
+ 
+ use std::borrow::Cow;
+@@ -73,15 +75,16 @@ use scout_core::indexer::{UNIT_TARGET, unit_spans};
+ use scout_core::ports::{
+     BlockVisitor, DocId, DocMeta, Extent, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+ };
++use scout_core::shape::ShapeMask;
+ use scout_core::trigram::Trigram;
+ use scout_core::{Error, Result};
+ 
+-const MAGIC: &[u8; 8] = b"SCOUTNI7";
+-const VERSION: u32 = 7;
++const MAGIC: &[u8; 8] = b"SCOUTNI9";
++const VERSION: u32 = 9;
+ const HEADER_LEN: u64 = 8 + 104;
+ /// Where the header's u64 section offsets start, after the magic and six u32s.
+ const OFFSETS_AT: usize = 32;
+-const DOC_LEN: usize = 40;
++const DOC_LEN: usize = 72;
+ const BLOCK_LEN: usize = 12;
+ /// The most an lz4 block can decode to per byte: every byte of a match length past the
+ /// token adds at most 255 bytes of output.
+@@ -168,6 +171,7 @@ struct DocRow {
+     path_off: u32,
+     path_len: u32,
+     first_block: u32,
++    shape: ShapeMask,
+ }
+ 
+ pub struct NativeWriter {
+@@ -233,16 +237,24 @@ impl ShardWriter for NativeWriter {
+             path_off: to_u32(self.paths.len(), "path table")?,
+             path_len: to_u32(meta.path.len(), "path length")?,
+             first_block: to_u32(self.blocks.len(), "block count")?,
++            shape: ShapeMask::from_content(content),
+         };
+         // Blocks are the posting units' spans (line-aligned ~64 KiB), so a later reader can
+         // fetch and decode only the units a query needs. An empty doc is one empty block.
+         let mut lines = 0u32;
+         for span in unit_spans(content, UNIT_TARGET) {
+             let raw = &content[span];
+-            // Kept only when smaller: equal lengths are how a reader knows a block is raw.
++            if self.codec == ContentCodec::Lz4 && raw.len() > i32::MAX as usize {
++                return Err(Error::Invalid("a compressed content block exceeds the decoder's i32 length".into()));
++            }
++            // Small blocks cost little cache space but hundreds of thousands of decoder
++            // calls on broad queries. Borrow them raw; compress larger blocks only when
++            // smaller. Equal lengths are how a reader recognizes raw storage.
+             let packed = match self.codec {
+-                ContentCodec::Lz4 => Some(lz4_flex::block::compress(raw)).filter(|c| c.len() < raw.len()),
+-                ContentCodec::Raw => None,
++                ContentCodec::Lz4 if raw.len() >= 4096 => {
++                    Some(lz4_flex::block::compress(raw)).filter(|c| c.len() < raw.len())
++                }
++                _ => None,
+             };
+             let stored = packed.as_deref().unwrap_or(raw);
+             self.out.write_all(stored).map_err(|e| self.io(e))?;
+@@ -277,6 +289,7 @@ impl ShardWriter for NativeWriter {
+             docs.extend_from_slice(&d.path_off.to_le_bytes());
+             docs.extend_from_slice(&d.path_len.to_le_bytes());
+             docs.extend_from_slice(&d.first_block.to_le_bytes());
++            docs.extend_from_slice(&d.shape.to_bytes());
+         }
+         let blocks_off = docs_off + docs.len() as u64;
+         let mut blocks = Vec::with_capacity(self.blocks.len() * BLOCK_LEN);
+@@ -593,6 +606,10 @@ impl NativeShard {
+ }
+ 
+ impl Shard for NativeShard {
++    fn shape_mask(&self, doc: DocId) -> Result<ShapeMask> {
++        let row = self.row(doc)?;
++        ShapeMask::from_bytes(&self.map[row + 40..row + DOC_LEN])
++    }
+     fn doc_count(&self) -> u32 {
+         self.doc_count
+     }
+@@ -727,12 +744,13 @@ impl Shard for NativeShard {
+     }
+ 
+     fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+-        // Ranges stored back to back are advised as one: the writer stores content in doc
+-        // order, so a full scan's window is one call instead of one per file.
++        // A filtered scan skips small files between candidates. Queue their nearby
++        // ranges together instead of issuing repeated syscalls for the same pages.
++        // At most 4 KiB per gap is read additionally, within the caller's bounded window.
+         let mut run: Option<std::ops::Range<usize>> = None;
+         let mut add = |next: std::ops::Range<usize>| -> Result<()> {
+             match &mut run {
+-                Some(r) if r.end == next.start => r.end = next.end,
++                Some(r) if next.start >= r.end && next.start - r.end <= 4096 => r.end = next.end,
+                 _ => {
+                     if let Some(done) = run.replace(next) {
+                         self.will_need(done)?;
+@@ -828,6 +846,9 @@ impl NativeShard {
+             if p > l || (p < l && l > p.saturating_mul(LZ4_MAX_EXPANSION)) {
+                 return Err(self.corrupt("block lengths are not a stored or lz4 block"));
+             }
++            if p < l && l > i32::MAX as usize {
++                return Err(self.corrupt("lz4 block exceeds the decoder's i32 length"));
++            }
+             packed += p;
+             len += l;
+             raw &= p == l;
+@@ -854,8 +875,16 @@ impl NativeShard {
+     fn decode(&self, src: &[u8], dst: &mut [u8]) -> Result<()> {
+         if src.len() == dst.len() {
+             dst.copy_from_slice(src);
+-        } else if lz4_flex::block::decompress_into(src, dst).ok() != Some(dst.len()) {
+-            return Err(self.corrupt("lz4 block does not decode to its length"));
++        } else {
++            // The reference decoder validates both input and output bounds. Keep the
++            // exact-length check too: an undersized result must never expose old bytes.
++            let len =
++                i32::try_from(dst.len()).map_err(|_| self.corrupt("lz4 block exceeds the decoder's i32 length"))?;
++            if src.len() > i32::MAX as usize
++                || lz4::block::decompress_to_buffer(src, Some(len), dst).ok() != Some(dst.len())
++            {
++                return Err(self.corrupt("lz4 block does not decode to its length"));
++            }
+         }
+         Ok(())
+     }
+@@ -1202,7 +1231,7 @@ mod tests {
+         let (docs_off, blocks_off) = (at(1), at(2));
+         // Doc 0 is one raw block; doc 3, the last, ends at the end of the blocks table.
+         let (row_len, last_first) = (docs_off + 24, docs_off + 3 * DOC_LEN + 36);
+-        let cases: [Case<'_>; 6] = [
++        let cases: [Case<'_>; 7] = [
+             // Doc 1's first block before doc 0's: doc 0 would own no block.
+             (0, &[(docs_off + DOC_LEN + 36, 0)], "doc blocks out of range"),
+             // The last doc starting at the end of the table owns no block either.
+@@ -1214,6 +1243,9 @@ mod tests {
+             // 10 bytes claiming 4 GiB, row to match: past lz4's expansion, refused before
+             // `content` sizes a buffer from it.
+             (0, &[(blocks_off, 10), (blocks_off + 4, u32::MAX), (row_len, u32::MAX)], "not a stored or lz4 block"),
++            // A reference LZ4 block is bounded by signed 32-bit lengths. Reject this
++            // metadata before allocating the claimed two-GiB decode buffer.
++            (0, &[(blocks_off, 1 << 24), (blocks_off + 4, 1 << 31), (row_len, 1 << 31)], "decoder's i32 length"),
+             // Consistent lengths that run into the docs table.
+             (0, &[(blocks_off, 1 << 20), (blocks_off + 4, 1 << 20), (row_len, 1 << 20)], "content out of bounds"),
+         ];
+@@ -1261,6 +1293,26 @@ mod tests {
+         assert!(err.contains("does not decode to its length"), "{err}");
+     }
+ 
++    #[test]
++    fn small_lz4_documents_borrow_the_map_without_touching_decode_storage() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("small.native");
++        let files = [vec![b'a'; 4095], vec![b'b'; 4096]];
++        let mut writer = LZ4.create(&path).unwrap();
++        let mut extractor = TrigramExtractor::default();
++        for (doc, content) in files.iter().enumerate() {
++            let meta = FileMeta { path: format!("{doc}.txt"), size: content.len() as u64, mtime_ns: 0 };
++            writer.add(&meta, content, &[extractor.extract(content).to_vec()]).unwrap();
++        }
++        writer.finish().unwrap();
++        let shard = LZ4.open(&path).unwrap();
++        let mut buf = vec![0xA5; 8192];
++        assert_eq!(shard.content(0, &mut buf).unwrap(), files[0]);
++        assert!(buf.iter().all(|&byte| byte == 0xA5), "raw small files must not copy into scratch");
++        assert_eq!(shard.content(1, &mut buf).unwrap(), files[1]);
++        assert_eq!(&buf[..4096], files[1], "larger blocks still use the decoder");
++    }
++
+     #[test]
+     fn lz4_content_round_trips_and_shrinks_the_shard() {
+         let dir = tempfile::tempdir().unwrap();
+diff --git a/crates/scout-index-sqlite/src/lib.rs b/crates/scout-index-sqlite/src/lib.rs
+index 9a042ae..e387ab4 100755
+--- a/crates/scout-index-sqlite/src/lib.rs
++++ b/crates/scout-index-sqlite/src/lib.rs	
+@@ -13,12 +13,13 @@ use rusqlite::{Connection, OpenFlags, params};
+ use scout_core::ports::{
+     BlockVisitor, DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+ };
++use scout_core::shape::ShapeMask;
+ use scout_core::trigram::Trigram;
+ use scout_core::{Error, Result};
+ 
+ const SCHEMA: &str = "
+     CREATE TABLE docs (id INTEGER PRIMARY KEY, path TEXT NOT NULL, size INTEGER NOT NULL,
+-                       mtime_ns INTEGER NOT NULL, content BLOB NOT NULL);
++                       mtime_ns INTEGER NOT NULL, content BLOB NOT NULL, shape BLOB NOT NULL);
+     CREATE TABLE units (id INTEGER PRIMARY KEY, doc INTEGER NOT NULL);
+     CREATE TABLE postings (trigram INTEGER PRIMARY KEY, units BLOB NOT NULL) WITHOUT ROWID;
+ ";
+@@ -63,24 +64,32 @@ impl IndexBackend for SqliteBackend {
+         let conn =
+             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+                 .map_err(|e| db_err("opening shard", e))?;
+-        let metas = {
++        let (metas, shapes) = {
+             let mut stmt = conn
+-                .prepare("SELECT id, path, size, mtime_ns FROM docs ORDER BY id")
++                .prepare("SELECT id, path, size, mtime_ns, shape FROM docs ORDER BY id")
+                 .map_err(|e| db_err("reading docs", e))?;
+             let rows = stmt
+                 .query_map([], |r| {
+-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
++                    Ok((
++                        r.get::<_, i64>(0)?,
++                        r.get::<_, String>(1)?,
++                        r.get::<_, i64>(2)?,
++                        r.get::<_, i64>(3)?,
++                        r.get::<_, Vec<u8>>(4)?,
++                    ))
+                 })
+                 .map_err(|e| db_err("reading docs", e))?;
+             let mut metas = Vec::new();
++            let mut shapes = Vec::new();
+             for (expected, row) in rows.enumerate() {
+-                let (id, path, size, mtime) = row.map_err(|e| db_err("reading docs", e))?;
++                let (id, path, size, mtime, shape) = row.map_err(|e| db_err("reading docs", e))?;
+                 if to_u64(id)? != expected as u64 {
+                     return Err(Error::Corrupt { shard: path, reason: "doc ids are not dense".into() });
+                 }
+                 metas.push(FileMeta { path, size: to_u64(size)?, mtime_ns: to_u64(mtime)? });
++                shapes.push(ShapeMask::from_bytes(&shape)?);
+             }
+-            metas
++            (metas, shapes)
+         };
+         // Loaded at open (4 bytes per unit) so mapping units to docs never hits SQL.
+         let unit_docs = {
+@@ -105,7 +114,7 @@ impl IndexBackend for SqliteBackend {
+             }
+             unit_docs
+         };
+-        let mut shard = SqliteShard { conn: Mutex::new(conn), metas, unit_docs, markers: Markers::default() };
++        let mut shard = SqliteShard { conn: Mutex::new(conn), metas, shapes, unit_docs, markers: Markers::default() };
+         shard.markers = Markers::load(&shard)?;
+         Ok(Box::new(shard))
+     }
+@@ -127,8 +136,19 @@ impl ShardWriter for SqliteWriter {
+         let doc = self.docs;
+         let (size, mtime) = (to_i64(meta.size)?, to_i64(meta.mtime_ns)?);
+         self.conn
+-            .prepare_cached("INSERT INTO docs (id, path, size, mtime_ns, content) VALUES (?1, ?2, ?3, ?4, ?5)")
+-            .and_then(|mut s| s.execute(params![doc, meta.path, size, mtime, content]))
++            .prepare_cached(
++                "INSERT INTO docs (id, path, size, mtime_ns, content, shape) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
++            )
++            .and_then(|mut s| {
++                s.execute(params![
++                    doc,
++                    meta.path,
++                    size,
++                    mtime,
++                    content,
++                    ShapeMask::from_content(content).to_bytes().as_slice()
++                ])
++            })
+             .map_err(|e| db_err("inserting doc", e))?;
+         for trigrams in units {
+             let unit = self.units;
+@@ -188,6 +208,7 @@ pub struct SqliteShard {
+     conn: Mutex<Connection>,
+     /// Loaded at open so `meta` can hand out borrowed paths like the native backend.
+     metas: Vec<FileMeta>,
++    shapes: Vec<ShapeMask>,
+     unit_docs: Vec<DocId>,
+     markers: Markers,
+ }
+@@ -199,6 +220,9 @@ impl SqliteShard {
+ }
+ 
+ impl Shard for SqliteShard {
++    fn shape_mask(&self, doc: DocId) -> Result<ShapeMask> {
++        self.shapes.get(doc as usize).copied().ok_or_else(|| Error::Invalid(format!("doc {doc} out of range")))
++    }
+     fn doc_count(&self) -> u32 {
+         self.metas.len() as u32
+     }

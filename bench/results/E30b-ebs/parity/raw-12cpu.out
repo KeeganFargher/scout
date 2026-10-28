@@ -1,0 +1,26 @@
+## raw-12cpu  (137 repos, 54301 files, 854 MiB content, 1061 MiB index)
+
+| query | scout ms | p90 | p99 | rg ms | speedup | candidates | matched files | results | parity | peak WS MiB | peak private MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|---:|---:|
+| literal_rare | 19.1 | - | - | 177.7 | 9.3x | 111 | 32 | 61 | ok | ? | ? |
+| literal_common | 575.4 | - | - | 736.4 | 1.3x | 10759 | 10285 | 349366 | ok | ? | ? |
+| literal_none | 12.8 | - | - | 162.4 | 12.6x | 4 | 1 | 1 | ok | ? | ? |
+| literal_long | 21.8 | - | - | 201.2 | 9.2x | 957 | 703 | 867 | ok | ? | ? |
+| ident_regex | 34.8 | - | - | 171.3 | 4.9x | 2367 | 513 | 547 | ok | ? | ? |
+| alternation | 75.3 | - | - | 198.4 | 2.6x | 1374 | 474 | 833 | ok | ? | ? |
+| case_insensitive | 106.3 | - | - | 227.5 | 2.1x | 868 | 752 | 2046 | ok | ? | ? |
+| smart_case | 27.4 | - | - | 229.6 | 8.4x | 3763 | 1796 | 1832 | ok | ? | ? |
+| word | 234.2 | - | - | 332.2 | 1.4x | 5715 | 2150 | 6361 | ok | ? | ? |
+| short_unindexable | 617.6 | - | - | 1109.5 | 1.8x | 20013 | 19430 | 498452 | ok (1 NUL re-verified) | ? | ? |
+| anchored | 18.0 | - | - | 165.6 | 9.2x | 1305 | 77 | 77 | ok | ? | ? |
+| date_regex | 132.9 | - | - | 331.3 | 2.5x | 18512 | 834 | 18106 | ok | ? | ? |
+| email_regex | 56.6 | - | - | 185.5 | 3.3x | 10894 | 562 | 1817 | ok | ? | ? |
+| count_mode | 20.9 | - | - | 167.6 | 8.0x | 1046 | 909 | 909 | ok | ? | ? |
+| files_mode | 26.7 | - | - | 170.6 | 6.4x | 2920 | 506 | 506 | ok | ? | ? |
+| rare_regex | 21.9 | - | - | 201.0 | 9.2x | 300 | 13 | 24 | ok | ? | ? |
+| selective_one | 14.7 | - | - | 200.7 | 13.6x | 8 | 4 | 6 | ok | ? | ? |
+| selective_long | 14.0 | - | - | 197.7 | 14.1x | 7 | 4 | 6 | ok | ? | ? |
+| selective_vendored | 15.0 | - | - | 201.8 | 13.4x | 11 | 5 | 5 | ok | ? | ? |
+| selective_common_trigrams | 17.2 | - | - | 175.6 | 10.2x | 108 | 2 | 3 | ok | ? | ? |
+
+geomean speedup 5.6x | total scout 2063 ms vs rg 5544 ms | parity ALL OK

@@ -10,13 +10,16 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags, params};
-use scout_core::ports::{DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId};
+use scout_core::ports::{
+    BlockVisitor, DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+};
+use scout_core::shape::ShapeMask;
 use scout_core::trigram::Trigram;
 use scout_core::{Error, Result};
 
 const SCHEMA: &str = "
     CREATE TABLE docs (id INTEGER PRIMARY KEY, path TEXT NOT NULL, size INTEGER NOT NULL,
-                       mtime_ns INTEGER NOT NULL, content BLOB NOT NULL);
+                       mtime_ns INTEGER NOT NULL, content BLOB NOT NULL, shape BLOB NOT NULL);
     CREATE TABLE units (id INTEGER PRIMARY KEY, doc INTEGER NOT NULL);
     CREATE TABLE postings (trigram INTEGER PRIMARY KEY, units BLOB NOT NULL) WITHOUT ROWID;
 ";
@@ -61,24 +64,32 @@ impl IndexBackend for SqliteBackend {
         let conn =
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
                 .map_err(|e| db_err("opening shard", e))?;
-        let metas = {
+        let (metas, shapes) = {
             let mut stmt = conn
-                .prepare("SELECT id, path, size, mtime_ns FROM docs ORDER BY id")
+                .prepare("SELECT id, path, size, mtime_ns, shape FROM docs ORDER BY id")
                 .map_err(|e| db_err("reading docs", e))?;
             let rows = stmt
                 .query_map([], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, Vec<u8>>(4)?,
+                    ))
                 })
                 .map_err(|e| db_err("reading docs", e))?;
             let mut metas = Vec::new();
+            let mut shapes = Vec::new();
             for (expected, row) in rows.enumerate() {
-                let (id, path, size, mtime) = row.map_err(|e| db_err("reading docs", e))?;
+                let (id, path, size, mtime, shape) = row.map_err(|e| db_err("reading docs", e))?;
                 if to_u64(id)? != expected as u64 {
                     return Err(Error::Corrupt { shard: path, reason: "doc ids are not dense".into() });
                 }
                 metas.push(FileMeta { path, size: to_u64(size)?, mtime_ns: to_u64(mtime)? });
+                shapes.push(ShapeMask::from_bytes(&shape)?);
             }
-            metas
+            (metas, shapes)
         };
         // Loaded at open (4 bytes per unit) so mapping units to docs never hits SQL.
         let unit_docs = {
@@ -103,7 +114,7 @@ impl IndexBackend for SqliteBackend {
             }
             unit_docs
         };
-        let mut shard = SqliteShard { conn: Mutex::new(conn), metas, unit_docs, markers: Markers::default() };
+        let mut shard = SqliteShard { conn: Mutex::new(conn), metas, shapes, unit_docs, markers: Markers::default() };
         shard.markers = Markers::load(&shard)?;
         Ok(Box::new(shard))
     }
@@ -125,8 +136,19 @@ impl ShardWriter for SqliteWriter {
         let doc = self.docs;
         let (size, mtime) = (to_i64(meta.size)?, to_i64(meta.mtime_ns)?);
         self.conn
-            .prepare_cached("INSERT INTO docs (id, path, size, mtime_ns, content) VALUES (?1, ?2, ?3, ?4, ?5)")
-            .and_then(|mut s| s.execute(params![doc, meta.path, size, mtime, content]))
+            .prepare_cached(
+                "INSERT INTO docs (id, path, size, mtime_ns, content, shape) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .and_then(|mut s| {
+                s.execute(params![
+                    doc,
+                    meta.path,
+                    size,
+                    mtime,
+                    content,
+                    ShapeMask::from_content(content).to_bytes().as_slice()
+                ])
+            })
             .map_err(|e| db_err("inserting doc", e))?;
         for trigrams in units {
             let unit = self.units;
@@ -186,6 +208,7 @@ pub struct SqliteShard {
     conn: Mutex<Connection>,
     /// Loaded at open so `meta` can hand out borrowed paths like the native backend.
     metas: Vec<FileMeta>,
+    shapes: Vec<ShapeMask>,
     unit_docs: Vec<DocId>,
     markers: Markers,
 }
@@ -197,6 +220,9 @@ impl SqliteShard {
 }
 
 impl Shard for SqliteShard {
+    fn shape_mask(&self, doc: DocId) -> Result<ShapeMask> {
+        self.shapes.get(doc as usize).copied().ok_or_else(|| Error::Invalid(format!("doc {doc} out of range")))
+    }
     fn doc_count(&self) -> u32 {
         self.metas.len() as u32
     }
@@ -274,13 +300,25 @@ impl Shard for SqliteShard {
         self.unit_docs.get(unit as usize).copied().ok_or_else(|| Error::Invalid(format!("unit {unit} out of range")))
     }
 
-    fn content(&self, doc: DocId) -> Result<Cow<'_, [u8]>> {
+    fn content<'a>(&'a self, doc: DocId, buf: &'a mut Vec<u8>) -> Result<&'a [u8]> {
         let conn = self.conn();
         let mut stmt = conn
             .prepare_cached("SELECT content FROM docs WHERE id = ?1")
             .map_err(|e| db_err("preparing content query", e))?;
-        let bytes: Vec<u8> = stmt.query_row(params![doc], |r| r.get(0)).map_err(|e| db_err("reading content", e))?;
-        Ok(Cow::Owned(bytes))
+        *buf = stmt.query_row(params![doc], |r| r.get(0)).map_err(|e| db_err("reading content", e))?;
+        Ok(buf)
+    }
+
+    /// SQLite stores a document as one BLOB, so that row is its read granularity.
+    fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()> {
+        visit(self.content(want.doc, buf)?, 1)?;
+        Ok(())
+    }
+
+    /// SQLite reads a page when a query asks for it, with no call that queues reads ahead,
+    /// and this backend is a comparison point, not what a server runs.
+    fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -309,7 +347,7 @@ mod tests {
         let s = SqliteBackend.open(&path).unwrap();
         assert_eq!(s.doc_count(), 3);
         assert_eq!(s.meta(1).unwrap().path, "b.rs");
-        assert_eq!(&*s.content(0).unwrap(), b"fn hello() {}");
+        assert_eq!(s.content(0, &mut Vec::new()).unwrap(), b"fn hello() {}");
         assert_eq!(s.postings(Trigram::from_bytes(b'h', b'e', b'l')).unwrap(), vec![0, 1, 2]);
         assert_eq!(s.postings(Trigram::from_bytes(b'w', b'o', b'r')).unwrap(), vec![1, 3]);
         assert_eq!([0, 1, 2, 3].map(|u| s.unit_doc(u).unwrap()), [0, 1, 2, 2]);

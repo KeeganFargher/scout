@@ -1,0 +1,8 @@
+round 2 if_files 3484.2 ms
+round 2 return_files 2002.9 ms
+round 2 date_lines 2149.3 ms
+round 2 return_m1 2014.0 ms
+round 2 date_files 1984.7 ms
+round 2 license_files 1573.3 ms
+round 2 if_lines 4141.8 ms
+/mnt/c/Users/User/source/test space/scout/bench/harness/ebs-run.sh: line 1: 418757 Hangup                  bash -c 'echo $$ > "$1/cgroup.procs"; shift; exec setpriv --reuid=1000 --regid=1000 --init-groups taskset -c "$@"' _ "$cg" "$mask" "$@"

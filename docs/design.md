@@ -7,11 +7,13 @@ every file.
 ## Goals
 
 1. **Correct first.** A search returns exactly what `rg` would return over the same repos.
-   The index is only a _pre-filter_: every candidate is confirmed by ripgrep's regex
-   engine on real contents. The index can make a search faster, never different.
+   The index is only a _pre-filter_: every candidate is confirmed on real contents,
+   using byte search for an exact case-sensitive literal or ripgrep's regex engine.
+   The index can make a search faster, never different.
 2. **Fast.** A selective query over ~100k files should touch only a handful of them.
-3. **Runs on small machines.** 1 CPU / 2 GB RAM must work; 30 cores / TBs of RAM must
-   scale. Nothing assumes the index fits in RAM.
+3. **Runs on small machines.** 4 GiB RAM and a few CPUs is the smallest supported box
+   (since 2026-10-28; earlier measurements below include 1 CPU / 2 GiB); 30 cores / TBs
+   of RAM must scale. Nothing assumes the index fits in RAM.
 4. **Modular like an OSS library.** Index format, where repos come from, and where index
    files live are all swappable behind small traits. One core, many front-ends (CLI now,
    MCP later).
@@ -21,12 +23,12 @@ Non-goals for now: semantic search, MCP server, remote/S3 implementations
 
 ## Decisions (agreed 2026-10-17)
 
-| Decision     | Choice                                                            | Why                                                                                                              |
-| ------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Language     | Rust core + Rust CLI                                              | In-process use of ripgrep's crates. No process spawn per repo, mmap, no GC.                                      |
-| ripgrep      | Vendored as a git subtree in `vendor/ripgrep`, used via path deps | We own the code and can patch internals, but can still `git subtree pull` upstream.                              |
-| Freshness    | Detect + verify                                                   | Files that changed since indexing are searched from disk, deleted files are dropped, so results are never stale. |
-| TS workspace | Kept for future thin front-ends (e.g. the MCP)                    | The empty TS `apps/cli` and `domains/*` placeholders are removed; the Rust crates own those domains now.         |
+| Decision     | Choice                                                            | Why                                                                                                                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Language     | Rust core + Rust CLI                                              | In-process use of ripgrep's crates. No process spawn per repo, mmap, no GC.                                                                                                                                                           |
+| ripgrep      | Vendored as a git subtree in `vendor/ripgrep`, used via path deps | We own the code and can patch internals, but can still `git subtree pull` upstream. One patch so far: `Searcher::set_first_line_number` in grep-searcher, so a unit read from the middle of a file keeps its file line numbers (E32). |
+| Freshness    | Detect + verify                                                   | Files that changed since indexing are searched from disk, deleted files are dropped, so results are never stale.                                                                                                                      |
+| TS workspace | Kept for future thin front-ends (e.g. the MCP)                    | The empty TS `apps/cli` and `domains/*` placeholders are removed; the Rust crates own those domains now.                                                                                                                              |
 
 ## Architecture
 
@@ -66,14 +68,27 @@ declares.
 
 Each repo becomes one or more shards. A shard holds:
 
-- **Doc table**: path, size, mtime, and offset into the content blob.
+- **Doc table**: path, size, mtime, offset into the content blob, and the doc's first
+  content block.
 - **Corpus bin**: the contents of every indexed file, concatenated. Verifying a candidate
   is a slice into an mmap, not a file open. On Windows, opening 100k files costs seconds
   (Defender, NTFS), so this is likely the biggest single win. It also makes a shard
   self-contained, which is what lets remote stores work.
+- **Content blocks** (E29): each doc's content is stored as its units' spans, each block
+  either as is or lz4-compressed (only where that is smaller), with a table of stored and
+  raw lengths. A raw index borrows content straight from the map; an lz4 index decodes a
+  doc into a per-thread buffer. `scout index --content auto` (the default, also used by
+  `sync`) picks lz4 once the content of every registered repo is more than half of usable
+  memory: then the raw index cannot stay in the page cache, and every query reads from disk
+  again what it missed, where the lz4 index (content ~3x smaller, the whole index ~2.5x on
+  chromium + llvm-project) stays cached and costs a decode
+  instead. Below that, raw. It is decided per indexing run for the repos that run writes
+  (a `sync` cycle reindexes only what moved), so repos left alone keep their codec and an
+  index can hold both: the codec is per block, read alike. `auto` sizes against the
+  machine that indexes; an index built for a smaller one takes `--content lz4`.
 - **Units table**: large docs are split into line-aligned ~64 KiB _units_; the table
   maps each unit to its doc. Small docs are one unit. (Experiment E4.)
-- **Trigram postings**: for every 3-byte sequence (ASCII case-folded), the sorted list of
+- **Gram postings**: for every 3-byte sequence and tagged 2-byte sequence (ASCII case-folded), the sorted list of
   _units_ that contain it, delta + varint encoded. Lookup goes through a fence of every
   128th key to one 128-key block of the sorted trigram keys, so it usually touches about
   three pages (sections are not page-aligned, so a block can straddle two) (E19); the fence
@@ -90,23 +105,51 @@ Each repo becomes one or more shards. A shard holds:
   place through the map, so a short-lived process reads only the filter words its query
   probes instead of copying every filter.
 
-Native format v5 (`SCOUTNI5`): header, content, docs, paths, units, dictionary keys,
-values and fence, trigram filter, postings. Every section starts where the one before it
+Native format v9 (`SCOUTNI9`): header, content, docs, content blocks, paths, units,
+dictionary keys, values and fence, trigram filter, postings. Every section starts where the one before it
 ends. A shard in another format version is refused with a message to rebuild the index
 with `scout index`.
+
+Each document row also stores a 32-byte Bloom summary of normalized numeric four-character
+shapes. Regexes with no literal gram constraint can use it to reject documents before
+decoding. Letters collapse to one symbol; ASCII digits and all non-ASCII Unicode
+characters share another, so Unicode digits are never excluded by a Unicode-version
+assumption. Unsupported raw-byte projections impose no shape constraint. Binary/BOM
+reader-mode documents are verified independently of these summaries.
 
 Big repos are split into several shards by a size cap. The cap comes from the memory
 budget: building a shard keeps its (trigram, unit) pairs in RAM, so the cap bounds
 indexing memory on small machines.
+
+Each indexing worker takes one repo at a time, so one huge repo (chromium) would get one
+thread. Inside a repo, files are therefore read, classified and split into trigrams on the
+worker's share of the threads, ahead of the one thread that writes shards, which takes them
+in path order: the shards are byte-identical to a serial build's. The read-ahead may hold
+an eighth of a shard's content (plus 4 KiB a file), a small part of the 5x-shard memory a
+worker plans for. A one-CPU machine reads inline, since the handoff to another thread only
+costs CPU there (E25).
 
 ### Query planning (regex → trigram query)
 
 Following Russ Cox's _Regular Expression Matching with a Trigram Index_: walk the
 `regex-syntax` HIR, computing for each node its exact/prefix/suffix literal sets and a
 boolean query. Each literal of 3+ bytes becomes an AND of its trigrams; alternations become
-ORs; anything unbounded becomes "match all". Case-insensitive queries fold the same way the
-index does. When the plan is "match all" (e.g. `.`, or patterns shorter than 3 bytes),
-the search falls back to scanning the corpus bins, which is still faster than walking the FS.
+ORs; a two-byte literal uses its tagged pair, and a one-byte unconstrained pattern plans
+a scan. Case-insensitive queries fold the same way the index does. A "match all" gram
+plan can additionally require normalized numeric shapes derived from the regex HIR.
+Only survivors are decoded and matched by the full matcher.
+
+Indexed plain text writes rg's path/line/count format directly into a chunk's output
+buffer. Printed output buffers are recycled with a 32 MiB retention cap; one path buffer
+and one initialized decode buffer are reused while visiting a chunk's documents.
+Exact, case-sensitive literals without word boundaries use `memmem`;
+other patterns use the regex searcher with the same text sink. Binary/BOM reader-mode
+documents use rg's reader and printer so transcoding and binary warnings stay exact.
+The reference LZ4 decoder validates input/output bounds and the exact decoded length;
+compressed blocks larger than its signed 32-bit length limit are rejected before allocation.
+Even with LZ4 enabled, blocks smaller than 4 KiB stay raw to avoid small decoder calls
+and borrow the mmap directly. This trades some page-cache space for less CPU work on
+broad queries; larger blocks are compressed only when that saves space.
 
 ### Search pipeline
 
@@ -120,12 +163,23 @@ the search falls back to scanning the corpus bins, which is still faster than wa
    trigram's unit count is read from the dictionary first (a zero empties it without
    decoding anything); lists are then decoded rarest first, and only while decoding the
    next costs less than verifying the candidates already left (E22).
-3. Verify the chunks on up to that many threads (fewer when there are fewer chunks): run
-   `grep-searcher` + `grep-regex` on each candidate's content slice, with `grep-printer`
-   producing rg-style output. Chunks cross repo boundaries, so a few large repos no longer
+3. Verify the chunks on up to that many threads (fewer when there are fewer chunks):
+   byte search for exact case-sensitive literals, `grep-searcher` + `grep-regex` for
+   other patterns, and rg's reader/printer for binary/BOM content. Plain text uses the
+   direct rg-style formatter. Chunks cross repo boundaries, so a few large repos no longer
    bound the search (E16); one file is still verified by one thread, as in rg. Output is
    printed in chunk order; workers run ahead of the printer only while less than 64 MiB
-   is waiting to print (E18), and one thread verifies inline without a buffer.
+   is waiting to print (E18), and one thread verifies inline without a buffer. Each
+   verifier asks the kernel to read its candidates' content ahead in ~4 MiB blocks
+   (`MADV_WILLNEED`, queued a block before it is needed), so a cold or evicted index is
+   read in large requests instead of one 128 KiB read-around per page fault (E28).
+   A candidate bigger than one unit (64 KiB) is read only at its candidate units: the
+   blocks table stores each block's count of lines before it, so the searcher numbers
+   those units' lines from where they sit in the file (E32); counts and `-m` carry across
+   a file's units (E33). Ranking, haystack anchors, reader-mode files, always-searched docs,
+   docs of one unit and files searched from disk read the whole file. Posting lists are mapped without read-around
+   (`MADV_RANDOM`) and each list asks for exactly its own range; the dictionary keeps
+   read-around, which an index bigger than memory needs (E30).
 4. Freshness (default `strict`): docs whose file changed on disk are searched from disk
    instead, deleted files are dropped, new files are searched directly.
    `--freshness off` trusts the index. See _Strict freshness_ below.

@@ -1,0 +1,16 @@
+shard  base-cold-sha256[:16]  e25-sha256[:16]  (snapshots.pack holds journal cursors, so it differs by design)
+chromium.0 b9386c3a166869f6 b9386c3a166869f6 same
+chromium.1 37fc2bab8b53b1c6 37fc2bab8b53b1c6 same
+chromium.2 e1ffeb7f5a3c2b26 e1ffeb7f5a3c2b26 same
+chromium.3 b04e51152e2189af b04e51152e2189af same
+chromium.4 e88eb3ff1c69d4cb e88eb3ff1c69d4cb same
+chromium.5 a6fffe2c669ea088 a6fffe2c669ea088 same
+chromium.6 26cea73f82fb327e 26cea73f82fb327e same
+chromium.7 990f81370106fa69 990f81370106fa69 same
+llvm-project.0 1d6c2bee46acb3f3 1d6c2bee46acb3f3 same
+llvm-project.1 76c4689e22efd82c 76c4689e22efd82c same
+llvm-project.2 db1203f0b9037888 db1203f0b9037888 same
+llvm-project.3 0369bf118c8c0f01 0369bf118c8c0f01 same
+llvm-project.4 1f9f4372ed187fa6 1f9f4372ed187fa6 same
+llvm-project.5 b2259842e1e6c898 b2259842e1e6c898 same
+snapshots 24ca2b0f2297ec45 909a84baa7e91897 DIFFERENT

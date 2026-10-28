@@ -1,0 +1,8 @@
+| query | e26 ms | e27 ms | e27/e26 | e27 faster in rounds |
+|---|---:|---:|---:|---:|
+| literal_ident | 65.1 | 66.8 | 1.026 | 0/3 |
+| literal_common | 197.5 | 202.0 | 1.023 | 0/3 |
+| literal_none | 32.9 | 33.1 | 1.006 | 0/3 |
+| short_unindexable | 2223.3 | 2205.4 | 0.992 | 3/3 |
+| huge_output | 1223.4 | 1249.0 | 1.021 | 0/3 |
+| selective_symbol | 45.2 | 45.3 | 1.001 | 2/3 |

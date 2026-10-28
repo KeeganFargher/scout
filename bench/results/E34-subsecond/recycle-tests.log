@@ -1,0 +1,72 @@
+   Compiling scout-core v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-core)
+   Compiling scout-sync v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-sync)
+   Compiling scout-source-fs v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-source-fs)
+   Compiling scout-index-sqlite v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-index-sqlite)
+   Compiling scout-store-fs v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-store-fs)
+   Compiling scout-index-native v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-index-native)
+   Compiling scout-cli v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-cli)
+    Finished `release` profile [optimized + debuginfo] target(s) in 59.51s
+     Running tests\units.rs (target\release\deps\units-b638f8450223f98e.exe)
+
+running 9 tests
+test raw_shape_filter_keeps_unicode_and_reader_matches ... ok
+test lz4_shape_filter_keeps_unicode_and_reader_matches ... ok
+test native_lz4_units_filter_and_keep_line_numbers ... ok
+test native_units_filter_and_keep_line_numbers ... ok
+test sqlite_shape_filter_keeps_unicode_and_reader_matches ... ok
+test sqlite_units_filter_and_keep_line_numbers ... ok
+test raw_blocks_keep_file_wide_printer_semantics ... ok
+test lz4_blocks_keep_file_wide_printer_semantics ... ok
+test sqlite_keeps_file_wide_printer_semantics ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.26s
+
+     Running unittests src\lib.rs (target\release\deps\scout_core-921a4a0a484011ec.exe)
+
+running 43 tests
+test catalog::tests::replaced_and_removed_shards_expire_after_the_grace_period ... ok
+test indexer::tests::unit_spans_end_after_newlines_and_cover_everything ... ok
+test query::tests::alternation_becomes_or ... ok
+test query::tests::invalid_pattern_is_an_error ... ok
+test query::tests::literal_becomes_and_of_trigrams ... ok
+test query::tests::large_classes_are_unconstrained_but_neighbours_still_count ... ok
+test indexer::tests::read_ahead_edge_cases ... ok
+test query::tests::optional_parts_do_not_constrain ... ok
+test indexer::tests::read_ahead_consumer_panic_stops_the_readers ... ok
+test indexer::tests::read_ahead_reader_panic_stops_the_run ... ok
+test query::tests::literals_around_wildcards_are_all_required ... ok
+test indexer::tests::read_ahead_stops_on_the_first_consumer_error ... ok
+test query::tests::plus_keeps_constraint_of_its_operand ... ok
+test query::tests::short_or_unbounded_patterns_are_unconstrained ... ok
+test query::tests::small_classes_expand_and_case_folds ... ok
+test rank::tests::copies_move_behind_every_first_copy_and_none_is_dropped ... ok
+test rank::tests::covering_more_terms_beats_repeating_one ... ok
+test rank::tests::definitions ... ok
+test rank::tests::noise_classes ... ok
+test rank::tests::noise_demotes_but_never_hides_a_strong_match ... ok
+test rank::tests::rare_terms_weigh_more ... ok
+test rank::tests::saturation_keeps_a_data_dump_below_a_definition ... ok
+test ranked::tests::smart_case_resolves_once ... ok
+test ranked::tests::terms_are_the_top_level_branches ... ok
+test search::tests::a_long_and_counts_only_the_trigrams_the_hint_ranks_rarest ... ok
+test search::tests::a_trigram_the_filter_rejects_empties_its_and_before_any_read ... ok
+test search::tests::an_and_stops_decoding_once_verifying_is_cheaper ... ok
+test search::tests::a_skipped_list_leaves_a_superset_and_the_rest_of_the_and_still_applies ... ok
+test search::tests::candidates_keep_their_units_and_always_searched_docs_are_read_whole ... ok
+test search::tests::read_ahead_queues_every_doc_once_before_it_is_verified_and_stays_bounded ... ok
+test search::tests::set_ops ... ok
+test snapshots::tests::damage_is_an_error ... ok
+test shape::tests::digits_include_every_unicode_character_without_relying_on_a_unicode_version ... ok
+test shape::tests::short_alternatives_and_raw_invalid_byte_patterns_impose_no_filter ... ok
+test snapshots::tests::round_trips ... ok
+test trigram::tests::extracts_distinct_folded_trigrams_skipping_newlines ... ok
+test search::tests::the_first_failing_chunk_is_the_error_reported ... ok
+test search::tests::reader_output_does_not_depend_on_previous_docs ... ok
+test search::tests::output_does_not_depend_on_chunking_or_threads ... ok
+test shape::tests::projected_prefixes_never_reject_real_unicode_or_byte_edge_matches ... ok
+test indexer::tests::shards_do_not_depend_on_read_threads ... ok
+test search::tests::indexed_text_output_matches_the_rg_printers_on_byte_and_line_edges ... ok
+test indexer::tests::read_ahead_consumes_in_order_within_the_window ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+

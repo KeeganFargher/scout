@@ -1,0 +1,47 @@
+parity common_lines: 31996445 bytes identical
+parity common_files: 4185368 bytes identical
+parity common_count: 4289820 bytes identical
+parity common_m1: 9671921 bytes identical
+parity license_lines: 31428314 bytes identical
+parity license_files: 15625533 bytes identical
+parity license_m1: 30412308 bytes identical
+parity todo_lines: 22588921 bytes identical
+parity todo_files: 3649432 bytes identical
+parity date_lines: 61640204 bytes identical
+parity date_files: 569199 bytes identical
+parity if_lines: 811859623 bytes identical
+parity if_files: 33093056 bytes identical
+parity if_m1: 109985924 bytes identical
+parity return_lines: 428643537 bytes identical
+parity return_files: 18360375 bytes identical
+parity return_m1: 38678004 bytes identical
+parity selective_symbol: 123127 bytes identical
+parity selective_none: 0 bytes identical
+round 1/5 complete
+round 2/5 complete
+round 3/5 complete
+round 4/5 complete
+round 5/5 complete
+| query | before ms | after ms | after/before | rounds won |
+|---|---:|---:|---:|---:|
+| common_lines | 552.3 | 542.8 | 0.983 | 4/5 |
+| common_files | 522.9 | 506.5 | 0.969 | 4/5 |
+| common_count | 561.6 | 529.2 | 0.942 | 5/5 |
+| common_m1 | 543.9 | 503.2 | 0.925 | 5/5 |
+| license_lines | 1590.3 | 1597.2 | 1.004 | 4/5 |
+| license_files | 1561.9 | 1552.9 | 0.994 | 4/5 |
+| license_m1 | 1628.2 | 1560.6 | 0.959 | 5/5 |
+| todo_lines | 717.1 | 697.1 | 0.972 | 5/5 |
+| todo_files | 659.9 | 626.2 | 0.949 | 5/5 |
+| date_lines | 2162.3 | 2028.9 | 0.938 | 5/5 |
+| date_files | 2115.4 | 1934.6 | 0.915 | 5/5 |
+| if_lines | 4225.6 | 4118.9 | 0.975 | 5/5 |
+| if_files | 3727.0 | 3516.7 | 0.944 | 5/5 |
+| if_m1 | 3765.6 | 3522.7 | 0.935 | 5/5 |
+| return_lines | 2424.6 | 2408.2 | 0.993 | 3/5 |
+| return_files | 2092.6 | 1999.9 | 0.956 | 5/5 |
+| return_m1 | 2173.0 | 2025.7 | 0.932 | 5/5 |
+| selective_symbol | 27.6 | 27.1 | 0.979 | 4/5 |
+| selective_none | 20.8 | 21.3 | 1.027 | 1/5 |
+geomean after/before: 0.962
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1874 oom_kills=0 io: rbytes=1862225920 wbytes=0 rios=73041 wios=0 dbytes=0 dios=0

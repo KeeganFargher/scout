@@ -1,0 +1,1869 @@
+{
+ "kind": "serve",
+ "mode": "warm",
+ "rounds": 10,
+ "read_ahead_kb": 8192,
+ "queries": [
+  {
+   "name": "literal_rare",
+   "sha256": "a2d31e11367eb01b261eba9c572905afdd0d7b6235523cd08e0517c4bf7755dd",
+   "bytes": 315088,
+   "p50_ms": 6.0252719999880355,
+   "p90_ms": 6.550852000145824,
+   "max_ms": 6.550852000145824,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 6.35942700000669,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 5.489011000008759,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 5.830185999911919,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 6.550852000145824,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 5.5884619996504625,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 6.0038050000912335,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 6.0467389998848375,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 6.1122470001464535,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 5.6089390000124695,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    },
+    {
+     "ms": 6.356256999424659,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 315088
+    }
+   ]
+  },
+  {
+   "name": "literal_common",
+   "sha256": "f4ae6b1c1c9403ab0658c059a2f8843a367087a9aecb1545e001be6f0813a58a",
+   "bytes": 230849810,
+   "p50_ms": 684.3822810001257,
+   "p90_ms": 867.2487640001236,
+   "max_ms": 867.2487640001236,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 797.3513360002471,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 598.0568439999843,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 791.779072999816,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 867.2487640001236,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 794.2592660001537,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 568.6739600000692,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 643.6182580000605,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 725.1463040001909,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 642.7151899997625,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    },
+    {
+     "ms": 620.1209419996303,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 230849810
+    }
+   ]
+  },
+  {
+   "name": "literal_none",
+   "sha256": "ca013fcb12ef850d7136cb3a12bd0449b9bb274fda463ea5a9d0b44a41dad0d4",
+   "bytes": 108,
+   "p50_ms": 2.0176224998067482,
+   "p90_ms": 2.269124000122247,
+   "max_ms": 2.269124000122247,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 1.8899510000665032,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.020865999838861,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.1372870000959665,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.0719760000247334,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.0143789997746353,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 1.7733879999468627,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.0583679997798754,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 2.269124000122247,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 1.997540000047593,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    },
+    {
+     "ms": 1.7651119997026399,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 108
+    }
+   ]
+  },
+  {
+   "name": "literal_long",
+   "sha256": "ad2b55abc30418bbd6116eaf3444109b17e207dfd4c3ec54a180e9ac3ba33d91",
+   "bytes": 785033,
+   "p50_ms": 17.98089899966726,
+   "p90_ms": 18.89415799996641,
+   "max_ms": 18.89415799996641,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 18.030127999736578,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 17.551635000017995,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 18.158823000248958,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 17.704785999740125,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 17.841123999915,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 18.736180000360037,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 18.32900299996254,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 17.636691000006977,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 17.931669999597943,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    },
+    {
+     "ms": 18.89415799996641,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 785033
+    }
+   ]
+  },
+  {
+   "name": "ident_regex",
+   "sha256": "c445f63988ccd7724a8837e6d8b6b7b1b25bd069d308345c892adbd7562e2b88",
+   "bytes": 2033388,
+   "p50_ms": 21.712683500027197,
+   "p90_ms": 25.08498099996359,
+   "max_ms": 25.08498099996359,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 23.956203000125242,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 19.024722000267502,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 25.08498099996359,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 21.613719000015408,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 23.269272999641544,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 21.811648000038986,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 20.77562799968291,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 21.5060599998651,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 20.58511199993518,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    },
+    {
+     "ms": 23.728251000648015,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 2033388
+    }
+   ]
+  },
+  {
+   "name": "alternation",
+   "sha256": "da3ab29a3b9cde36aeb4ec900edc4da2b8dea4e876ecbf704c5b681ec9559c92",
+   "bytes": 35673488,
+   "p50_ms": 107.48787000011362,
+   "p90_ms": 126.19319500026904,
+   "max_ms": 126.19319500026904,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 126.19319500026904,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 105.3840970002966,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 108.56645600006232,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 113.08911100013574,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 107.77652800015858,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 107.19921200006866,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 104.42672199997105,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 111.88253499994971,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 105.84928399975979,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    },
+    {
+     "ms": 105.75301100016077,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 35673488
+    }
+   ]
+  },
+  {
+   "name": "case_insensitive",
+   "sha256": "4c0eab944c185a107fd415877ed08d4bcc6571ca96d0472e507d711e67d185d4",
+   "bytes": 58317343,
+   "p50_ms": 168.90563450010632,
+   "p90_ms": 200.00751399993533,
+   "max_ms": 200.00751399993533,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 164.86611600021206,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 161.54708500016568,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 169.6849969998766,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 183.4014070000194,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 156.09840100023575,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 160.5801080004312,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 200.00751399993533,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 191.89924900001643,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 189.1848399995979,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    },
+    {
+     "ms": 168.12627200033603,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 58317343
+    }
+   ]
+  },
+  {
+   "name": "smart_case",
+   "sha256": "23a5093fe6bc871a48d35e14a11153eb312af9d50dc85268849f6ba4da6c6aa1",
+   "bytes": 409610,
+   "p50_ms": 24.80451000019457,
+   "p90_ms": 27.336755999840534,
+   "max_ms": 27.336755999840534,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 24.874587000340398,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 23.72220600000219,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 27.336755999840534,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 26.221378999707667,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 25.539556000239827,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 24.068888000329025,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 25.412893000066106,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 24.316923999776918,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 23.935848000292026,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    },
+    {
+     "ms": 24.73443300004874,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 409610
+    }
+   ]
+  },
+  {
+   "name": "word",
+   "sha256": "b3be43d9f4bf8ec39772809e9bb2b9081e0f2bcd41a0abc09d7478a51261ef42",
+   "bytes": 85886414,
+   "p50_ms": 236.34489450023466,
+   "p90_ms": 291.51663900029234,
+   "max_ms": 291.51663900029234,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 229.0723739997702,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 223.2725170001686,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 252.7457599999252,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 226.18164100003924,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 291.51663900029234,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 231.24796899992361,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 252.35085400026946,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 234.67981700014207,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 259.9515420001808,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    },
+    {
+     "ms": 238.00997200032725,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 85886414
+    }
+   ]
+  },
+  {
+   "name": "short_unindexable",
+   "sha256": "7ad2dc4a0627747970d578692b110070de78821f85574f29813820e05685478d",
+   "bytes": 272866480,
+   "p50_ms": 908.2877420000841,
+   "p90_ms": 1055.2015749999555,
+   "max_ms": 1055.2015749999555,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 1020.0147669997932,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 797.2308839998732,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 1055.2015749999555,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 943.8760610000827,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 878.8044120001359,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 962.8622519999226,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 937.7710720000323,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 827.040026999839,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 872.8791940002338,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    },
+    {
+     "ms": 806.1028760002955,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 272866480
+    }
+   ]
+  },
+  {
+   "name": "anchored",
+   "sha256": "407b6d3205fb17feaffbea9887e081bf70f49ce1863b8cde5856f076bd1ada31",
+   "bytes": 9840,
+   "p50_ms": 4.707773000063753,
+   "p90_ms": 7.437883999955375,
+   "max_ms": 7.437883999955375,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 5.6008749997999985,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.775018000145792,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 7.437883999955375,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.524888999640098,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.596679000314907,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.242828999849735,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.6829160000925185,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.7326300000349875,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 4.156763000537467,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    },
+    {
+     "ms": 5.128046999743674,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 9840
+    }
+   ]
+  },
+  {
+   "name": "date_regex",
+   "sha256": "0d06da64694f22bd6736d46fd38e1cc34e190f367c1d1a513bca1563df4defe6",
+   "bytes": 40304819,
+   "p50_ms": 181.9808535001357,
+   "p90_ms": 230.39995199997065,
+   "max_ms": 230.39995199997065,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 172.39335399972333,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 165.08461400007945,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 230.39995199997065,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 206.04349300037939,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 186.3026850001006,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 190.10005900008764,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 181.81756000012683,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 174.39878200002568,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 182.14414700014459,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    },
+    {
+     "ms": 169.8706939996555,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 40304819
+    }
+   ]
+  },
+  {
+   "name": "email_regex",
+   "sha256": "f61bad35d33f564e7a02e367a2dcbca8b4c8d5631274d25ff8b844f1f4c396e0",
+   "bytes": 1054463,
+   "p50_ms": 61.54102499999681,
+   "p90_ms": 67.8113779999876,
+   "max_ms": 67.8113779999876,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 61.6711050001868,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 60.36930600021151,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 60.45489799998904,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 64.94113200005813,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 61.34041799987244,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 67.8113779999876,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 60.8253909999803,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 65.57543100007024,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 62.46663299998545,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    },
+    {
+     "ms": 61.410944999806816,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1054463
+    }
+   ]
+  },
+  {
+   "name": "count_mode",
+   "sha256": "66da274e0d8b3e509280b2955cf0ad5209bc549ece376e5e405ac6a3a2a5b53a",
+   "bytes": 94451,
+   "p50_ms": 8.001066000133505,
+   "p90_ms": 12.429874000190466,
+   "max_ms": 12.429874000190466,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 7.967764000113675,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 7.936194000194519,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 8.650124999803666,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 8.259840000391705,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 7.90060799999992,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 12.429874000190466,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 7.845795999855909,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 8.136504000049172,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 7.633237999471021,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    },
+    {
+     "ms": 8.034368000153336,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 94451
+    }
+   ]
+  },
+  {
+   "name": "files_mode",
+   "sha256": "32c13e5a462551a88432a02b8e5fd6ac25891b422065435b57181d723c3fae43",
+   "bytes": 55815,
+   "p50_ms": 12.765922500193483,
+   "p90_ms": 23.332960000061576,
+   "max_ms": 23.332960000061576,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 23.332960000061576,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.579894999817043,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.09359399990717,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 14.279209000051196,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.584120000155963,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.375133999739774,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.947725000231003,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 13.420005999705609,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 12.525856000138447,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    },
+    {
+     "ms": 13.328670999726455,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 55815
+    }
+   ]
+  },
+  {
+   "name": "rare_regex",
+   "sha256": "43224b35f41736c14a213f8e9c952741429527e1a564cc806f3df0e4507490b4",
+   "bytes": 3434,
+   "p50_ms": 11.117938499864977,
+   "p90_ms": 15.522938999765756,
+   "max_ms": 15.522938999765756,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 10.897273999944446,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 10.171097999773338,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 15.522938999765756,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 10.409323999738263,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 11.54179800005295,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 13.540721000026679,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 10.624514000028284,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 11.033462999876065,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 12.119759000142949,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    },
+    {
+     "ms": 11.202413999853889,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 3434
+    }
+   ]
+  },
+  {
+   "name": "selective_one",
+   "sha256": "cd71e01ed2e7909a4459de4abb4488c8dd27a4f02ffe99ef43a0aae8c995af88",
+   "bytes": 1236,
+   "p50_ms": 2.2027835000244522,
+   "p90_ms": 2.6371660005679587,
+   "max_ms": 2.6371660005679587,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 2.202954000040336,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.244696000161639,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.0909509999000875,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.390638999713701,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.203624000230775,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.2026130000085686,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.1884869997848,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.090682000016386,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 1.8848210002033738,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    },
+    {
+     "ms": 2.6371660005679587,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 1236
+    }
+   ]
+  },
+  {
+   "name": "selective_long",
+   "sha256": "2be7e46def04b6c0cb66a03e810182f05f132bbc2b05b8c99639e4c9ae79635d",
+   "bytes": 952,
+   "p50_ms": 2.224360499667455,
+   "p90_ms": 2.9542340002990386,
+   "max_ms": 2.9542340002990386,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 2.9542340002990386,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.04126400012683,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 1.7968670003938314,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.091512999868428,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.4363150000681344,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.595532000214007,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 1.9488510001792747,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.140901000075246,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.342767999834905,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    },
+    {
+     "ms": 2.3078199992596637,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 952
+    }
+   ]
+  },
+  {
+   "name": "selective_vendored",
+   "sha256": "42f45dbd133114ab7d641821f4f1465eaab3ab36e5a68803172efcb8dca753b3",
+   "bytes": 958,
+   "p50_ms": 2.449681999905806,
+   "p90_ms": 2.7865590000146767,
+   "max_ms": 2.7865590000146767,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 2.7865590000146767,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.7614870000434166,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.649789999850327,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.4275809996652242,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.636144999996759,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.4094059999697492,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.158196999971551,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.471783000146388,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.3214519997054595,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    },
+    {
+     "ms": 2.41770600041491,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 958
+    }
+   ]
+  },
+  {
+   "name": "selective_common_trigrams",
+   "sha256": "69a2b9ba8b0ded7f4c5580a575e4bf12382d70f6c0f1aadb2188cd887aaa1887",
+   "bytes": 378,
+   "p50_ms": 5.147985499888819,
+   "p90_ms": 5.489705000400136,
+   "max_ms": 5.489705000400136,
+   "majfaults_median": 0.0,
+   "read_mib_median": 0.0,
+   "file_mib_before_median": 1031.08984375,
+   "runs": [
+    {
+     "ms": 5.16560500000196,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 4.74309000037465,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.33314899985271,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.484946000251512,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.294412999774067,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 4.951397999775509,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.044573999839486,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.130365999775677,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.489705000400136,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    },
+    {
+     "ms": 5.1236120007160935,
+     "file_mib": 1031.08984375,
+     "majfaults": 0,
+     "read_mib": 0.0,
+     "resident_mib": null,
+     "bytes": 378
+    }
+   ]
+  }
+ ],
+ "geomean_p50_ms": 22.55562790428542
+}

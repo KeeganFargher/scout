@@ -1,0 +1,25 @@
+# name<TAB>flags<TAB>pattern. Large-repo suite (chromium, llvm-project): the same query
+# classes as queries.tsv, with patterns that occur in these trees.
+literal_ident	-F	RenderFrameHostImpl
+literal_common	-F	std::unique_ptr
+literal_none	-F	zqxjvbnm_nothing_here
+literal_long	-F	Use of this source code is governed by a BSD-style license
+ident_regex		class \w+Delegate\b
+alternation		TODO|FIXME|HACK
+crbug_regex		TODO\(crbug\.com/\d+\)
+case_insensitive	-i	deprecated
+smart_case	-S	webassembly
+word	-w	DCHECK
+short_unindexable		if
+huge_output	-F	return
+anchored		^#include "base/\w+\.h"$
+date_regex		\d{4}-\d{2}-\d{2}
+count_mode	-c -F	NOTREACHED
+files_mode	-l	#include <vector>
+llvm_regex		dyn_cast<\w+Inst>
+rare_regex		fn\s+parse_\w+
+selective_long	-F	kMaxNumberOfPartitionsForWebRtcAudio
+selective_symbol	-F	getAsCXXRecordDecl
+nomatch_unicode_regex		\bxq\d{12}\b
+nomatch_class_regex		qz[0-9]{40}
+nomatch_ascii_regex		(?-u)\bxq\d{12}\b

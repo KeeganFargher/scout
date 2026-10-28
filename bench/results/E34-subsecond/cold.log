@@ -1,0 +1,33 @@
+round 1/3 if_lines: 14483.5 ms, 1674.4 MiB read, 997 major faults
+round 1/3 date_lines: 3551.5 ms, 395.0 MiB read, 715 major faults
+round 1/3 selective_symbol: 650.0 ms, 95.5 MiB read, 745 major faults
+round 1/3 selective_none: 407.1 ms, 60.4 MiB read, 521 major faults
+round 1/3 license_lines: 6589.1 ms, 790.4 MiB read, 1033 major faults
+round 1/3 return_lines: 12178.6 ms, 1314.4 MiB read, 1096 major faults
+round 2/3 return_lines: 12175.0 ms, 1314.4 MiB read, 1096 major faults
+round 2/3 if_lines: 14579.0 ms, 1674.1 MiB read, 990 major faults
+round 2/3 date_lines: 3554.5 ms, 395.0 MiB read, 712 major faults
+round 2/3 license_lines: 6644.1 ms, 790.4 MiB read, 1032 major faults
+round 2/3 selective_none: 515.0 ms, 60.4 MiB read, 521 major faults
+round 2/3 selective_symbol: 699.6 ms, 95.5 MiB read, 745 major faults
+round 3/3 license_lines: 6518.6 ms, 790.4 MiB read, 1033 major faults
+round 3/3 selective_none: 517.0 ms, 60.4 MiB read, 521 major faults
+round 3/3 date_lines: 3509.2 ms, 395.2 MiB read, 713 major faults
+round 3/3 return_lines: 12094.0 ms, 1314.4 MiB read, 1100 major faults
+round 3/3 if_lines: 14583.0 ms, 1674.1 MiB read, 995 major faults
+round 3/3 selective_symbol: 815.8 ms, 95.5 MiB read, 745 major faults
+cold output parity OK: license_lines
+cold output parity OK: return_lines
+cold output parity OK: date_lines
+cold output parity OK: if_lines
+cold output parity OK: selective_symbol
+cold output parity OK: selective_none
+| query | warm ms | cold ms | cold MiB read |
+|---|---:|---:|---:|
+| license_lines | 328.0 | 6589.1 | 790.4 |
+| return_lines | 714.0 | 12175.0 | 1314.4 |
+| date_lines | 362.6 | 3551.5 | 395.0 |
+| if_lines | 957.0 | 14579.0 | 1674.1 |
+| selective_symbol | 24.7 | 699.6 | 95.5 |
+| selective_none | 20.3 | 515.0 | 60.4 |
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1811 oom_kills=0 io: rbytes=18161119232 wbytes=0 rios=251281 wios=0 dbytes=0 dios=0

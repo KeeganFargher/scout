@@ -1,12 +1,16 @@
 #!/bin/bash
 # E24 (per-shard trigram filter, native format v5) against the build before it (v3).
-#   run-e24.sh <base-bin-dir> <e24-bin-dir> [part...]
-#   parts: index cli serve serve12 clicold cliff heapcli (default: all but heapcli, in order)
+#   run-e24.sh <base-bin-dir> <e24-bin-dir> <part>...
+#   parts, run in this order: index indexab cli serve serve12 serve128 clicold cliff heapcli
 # index:   builds the v5 bench index with the 12-CPU profile, the same shard split as the v3
 #          index it is compared with; checks the two match but for the filters and that every
 #          key passes its own filter (v3v5same.py), and the planner's gate against an
 #          independent probe of the filters (filtercheck.py); copies it for serve and primes
 #          the copy (its first cycle adds the mirrored repo).
+# indexab: indexing time and memory against base: each build a fresh index of the same repos
+#          in a scratch directory, arms alternating, 5 builds each at 1 CPU / 2 GiB and at
+#          12 CPUs. Wall time varies by seconds from build to build with the disk's writeback
+#          (12.0 to 17.4 s at 1 CPU for one arm), so CPU time (user + sys) is the measure.
 # cli:     interleaved warm A/B of the CLI (ab.sh), 5 rounds of 20 runs, 1, 4 and 12 CPUs.
 #          Both indexes are first evicted, then warmed from this script's own cgroup with the
 #          corpus (equalise): page cache is charged to the cgroup that first faults it, and in
@@ -14,6 +18,9 @@
 #          limit) while the freshly written v5 one stayed charged to the indexer's.
 # serve:   serve cold and warm (serve-coldab.sh), 2 reps, 3 cold and 10 warm rounds, 1 and 4 CPUs.
 # serve12: the same at 12 CPUs with 1 cold round, to check scale-up.
+# serve128: serve cold again where a cold fault reads what it would on a cloud VM: 2 reps of 3
+#          cold rounds at 1, 4 and 12 CPUs, and only 2 warm rounds, since a warm request reads
+#          nothing from disk. Like clicold, it needs at most 128 KiB of read-ahead.
 # clicold: the CLI cold at 1 CPU / 2 GiB, both arms alternating, 2 reps of 2 rounds. Refuses
 #          to start on a disk with over 128 KiB of read-ahead: at the WSL disk's 8 MiB a cold
 #          open's header, fence and marker reads bring every shard's dictionary and filter in
@@ -26,16 +33,16 @@
 # runs' results never pool. Cold numbers depend on the disk's read-ahead (README), which
 # qbench.py records in every report.
 set -euo pipefail
-[ $# -ge 2 ] || { sed -n 3,4p "$0" >&2; exit 2; }
+[ $# -ge 3 ] || { sed -n 3,4p "$0" >&2; exit 2; }
 base=$1 new=$2; shift 2
-parts=("$@"); [ ${#parts[@]} -eq 0 ] && parts=(index cli serve serve12 clicold cliff)
+parts=("$@")
 H=~/small; P=$(cd "$(dirname "$0")" && pwd)
 V3=$H/idx-e20-12cpu-infinity V5=$H/idx-e24-12cpu-infinity
 S3=$H/idx-e21-serve S5=$H/idx-e24-serve
 has() { [[ " ${parts[*]} " == *" $1 "* ]]; }
 
 for p in "${parts[@]}"; do
-  case $p in index | cli | serve | serve12 | clicold | cliff | heapcli) ;; *) echo "unknown part $p" >&2; exit 2 ;; esac
+  case $p in index | indexab | cli | serve | serve12 | serve128 | clicold | cliff | heapcli) ;; *) echo "unknown part $p" >&2; exit 2 ;; esac
 done
 for B in "$base" "$new"; do
   [ -x "$B/scout" ] && [ -x "$B/scout-bench" ] || { echo "$B lacks scout or scout-bench" >&2; exit 2; }
@@ -45,9 +52,9 @@ if has heapcli; then
   [ -n "${HEAP_BIN:-}" ] && [ -x "$HEAP_BIN/scout" ] && [ -x "$HEAP_BIN/scout-bench" ] \
     || { echo "heapcli needs HEAP_BIN, a bin dir whose CLI keeps filters on the heap" >&2; exit 2; }
 fi
-if has clicold; then
+if has clicold || has serve128; then
   ra=$(python3 "$P/pagecache.py" readahead "$H")
-  [ "$ra" -le 128 ] || { echo "clicold needs a disk with at most 128 KiB read-ahead, as on a cloud VM; $H's has $ra" >&2; exit 2; }
+  [ "$ra" -le 128 ] || { echo "clicold and serve128 need at most 128 KiB of read-ahead, as on a cloud VM; $H's disk has $ra" >&2; exit 2; }
 fi
 
 # The v3 index's repos, by root, in its order: the same corpus and the same repo names.
@@ -127,6 +134,55 @@ if has index; then
     "$V5/catalog.json" "$S5/catalog.json" | tee -a "$R/index-summary.txt"
 fi
 
+if has indexab; then
+  R=$H/results/e24-indexab; fresh "$R"
+  I=$H/idx-e24-indexab
+  warm_corpus
+  for prof in 1:2G 12:infinity; do
+    c=${prof%%:*} m=${prof##*:}
+    for r in 1 2 3 4 5; do
+      if [ $((r % 2)) = 1 ]; then order=("base=$base" "e24=$new"); else order=("e24=$new" "base=$base"); fi
+      for arm in "${order[@]}"; do
+        name=${arm%%=*} B=${arm#*=}
+        rm -rf "$I"
+        "$B/scout" --index-dir "$I" add "${ROOTS[@]}" > /dev/null
+        # The previous build's index was deleted and synced, so no writeback overlaps this one.
+        sync
+        "$P/prof.sh" "$c" "$m" /usr/bin/time -f "index_wall_s=%e user_s=%U sys_s=%S maxrss_kib=%M" "$B/scout" --index-dir "$I" index \
+          > /dev/null 2> "$R/$name-${c}cpu-$r.err" || { echo "$name build failed: $R/$name-${c}cpu-$r.err" >&2; exit 1; }
+        du -sb "$I" | awk '{print "index_bytes=" $1}' >> "$R/$name-${c}cpu-$r.err"
+        rm -rf "$I"
+        sync
+      done
+    done
+  done
+  python3 - "$R" << 'EOF' | tee "$R/summary.txt"
+import glob, os, re, statistics, sys
+runs = {}  # (profile, arm) -> [{field: value}]
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.err"))):
+    arm, prof, _ = os.path.basename(f)[:-4].split("-")
+    text = open(f).read()
+    fields = "index_wall_s|user_s|sys_s|maxrss_kib|cgroup_peak_mib|oom_kills|index_bytes"
+    run = {k: float(v) for k, v in re.findall(rf"({fields})=(\d+(?:\.\d+)?)", text)}
+    if len(run) != 7 or run["oom_kills"]:
+        sys.exit(f"{f}: incomplete or OOM-killed build: {run}")
+    run["cpu_s"] = run["user_s"] + run["sys_s"]
+    runs.setdefault((prof, arm), []).append(run)
+each = lambda rs, k: ", ".join(f"{r[k]:.2f}" for r in rs)
+for prof in sorted({p for p, _ in runs}, key=lambda p: int(p[:-3])):
+    print(f"## {prof}: arm | builds | CPU s, user + sys (median; each) | wall s (median; each)"
+          " | max RSS MiB (median) | cgroup peak MiB (median) | index bytes")
+    for arm in ("base", "e24"):
+        rs = runs[(prof, arm)]
+        print(f"{arm} | {len(rs)}"
+              f" | {statistics.median(r['cpu_s'] for r in rs):.2f}; {each(rs, 'cpu_s')}"
+              f" | {statistics.median(r['index_wall_s'] for r in rs):.2f}; {each(rs, 'index_wall_s')}"
+              f" | {statistics.median(r['maxrss_kib'] for r in rs) / 1024:.0f}"
+              f" | {statistics.median(r['cgroup_peak_mib'] for r in rs):.0f}"
+              f" | {', '.join(sorted({str(int(r['index_bytes'])) for r in rs}))}")
+EOF
+fi
+
 if has cli; then
   equalise "$base@$V3" "$new@$V5"
   "$P/ab.sh" e24 "$V3" "base=$base@$V3" "e24=$new@$V5" 5 20
@@ -138,6 +194,10 @@ fi
 
 if has serve12; then
   "$P/serve-coldab.sh" e24serve12 "base=$base@$S3" "e24=$new@$S5" 2 10 1 12:infinity
+fi
+
+if has serve128; then
+  "$P/serve-coldab.sh" e24serve128 "base=$base@$S3" "e24=$new@$S5" 2 2 3 1:2G 4:4G 12:infinity
 fi
 
 if has clicold; then

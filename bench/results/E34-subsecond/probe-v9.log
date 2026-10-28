@@ -1,0 +1,9 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+round 1 license_lines 347.5 ms
+round 1 return_lines 770.4 ms
+round 1 license_files 313.0 ms
+round 1 date_lines 356.2 ms
+round 1 if_lines 1021.3 ms
+round 1 if_files 589.2 ms
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1698 oom_kills=0 io: rbytes=1687101440 wbytes=0 rios=75191 wios=0 dbytes=0 dios=0

@@ -1,0 +1,9 @@
+    Checking scout-core v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-core)
+    Checking scout-store-fs v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-store-fs)
+    Checking scout-source-fs v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-source-fs)
+    Checking scout-index-native v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-index-native)
+    Checking scout-index-sqlite v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-index-sqlite)
+    Checking scout-sync v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-sync)
+    Checking scout-bench v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-bench)
+    Checking scout-cli v0.1.0 (C:\Users\User\source\test space\scout\crates\scout-cli)
+    Finished `release` profile [optimized + debuginfo] target(s) in 14.59s

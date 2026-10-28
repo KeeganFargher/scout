@@ -1,0 +1,1231 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -912,6 +912,8 @@
+  "memchr",
+  "memmap2",
+  "scout-core",
++ "scout-store-fs",
++ "serde_json",
+  "tempfile",
+ ]
+ 
+--- a/crates/scout-cli/src/main.rs
++++ b/crates/scout-cli/src/main.rs
+@@ -11,7 +11,7 @@
+ use std::path::{Path, PathBuf};
+ use std::process::ExitCode;
+ use std::sync::{Arc, Mutex, PoisonError};
+-use std::time::Instant;
++use std::time::{Duration, Instant};
+ 
+ use anyhow::{Context, bail};
+ use clap::{Parser, Subcommand, ValueEnum};
+@@ -19,7 +19,10 @@
+ use scout_core::ports::{IndexBackend, ShardStore};
+ use scout_core::rank::Weights;
+ use scout_core::ranked::{RankOptions, search_ranked};
+-use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search};
++use scout_core::search::{
++    BoundedOptions, CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search,
++    search_bounded,
++};
+ use scout_core::snapshots::SnapshotPack;
+ use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+ use scout_index_sqlite::SqliteBackend;
+@@ -134,6 +137,16 @@
+     count: bool,
+     #[arg(short = 'm', long)]
+     max_count: Option<u64>,
++    /// Return at most this many matching lines globally, with completion metadata on
++    /// stderr. Requires --freshness off; stops before planning later shards.
++    #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..), conflicts_with_all = ["rank", "files_with_matches"])]
++    max_results: Option<usize>,
++    /// With --max-results: cap complete formatted output records at this many bytes.
++    #[arg(long, default_value_t = 65_536, requires = "max_results", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
++    result_bytes: usize,
++    /// With --max-results: cooperative processing budget in milliseconds.
++    #[arg(long, default_value_t = 1000, requires = "max_results", value_parser = clap::value_parser!(u64).range(1..))]
++    budget_ms: u64,
+     /// Only search these repos (by name). Repeatable.
+     #[arg(long = "repo")]
+     repos: Vec<String>,
+@@ -541,6 +554,9 @@
+ }
+ 
+ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
++    if a.max_results.is_some() && !matches!(a.freshness, FreshnessArg::Off) {
++        bail!("--max-results searches the published index; use --freshness off");
++    }
+     let started = Instant::now();
+     let threads = a.threads.unwrap_or_else(host::cores);
+     let catalog = store.load_catalog()?;
+@@ -558,7 +574,69 @@
+         FilterHome::Map,
+     )?;
+     let opened = started.elapsed();
+-    let opts = SearchOptions {
++    let opts = search_options(a, threads);
++    let stdout = std::io::stdout();
++    let mut out = std::io::BufWriter::with_capacity(1 << 16, stdout.lock());
++    let handles: Vec<&RepoHandle> = repos.iter().collect();
++    let searched = if let Some(max_matches) = a.max_results {
++        let bounds =
++            BoundedOptions { max_matches, max_bytes: a.result_bytes, timeout: Duration::from_millis(a.budget_ms) };
++        run_bounded(&opts, bounds, &handles, &mut out)
++    } else if a.rank {
++        let rank = RankOptions { top: usize::try_from(a.top)?, weights: Weights::default() };
++        search_ranked(&opts, &rank, &handles, &mut out).and_then(|r| {
++            if let Some(path) = &a.rank_features {
++                write_rank_features(path, &r).map_err(|e| scout_core::Error::Invalid(format!("{e:#}")))?;
++            }
++            Ok(SearchReport { stats: r.stats, snapshots: r.snapshots })
++        })
++    } else {
++        search(&opts, &handles, &mut out)
++    };
++    let report = match searched {
++        Ok(s) => s,
++        // `scout ... | head` closing the pipe is a normal way to stop a search.
++        Err(scout_core::Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::BrokenPipe => {
++            return Ok(ExitCode::SUCCESS);
++        }
++        Err(e) => return Err(e.into()),
++    };
++    match out.flush() {
++        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(ExitCode::SUCCESS),
++        r => r?,
++    }
++    let stats = report.stats;
++    let selected: Vec<&RepoEntry> =
++        catalog.repos.iter().filter(|r| a.repos.is_empty() || a.repos.contains(&r.name)).collect();
++    persist_snapshots(store, &selected, report.snapshots)?;
++    if a.stats {
++        err_line(&format!(
++            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
++            stats.repos,
++            stats.shards,
++            stats.shards_filtered,
++            stats.docs,
++            stats.candidates,
++            stats.matched_files,
++            stats.dirty_files,
++            stats.full_scans,
++            stats.unchanged_repos,
++            stats.list_time.as_secs_f64() * 1e3,
++            stats.map_time.as_secs_f64() * 1e3,
++            stats.postings_time.as_secs_f64() * 1e3,
++            stats.verify_time.as_secs_f64() * 1e3,
++            opened.as_secs_f64() * 1e3,
++            stats.elapsed.as_secs_f64() * 1e3,
++            started.elapsed().as_secs_f64() * 1e3,
++            stats.plan
++        ));
++    }
++    release_repos(repos, threads);
++    Ok(if a.max_results.is_some() || stats.matched_files > 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
++}
++
++fn search_options(a: &SearchArgs, threads: usize) -> SearchOptions {
++    SearchOptions {
+         pattern: a.pattern.clone(),
+         fixed_strings: a.fixed_strings,
+         case: if a.ignore_case {
+@@ -585,61 +663,28 @@
+             FreshnessArg::Strict => Freshness::Strict,
+             FreshnessArg::Off => Freshness::Off,
+         },
++    }
++}
++
++fn run_bounded(
++    opts: &SearchOptions,
++    bounds: BoundedOptions,
++    repos: &[&RepoHandle],
++    out: &mut dyn Write,
++) -> scout_core::Result<SearchReport> {
++    let r = search_bounded(opts, bounds, repos, out)?;
++    let metadata = if opts.output == OutputMode::Count {
++        serde_json::json!({"count": r.count_estimate(), "complete": r.complete(), "stop_reason": r.stop})
++    } else {
++        serde_json::json!({"complete": r.complete(), "stop_reason": r.stop,
++            "returned_matches": r.returned_matches, "elapsed_ms": r.stats.elapsed.as_secs_f64() * 1000.0})
+     };
+-    let stdout = std::io::stdout();
+-    let mut out = std::io::BufWriter::with_capacity(1 << 16, stdout.lock());
+-    let handles: Vec<&RepoHandle> = repos.iter().collect();
+-    let searched = if a.rank {
+-        let rank = RankOptions { top: usize::try_from(a.top)?, weights: Weights::default() };
+-        search_ranked(&opts, &rank, &handles, &mut out).and_then(|r| {
+-            if let Some(path) = &a.rank_features {
+-                write_rank_features(path, &r).map_err(|e| scout_core::Error::Invalid(format!("{e:#}")))?;
+-            }
+-            Ok(SearchReport { stats: r.stats, snapshots: r.snapshots })
+-        })
++    if opts.output == OutputMode::Count {
++        writeln!(out, "{metadata}").map_err(|e| scout_core::Error::io("<stdout>", e))?;
+     } else {
+-        search(&opts, &handles, &mut out)
+-    };
+-    let report = match searched {
+-        Ok(s) => s,
+-        // `scout ... | head` closing the pipe is a normal way to stop a search.
+-        Err(scout_core::Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::BrokenPipe => {
+-            return Ok(ExitCode::SUCCESS);
+-        }
+-        Err(e) => return Err(e.into()),
+-    };
+-    match out.flush() {
+-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(ExitCode::SUCCESS),
+-        r => r?,
+-    }
+-    let stats = report.stats;
+-    let selected: Vec<&RepoEntry> =
+-        catalog.repos.iter().filter(|r| a.repos.is_empty() || a.repos.contains(&r.name)).collect();
+-    persist_snapshots(store, &selected, report.snapshots)?;
+-    if a.stats {
+-        err_line(&format!(
+-            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
+-            stats.repos,
+-            stats.shards,
+-            stats.shards_filtered,
+-            stats.docs,
+-            stats.candidates,
+-            stats.matched_files,
+-            stats.dirty_files,
+-            stats.full_scans,
+-            stats.unchanged_repos,
+-            stats.list_time.as_secs_f64() * 1e3,
+-            stats.map_time.as_secs_f64() * 1e3,
+-            stats.postings_time.as_secs_f64() * 1e3,
+-            stats.verify_time.as_secs_f64() * 1e3,
+-            opened.as_secs_f64() * 1e3,
+-            stats.elapsed.as_secs_f64() * 1e3,
+-            started.elapsed().as_secs_f64() * 1e3,
+-            stats.plan
+-        ));
+-    }
+-    release_repos(repos, threads);
+-    Ok(if stats.matched_files > 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
++        err_line(&format!("scout-bounded {metadata}"));
++    }
++    Ok(SearchReport { stats: r.stats, snapshots: Vec::new() })
+ }
+ 
+ /// Drops the opened repos' shards across `threads` threads.
+--- a/crates/scout-cli/src/serve.rs
++++ b/crates/scout-cli/src/serve.rs
+@@ -15,7 +15,9 @@
+ use scout_core::ports::ShardStore;
+ use scout_core::rank::Weights;
+ use scout_core::ranked::{RankOptions, search_ranked};
+-use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search};
++use scout_core::search::{
++    BoundedOptions, CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search, search_bounded,
++};
+ use scout_index_native::FilterHome;
+ use scout_source_fs::{ChangeDetection, FsContext};
+ use scout_store_fs::FsStore;
+@@ -260,18 +262,45 @@
+         v
+     };
+     let mut out = Vec::new();
+-    let searched = match request.top {
+-        Some(top) => {
+-            let rank = RankOptions { top, weights: Weights::default() };
+-            search_ranked(&request.opts, &rank, &selected, &mut out).map(|r| r.stats)
+-        }
+-        None => search(&request.opts, &selected, &mut out).map(|r| r.stats),
++    let mut bounded = None;
++    let searched = if let Some(bounds) = request.bounded {
++        search_bounded(&request.opts, bounds, &selected, &mut out).map(|r| {
++            if request.opts.output == OutputMode::Count {
++                out = serde_json::json!({"count": r.count_estimate(), "complete": r.complete(), "stop_reason": r.stop})
++                    .to_string()
++                    .into_bytes();
++            }
++            bounded = Some((r.complete(), r.stop, r.returned_matches));
++            r.stats
++        })
++    } else {
++        match request.top {
++            Some(top) => {
++                let rank = RankOptions { top, weights: Weights::default() };
++                search_ranked(&request.opts, &rank, &selected, &mut out).map(|r| r.stats)
++            }
++            None => search(&request.opts, &selected, &mut out).map(|r| r.stats),
++        }
+     };
+     match searched {
+-        Ok(done) => Response::from_data(out)
+-            .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+-            .with_header(header("X-Scout-Matched-Files", &done.matched_files.to_string()))
+-            .with_header(header("X-Scout-Generation", &generation.id.to_string())),
++        Ok(done) => {
++            let content_type = if bounded.is_some() && request.opts.output == OutputMode::Count {
++                "application/json"
++            } else {
++                "text/plain; charset=utf-8"
++            };
++            let mut response = Response::from_data(out)
++                .with_header(header("Content-Type", content_type))
++                .with_header(header("X-Scout-Matched-Files", &done.matched_files.to_string()))
++                .with_header(header("X-Scout-Generation", &generation.id.to_string()));
++            if let Some((complete, stop, matches)) = bounded {
++                response.add_header(header("X-Scout-Complete", if complete { "true" } else { "false" }));
++                response.add_header(header("X-Scout-Stop-Reason", stop.as_str()));
++                response.add_header(header("X-Scout-Returned-Matches", &matches.to_string()));
++            }
++            response
++        }
++        Err(e @ scout_core::Error::Invalid(_)) => text(400, format!("{e}\n")),
+         Err(scout_core::Error::Pattern(msg)) => text(400, format!("invalid pattern: {msg}\n")),
+         Err(e @ scout_core::Error::OutputLimit(_)) => {
+             text(422, format!("{e}; narrow the search (repo=, m=, l=1 or c=1)\n"))
+@@ -291,6 +320,7 @@
+     repos: Vec<String>,
+     /// `Some(top)` for a ranked search (`rank=1`, `top=N`, default 20).
+     top: Option<usize>,
++    bounded: Option<BoundedOptions>,
+ }
+ 
+ /// Maps rg-style flags (`F`, `i`, `S`, `w`, `n`, `l`, `c`, `m`) and ranking (`rank`, `top`)
+@@ -302,8 +332,20 @@
+     let mut max_count = None;
+     let mut repos = Vec::new();
+     let mut top = None;
++    let (mut limit, mut max_bytes, mut timeout_ms) = (None, None, None);
+     for (k, v) in params {
+         match k.as_str() {
++            "limit" | "max_bytes" | "timeout_ms" => {
++                let n = v.parse::<usize>().map_err(|_| format!("{k} must be a positive integer"))?;
++                if n == 0 {
++                    return Err(format!("{k} must be positive"));
++                }
++                match k.as_str() {
++                    "limit" => limit = Some(n),
++                    "max_bytes" => max_bytes = Some(n),
++                    _ => timeout_ms = Some(n),
++                }
++            }
+             "q" => pattern = Some(v.clone()),
+             "F" | "i" | "S" | "w" | "n" | "l" | "c" | "rank" => {
+                 let on = match v.as_str() {
+@@ -331,6 +373,20 @@
+         return Err("top only applies to rank=1".into());
+     }
+     let top = on("rank").then(|| top.unwrap_or(DEFAULT_TOP));
++    if limit.is_none() && (max_bytes.is_some() || timeout_ms.is_some()) {
++        return Err("max_bytes and timeout_ms require limit".into());
++    }
++    if limit.is_some() && (top.is_some() || on("l")) {
++        return Err("limit supports unranked lines or an explicitly bounded count".into());
++    }
++    let bounded = limit.map(|max_matches| BoundedOptions {
++        max_matches,
++        max_bytes: max_bytes.unwrap_or(65_536),
++        timeout: Duration::from_millis(timeout_ms.unwrap_or(1000) as u64),
++    });
++    if on("c") && bounded.is_some_and(|b| b.max_bytes < 256) {
++        return Err("bounded count needs at least 256 bytes for count metadata".into());
++    }
+     Ok(SearchRequest {
+         opts: SearchOptions {
+             pattern,
+@@ -358,6 +414,7 @@
+         },
+         repos,
+         top,
++        bounded,
+     })
+ }
+ 
+--- a/crates/scout-cli/tests/bounded.rs
++++ b/crates/scout-cli/tests/bounded.rs
+@@ -0,0 +1,172 @@
++//! Global budgets must stop real work and must never label a partial count exact.
++#![allow(clippy::unwrap_used)]
++
++use std::fmt::Write as _;
++use std::path::Path;
++use std::process::{Command, Output};
++
++fn run(index: &Path, args: &[&str]) -> Output {
++    Command::new(env!("CARGO_BIN_EXE_scout")).arg("--index-dir").arg(index).args(args).output().unwrap()
++}
++
++fn ok(index: &Path, args: &[&str]) -> Output {
++    let r = run(index, args);
++    assert!(r.status.code().is_some_and(|c| c <= 1), "{args:?}: {}", String::from_utf8_lossy(&r.stderr));
++    r
++}
++
++fn metadata(output: &Output) -> serde_json::Value {
++    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
++    let line = stderr.lines().find_map(|l| l.strip_prefix("scout-bounded ")).unwrap();
++    serde_json::from_str(line).unwrap()
++}
++
++fn exercise(backend: &[&str]) {
++    let tmp = tempfile::tempdir().unwrap();
++    let root = tmp.path().join("repo");
++    let index = tmp.path().join("index");
++    std::fs::create_dir(&root).unwrap();
++    std::fs::write(root.join("a.txt"), b"needle needle\r\nhay\nneedle\n").unwrap();
++    let mut big = String::new();
++    for i in 0..9000 {
++        writeln!(&mut big, "needle at line {i}").unwrap();
++    }
++    std::fs::write(root.join("b.txt"), big).unwrap();
++    let utf16: Vec<u8> =
++        [0xFF, 0xFE].into_iter().chain("needle utf16\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
++    std::fs::write(root.join("c.txt"), utf16).unwrap();
++    std::fs::write(root.join("d.txt"), b"invalid \xff needle\nunterminated needle").unwrap();
++    let mut binary = b"needle before late binary\n".to_vec();
++    binary.extend("padding line\n".repeat(10_000).as_bytes());
++    binary.extend_from_slice(b"\0needle after nul\n");
++    std::fs::write(root.join("e.bin"), binary).unwrap();
++    ok(&index, &["add", root.to_str().unwrap()]);
++    let mut args = vec!["index", "--threads", "1"];
++    args.extend(backend);
++    ok(&index, &args);
++    let prefix = ["search", "--freshness", "off", "-n"];
++    for pattern in ["needle", r"needle.*line", r"\Aneedle", r"needle\z"] {
++        let full = ok(&index, &[&prefix[..], &[pattern]].concat());
++        let batch = ok(
++            &index,
++            &[&prefix[..], &["--max-results", "100000", "--result-bytes", "1048576", "--budget-ms", "5000", pattern]]
++                .concat(),
++        );
++        assert_eq!(full.stdout, batch.stdout, "unlimited-equivalent batch: {pattern}");
++        assert_eq!(metadata(&batch)["complete"], true);
++    }
++    let full = ok(&index, &[&prefix[..], &["needle"]].concat());
++    for n in [1, 2, 19, 4000, 9004] {
++        let n = n.to_string();
++        let batch = ok(
++            &index,
++            &[&prefix[..], &["--max-results", &n, "--result-bytes", "1048576", "--budget-ms", "5000", "needle"]]
++                .concat(),
++        );
++        assert!(full.stdout.starts_with(&batch.stdout));
++        let meta = metadata(&batch);
++        assert_eq!(meta["returned_matches"], n.parse::<usize>().unwrap());
++        assert_eq!(meta["complete"], false);
++        assert_eq!(meta["stop_reason"], "match_limit");
++    }
++    let clipped = ok(&index, &[&prefix[..], &["--max-results", "100", "--result-bytes", "200", "needle"]].concat());
++    assert!(clipped.stdout.len() <= 200 && full.stdout.starts_with(&clipped.stdout));
++    assert_eq!(metadata(&clipped)["stop_reason"], "byte_limit");
++    // A binary warning is a whole record too: a budget just below the complete
++    // output must omit the warning rather than emit half of it.
++    let warning_cap = (full.stdout.len() - 1).to_string();
++    let warning = ok(
++        &index,
++        &[&prefix[..], &["--max-results", "100000", "--result-bytes", &warning_cap, "--budget-ms", "5000", "needle"]]
++            .concat(),
++    );
++    assert!(full.stdout.starts_with(&warning.stdout) && warning.stdout.len() < full.stdout.len());
++    assert_eq!(metadata(&warning)["stop_reason"], "byte_limit");
++    for m in ["0", "1", "2"] {
++        let full = ok(&index, &[&prefix[..], &["-m", m, "needle"]].concat());
++        let batch = ok(
++            &index,
++            &[
++                &prefix[..],
++                &["-m", m, "--max-results", "100000", "--result-bytes", "1048576", "--budget-ms", "5000", "needle"],
++            ]
++            .concat(),
++        );
++        assert_eq!(full.stdout, batch.stdout, "per-file limit {m}");
++    }
++    let counted = ok(&index, &["search", "--freshness", "off", "-c", "needle"]);
++    let expected: usize = String::from_utf8(counted.stdout)
++        .unwrap()
++        .lines()
++        .map(|line| line.rsplit(':').next().unwrap().parse::<usize>().unwrap())
++        .sum();
++    let exact =
++        ok(&index, &["search", "--freshness", "off", "-c", "--max-results", "100000", "--budget-ms", "5000", "needle"]);
++    let exact: serde_json::Value = serde_json::from_slice(&exact.stdout).unwrap();
++    assert_eq!(exact["complete"], true);
++    assert_eq!(exact["count"]["kind"], "exact");
++    assert_eq!(exact["count"]["value"], expected);
++    let partial = ok(&index, &["search", "--freshness", "off", "-c", "--max-results", "100", "needle"]);
++    let partial: serde_json::Value = serde_json::from_slice(&partial.stdout).unwrap();
++    assert_eq!(partial["complete"], false);
++    assert_eq!(partial["count"], serde_json::json!({"kind":"lower_bound","value":100}));
++}
++
++#[test]
++fn native_raw_bounded_prefix_and_counts() {
++    exercise(&["--content", "raw"]);
++}
++#[test]
++fn native_lz4_bounded_prefix_and_counts() {
++    exercise(&["--content", "lz4"]);
++}
++#[test]
++fn sqlite_bounded_prefix_and_counts() {
++    exercise(&["--backend", "sqlite"]);
++}
++
++#[test]
++fn a_giant_line_is_not_buffered_for_a_small_preview_but_can_be_counted() {
++    let tmp = tempfile::tempdir().unwrap();
++    let root = tmp.path().join("repo");
++    let index = tmp.path().join("index");
++    std::fs::create_dir(&root).unwrap();
++    let mut text = b"needle ".to_vec();
++    text.extend(std::iter::repeat_n(b'x', 20_000_000));
++    std::fs::write(root.join("huge.txt"), text).unwrap();
++    ok(&index, &["add", root.to_str().unwrap()]);
++    ok(&index, &["index", "--content", "lz4"]);
++    let preview = ok(&index, &["search", "--freshness", "off", "--max-results", "100", "needle"]);
++    assert!(preview.stdout.is_empty());
++    assert_eq!(metadata(&preview)["stop_reason"], "byte_limit");
++    let count =
++        ok(&index, &["search", "--freshness", "off", "-c", "--max-results", "100", "--budget-ms", "5000", "needle"]);
++    let count: serde_json::Value = serde_json::from_slice(&count.stdout).unwrap();
++    assert_eq!(count["count"], serde_json::json!({"kind":"exact","value":1}));
++}
++
++#[test]
++fn stopping_does_not_plan_a_corrupt_later_shard() {
++    let tmp = tempfile::tempdir().unwrap();
++    let index = tmp.path().join("index");
++    for name in ["a", "b"] {
++        let root = tmp.path().join(name);
++        std::fs::create_dir(&root).unwrap();
++        std::fs::write(root.join("hit.txt"), b"needle\n").unwrap();
++        ok(&index, &["add", root.to_str().unwrap()]);
++    }
++    ok(&index, &["index"]);
++    let catalog: serde_json::Value =
++        serde_json::from_slice(&std::fs::read(index.join("catalog.json")).unwrap()).unwrap();
++    let shard = catalog["repos"].as_array().unwrap().iter().find(|r| r["name"] == "b").unwrap()["index"]["shards"][0]
++        .as_str()
++        .unwrap();
++    let path = index.join("shards").join(shard);
++    let mut bytes = std::fs::read(&path).unwrap();
++    let units = u64::from_le_bytes(bytes[64..72].try_into().unwrap()) as usize;
++    bytes[units..units + 4].copy_from_slice(&u32::MAX.to_le_bytes());
++    std::fs::write(path, bytes).unwrap();
++    let batch = ok(&index, &["search", "--freshness", "off", "--max-results", "1", "needle"]);
++    assert_eq!(metadata(&batch)["returned_matches"], 1);
++    assert!(!run(&index, &["search", "--freshness", "off", "needle"]).status.success());
++}
+--- a/crates/scout-cli/tests/sync.rs
++++ b/crates/scout-cli/tests/sync.rs
+@@ -390,6 +390,21 @@
+     assert_eq!(get(&format!("{base}/search?q=needle&top=1")).0, 400, "top without rank");
+     assert_eq!(get(&format!("{base}/search?q=needle&rank=1&top=0")).0, 400, "top 0");
+ 
++    let response = ureq::get(&format!("{base}/search?q=needle&limit=1&n=1")).call().unwrap();
++    assert_eq!(response.header("X-Scout-Complete"), Some("false"));
++    assert_eq!(response.header("X-Scout-Stop-Reason"), Some("match_limit"));
++    assert_eq!(response.into_string().unwrap().lines().count(), 1);
++    let (status, body, _) = get(&format!("{base}/search?q=needle&c=1&limit=1"));
++    assert_eq!(status, 200);
++    let count: serde_json::Value = serde_json::from_str(&body).unwrap();
++    assert_eq!(count["count"], serde_json::json!({"kind":"lower_bound","value":1}));
++    let (status, body, _) = get(&format!("{base}/search?q=needle&c=1&limit=100"));
++    assert_eq!(status, 200);
++    let count: serde_json::Value = serde_json::from_str(&body).unwrap();
++    assert_eq!(count["count"], serde_json::json!({"kind":"exact","value":2}));
++    assert_eq!(get(&format!("{base}/search?q=x&limit=1&rank=1")).0, 400);
++    assert_eq!(get(&format!("{base}/search?q=x&max_bytes=100")).0, 400);
++
+     // Output past --max-output-mb is refused, not buffered; narrowing the search works.
+     let bulk = "bulk match line padding padding padding padding\n".repeat(30_000);
+     alpha.push(&[("bulk.txt", &bulk)], &[]);
+--- a/crates/scout-core/src/search/bounded.rs
++++ b/crates/scout-core/src/search/bounded.rs
+@@ -0,0 +1,410 @@
++//! An explicit, incomplete-capable search for interactive callers such as MCP.
++//! Planning and verification advance in stable order, without prefetching later files.
++
++use std::cell::RefCell;
++use std::io::{self, Write};
++use std::time::{Duration, Instant};
++
++use grep_printer::StandardBuilder;
++use grep_searcher::{Searcher, Sink, SinkFinish, SinkMatch};
++use serde::Serialize;
++use termcolor::NoColor;
++
++use super::{
++    CaseMode, CountHint, Freshness, OutputMode, Reading, RepoHandle, SearchOptions, SearchStats, build_matcher,
++    build_searcher, display_path_into, in_repo, plan_shard, want,
++};
++use crate::query::{PlanCase, analyze};
++use crate::{Error, Result};
++
++#[derive(Debug, Clone, Copy)]
++pub struct BoundedOptions {
++    /// Global matching lines, rather than rg's per-file `-m` limit.
++    pub max_matches: usize,
++    /// Complete formatted records only; an oversized next line stops the batch.
++    pub max_bytes: usize,
++    /// Cooperative processing budget. A blocking read or one block's matching can
++    /// finish after it expires; this is not an end-to-end transport/queue deadline.
++    pub timeout: Duration,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum StopReason {
++    Complete,
++    MatchLimit,
++    ByteLimit,
++    Deadline,
++}
++
++#[derive(Debug)]
++pub struct BoundedReport {
++    pub stats: SearchStats,
++    pub returned_matches: usize,
++    pub stop: StopReason,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
++pub enum CountEstimate {
++    Exact(usize),
++    LowerBound(usize),
++}
++
++impl BoundedReport {
++    #[must_use]
++    pub fn complete(&self) -> bool {
++        self.stop == StopReason::Complete
++    }
++
++    #[must_use]
++    pub fn count_estimate(&self) -> CountEstimate {
++        if self.complete() {
++            CountEstimate::Exact(self.returned_matches)
++        } else {
++            CountEstimate::LowerBound(self.returned_matches)
++        }
++    }
++}
++
++impl StopReason {
++    #[must_use]
++    pub fn as_str(self) -> &'static str {
++        match self {
++            Self::Complete => "complete",
++            Self::MatchLimit => "match_limit",
++            Self::ByteLimit => "byte_limit",
++            Self::Deadline => "deadline",
++        }
++    }
++}
++
++/// Returns an exact prefix of normal line output, explicitly reporting when the
++/// index was not exhausted. A reached limit does not prove further matches exist.
++/// Ordering is stable traversal order, not global ranking. Freshness is the published
++/// index snapshot: a strict filesystem listing would itself be unbounded work.
++pub fn search_bounded(
++    opts: &SearchOptions,
++    bounds: BoundedOptions,
++    repos: &[&RepoHandle],
++    out: &mut dyn Write,
++) -> Result<BoundedReport> {
++    let started = Instant::now();
++    let mut budget = new_budget(opts, bounds, started)?;
++    let counting = opts.output == OutputMode::Count;
++    let bytes = RefCell::new(Vec::new());
++    let mut stats = SearchStats { repos: repos.len(), ..SearchStats::default() };
++    scan(opts, repos, &mut budget, &bytes, &mut stats)?;
++    let bytes = bytes.into_inner();
++    out.write_all(&bytes).map_err(|e| Error::io("<stdout>", e))?;
++    stats.elapsed = started.elapsed();
++    debug_assert!(!counting || bytes.is_empty());
++    Ok(BoundedReport { stats, returned_matches: budget.matches, stop: budget.stop })
++}
++
++fn new_budget(opts: &SearchOptions, bounds: BoundedOptions, started: Instant) -> Result<Budget> {
++    if bounds.max_matches == 0 || bounds.max_bytes == 0 || bounds.timeout.is_zero() || opts.threads == 0 {
++        return Err(Error::Invalid("bounded search needs positive match, byte, time and thread limits".into()));
++    }
++    if opts.output == OutputMode::FilesWithMatches || opts.freshness != Freshness::Off {
++        return Err(Error::Invalid("bounded search requires line/count output and freshness off".into()));
++    }
++    if opts.pattern.len() > 4096 {
++        return Err(Error::Invalid("bounded search patterns must not exceed 4096 bytes".into()));
++    }
++    let deadline = started
++        .checked_add(bounds.timeout)
++        .ok_or_else(|| Error::Invalid("bounded search timeout is out of range".into()))?;
++    let deadline = opts.limits.deadline.map_or(deadline, |outer| outer.min(deadline));
++    let max_bytes = opts.limits.output_bytes.map_or(bounds.max_bytes, |outer| outer.min(bounds.max_bytes));
++    let counting = opts.output == OutputMode::Count;
++    if counting && max_bytes < 256 {
++        return Err(Error::Invalid("bounded count needs at least 256 bytes for its explicit count metadata".into()));
++    }
++    Ok(Budget { bounds, max_bytes, deadline, matches: 0, stop: StopReason::Complete })
++}
++
++fn scan(
++    opts: &SearchOptions,
++    repos: &[&RepoHandle],
++    budget: &mut Budget,
++    bytes: &RefCell<Vec<u8>>,
++    stats: &mut SearchStats,
++) -> Result<()> {
++    let counting = opts.output == OutputMode::Count;
++    // Validate the expression even for an already-expired budget or -m 0: neither
++    // condition turns an invalid query into a successful empty/partial result.
++    let pattern = if opts.fixed_strings { regex_syntax::escape(&opts.pattern) } else { opts.pattern.clone() };
++    let case = if opts.case == CaseMode::Sensitive { PlanCase::Sensitive } else { PlanCase::Insensitive };
++    let analysis = analyze(&pattern, case)?;
++    let matcher = build_matcher(&pattern, opts)?;
++    stats.plan = format!("{:?}", analysis.query);
++    if !budget.expired() && opts.max_count != Some(0) {
++        // One worker avoids speculative chunks, racing result slots and a reorder
++        // buffer. A later caller can use the other CPU for another bounded request.
++        let mut searcher = build_searcher(&SearchOptions { max_count: None, ..opts.clone() });
++        let mut printer = StandardBuilder::new().heading(false).path(true).build(NoColor::new(Buffer(bytes)));
++        let mut scratch = Vec::new();
++        let mut path = String::new();
++        'repos: for repo in repos {
++            let mut hint = CountHint::default();
++            for shard in &repo.shards {
++                if budget.expired() {
++                    break 'repos;
++                }
++                let planned = Instant::now();
++                let candidates =
++                    plan_shard(shard.as_ref(), &analysis.query, analysis.shape.as_ref(), None, &mut hint, stats)
++                        .map_err(|e| in_repo(repo, e))?;
++                stats.postings_time += planned.elapsed();
++                stats.shards += 1;
++                if budget.expired() {
++                    break 'repos;
++                }
++                for candidate in &candidates.docs {
++                    if budget.expired() {
++                        break 'repos;
++                    }
++                    let meta = shard.meta(candidate.doc)?;
++                    display_path_into(&mut path, repo.source.display_root(), &meta.path);
++                    let reading = if analysis.whole_file { Reading::Whole } else { Reading::Units };
++                    let wanted = want(shard.as_ref(), &candidates, candidate, reading)?;
++                    let verify = Instant::now();
++                    let reader = shard.markers().reader_mode.binary_search(&candidate.doc).is_ok();
++                    let mut sink = BoundedSink {
++                        inner: if counting {
++                            Renderer::Count
++                        } else {
++                            Renderer::Lines(printer.sink_with_path(&matcher, &path))
++                        },
++                        bytes,
++                        budget,
++                        path_bytes: path.len(),
++                        line_numbers: opts.line_number,
++                        file_limit: opts.max_count,
++                        file_matches: 0,
++                        counting,
++                        pending_count: counting && reader,
++                    };
++                    if reader || analysis.whole_file {
++                        let content = shard.content(candidate.doc, &mut scratch)?;
++                        if !sink.budget.expired() {
++                            searcher.set_first_line_number(1);
++                            if reader {
++                                searcher
++                                    .clone()
++                                    .search_reader(&matcher, content, &mut sink)
++                                    .map_err(|e| Error::io(&path, e))?;
++                            } else {
++                                searcher.search_slice(&matcher, content, &mut sink).map_err(|e| Error::io(&path, e))?;
++                            }
++                        }
++                    } else {
++                        // No whole-file read-ahead: the next decode happens only if
++                        // the current block did not exhaust the result/time budget.
++                        shard.visit_content(wanted, &mut scratch, &mut |content, first_line| {
++                            if sink.budget.expired() {
++                                return Ok(false);
++                            }
++                            searcher.set_first_line_number(first_line);
++                            searcher.search_slice(&matcher, content, &mut sink).map_err(|e| Error::io(&path, e))?;
++                            Ok(!sink.budget.expired() && sink.file_limit.is_none_or(|n| sink.file_matches < n))
++                        })?;
++                    }
++                    stats.matched_files += u64::from(sink.file_matches > 0);
++                    stats.verify_time += verify.elapsed();
++                    if budget.stop != StopReason::Complete {
++                        break 'repos;
++                    }
++                }
++            }
++        }
++    }
++    Ok(())
++}
++
++struct Budget {
++    bounds: BoundedOptions,
++    max_bytes: usize,
++    deadline: Instant,
++    matches: usize,
++    stop: StopReason,
++}
++
++impl Budget {
++    fn expired(&mut self) -> bool {
++        if self.stop == StopReason::Complete && Instant::now() >= self.deadline {
++            self.stop = StopReason::Deadline;
++        }
++        self.stop != StopReason::Complete
++    }
++}
++
++struct Buffer<'a>(&'a RefCell<Vec<u8>>);
++
++impl Write for Buffer<'_> {
++    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
++        self.0.borrow_mut().extend_from_slice(bytes);
++        Ok(bytes.len())
++    }
++    fn flush(&mut self) -> io::Result<()> {
++        Ok(())
++    }
++}
++
++struct BoundedSink<'a, S> {
++    inner: S,
++    bytes: &'a RefCell<Vec<u8>>,
++    budget: &'a mut Budget,
++    path_bytes: usize,
++    line_numbers: bool,
++    file_limit: Option<u64>,
++    file_matches: u64,
++    counting: bool,
++    // rg suppresses a binary file's entire count when a late NUL is found. Do not
++    // expose tentative reader matches as a lower bound before that decision is known.
++    pending_count: bool,
++}
++
++enum Renderer<S> {
++    Lines(S),
++    Count,
++}
++
++impl<S: Sink<Error = io::Error>> Sink for Renderer<S> {
++    type Error = io::Error;
++    fn begin(&mut self, searcher: &Searcher) -> io::Result<bool> {
++        match self {
++            Self::Lines(s) => s.begin(searcher),
++            Self::Count => Ok(true),
++        }
++    }
++    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> io::Result<bool> {
++        match self {
++            Self::Lines(s) => s.matched(searcher, mat),
++            Self::Count => Ok(true),
++        }
++    }
++    fn binary_data(&mut self, searcher: &Searcher, offset: u64) -> io::Result<bool> {
++        match self {
++            Self::Lines(s) => s.binary_data(searcher, offset),
++            Self::Count => Ok(true),
++        }
++    }
++    fn finish(&mut self, searcher: &Searcher, finish: &SinkFinish) -> io::Result<()> {
++        match self {
++            Self::Lines(s) => s.finish(searcher, finish),
++            Self::Count => Ok(()),
++        }
++    }
++}
++
++impl<S: Sink<Error = io::Error>> Sink for BoundedSink<'_, S> {
++    type Error = io::Error;
++
++    fn begin(&mut self, searcher: &Searcher) -> io::Result<bool> {
++        if self.budget.expired() {
++            return Ok(false);
++        }
++        self.inner.begin(searcher)
++    }
++
++    fn matched(&mut self, searcher: &Searcher, mat: &SinkMatch<'_>) -> io::Result<bool> {
++        if self.budget.expired() {
++            return Ok(false);
++        }
++        let number_bytes = if self.line_numbers {
++            let number =
++                mat.line_number().ok_or_else(|| io::Error::other("bounded match has no requested line number"))?;
++            itoa::Buffer::new().format(number).len() + 1
++        } else {
++            0
++        };
++        let before = self.bytes.borrow().len();
++        let needed = if self.counting {
++            0
++        } else {
++            self.path_bytes + 1 + number_bytes + mat.bytes().len() + usize::from(!mat.bytes().ends_with(b"\n"))
++        };
++        if needed > self.budget.max_bytes.saturating_sub(before) {
++            self.budget.stop = StopReason::ByteLimit;
++            return Ok(false);
++        }
++        let keep_going = self.inner.matched(searcher, mat)?;
++        if self.bytes.borrow().len() > self.budget.max_bytes {
++            // Preserve whole records even if printer path formatting needs extra bytes.
++            self.bytes.borrow_mut().truncate(before);
++            self.budget.stop = StopReason::ByteLimit;
++            return Ok(false);
++        }
++        self.file_matches += 1;
++        if self.pending_count {
++            return Ok(keep_going && self.file_limit.is_none_or(|n| self.file_matches < n));
++        }
++        self.budget.matches += 1;
++        if self.budget.matches >= self.budget.bounds.max_matches {
++            self.budget.stop = StopReason::MatchLimit;
++            return Ok(false);
++        }
++        Ok(keep_going && self.file_limit.is_none_or(|n| self.file_matches < n))
++    }
++
++    fn binary_data(&mut self, searcher: &Searcher, offset: u64) -> io::Result<bool> {
++        self.inner.binary_data(searcher, offset)
++    }
++
++    fn finish(&mut self, searcher: &Searcher, finish: &SinkFinish) -> io::Result<()> {
++        if self.pending_count {
++            if self.budget.stop != StopReason::Complete
++                || (finish.binary_byte_offset().is_some() && searcher.binary_detection().quit_byte().is_some())
++            {
++                self.file_matches = 0;
++            } else {
++                let remaining = self.budget.bounds.max_matches - self.budget.matches;
++                self.budget.matches += usize::try_from(self.file_matches).map_or(remaining, |n| n.min(remaining));
++                if self.budget.matches >= self.budget.bounds.max_matches {
++                    self.budget.stop = StopReason::MatchLimit;
++                }
++            }
++        }
++        let before = self.bytes.borrow().len();
++        self.inner.finish(searcher, finish)?;
++        if self.bytes.borrow().len() > self.budget.max_bytes {
++            self.bytes.borrow_mut().truncate(before);
++            self.budget.stop = StopReason::ByteLimit;
++        }
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::search::Limits;
++
++    #[test]
++    fn an_expired_count_is_a_zero_lower_bound_never_an_exact_zero() {
++        let opts = SearchOptions {
++            pattern: "needle".into(),
++            fixed_strings: true,
++            case: CaseMode::Sensitive,
++            word: false,
++            line_number: false,
++            output: OutputMode::Count,
++            max_count: None,
++            threads: 2,
++            freshness: Freshness::Off,
++            limits: Limits { output_bytes: None, deadline: Some(Instant::now()) },
++        };
++        let bounds = BoundedOptions { max_matches: 100, max_bytes: 65_536, timeout: Duration::from_secs(1) };
++        let mut output = Vec::new();
++        let report = search_bounded(&opts, bounds, &[], &mut output).unwrap();
++        assert_eq!(report.stop, StopReason::Deadline);
++        assert_eq!(report.count_estimate(), CountEstimate::LowerBound(0));
++        assert!(!report.complete());
++        assert!(output.is_empty());
++        assert!(search_bounded(&opts, BoundedOptions { max_matches: 0, ..bounds }, &[], &mut output).is_err());
++        let invalid = SearchOptions { pattern: "(".into(), fixed_strings: false, max_count: Some(0), ..opts };
++        assert!(matches!(search_bounded(&invalid, bounds, &[], &mut output), Err(Error::Pattern(_))));
++    }
++}
+--- a/crates/scout-core/src/search.rs
++++ b/crates/scout-core/src/search.rs
+@@ -19,6 +19,9 @@
+ use crate::query::{PlanCase, Query, analyze};
+ use crate::trigram::Trigram;
+ use crate::{Error, Result};
++
++mod bounded;
++pub use bounded::{BoundedOptions, BoundedReport, CountEstimate, StopReason, search_bounded};
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum CaseMode {
+@@ -884,39 +887,14 @@
+     let t = Instant::now();
+     let mut hint = CountHint::default();
+     for (si, shard) in repo.shards.iter().enumerate() {
+-        stats.docs += u64::from(shard.doc_count());
+-        let (units, filtered) = shard_units(shard.as_ref(), query, &mut hint)?;
+-        stats.shards_filtered += usize::from(filtered);
+-        // A filtered shard still verifies its always-searched docs: their matches are not
+-        // described by the shard's trigrams, so no filter can rule them out.
+-        let mut cands = match units {
+-            Some(units) => ShardCandidates {
+-                docs: with_always_searched(to_candidates(shard.as_ref(), &units)?, &shard.markers().always_search),
+-                units,
+-            },
+-            None => ShardCandidates {
+-                docs: (0..shard.doc_count()).map(|doc| Candidate { doc, units: 0..0 }).collect(),
+-                units: Vec::new(),
+-            },
+-        };
+-        if let Some(o) = &overlay {
+-            cands.docs.retain(|c| !o.masked[si][c.doc as usize]);
+-        }
+-        if let Some(shape) = shape {
+-            let mut kept = Vec::with_capacity(cands.docs.len());
+-            for candidate in cands.docs {
+-                // Reader-mode data may be transcoded or binary-truncated. Its source
+-                // byte shapes do not constrain the matcher's transformed input.
+-                if shard.markers().reader_mode.binary_search(&candidate.doc).is_ok()
+-                    || shape.accepts(shard.shape_mask(candidate.doc)?)
+-                {
+-                    kept.push(candidate);
+-                }
+-            }
+-            cands.docs = kept;
+-        }
+-        stats.candidates += cands.docs.len() as u64;
+-        plan.candidates.push(cands);
++        plan.candidates.push(plan_shard(
++            shard.as_ref(),
++            query,
++            shape,
++            overlay.as_ref().map(|o| o.masked[si].as_slice()),
++            &mut hint,
++            stats,
++        )?);
+     }
+     stats.postings_time += t.elapsed();
+     if let Some(o) = overlay {
+@@ -924,6 +902,51 @@
+         plan.snapshot = o.snapshot;
+     }
+     Ok(plan)
++}
++
++/// A bounded caller plans only the next shard, so reaching its result budget never
++/// reads postings or document summaries for the rest of the corpus.
++fn plan_shard(
++    shard: &dyn Shard,
++    query: &Query,
++    shape: Option<&crate::shape::ShapeQuery>,
++    masked: Option<&[bool]>,
++    hint: &mut CountHint,
++    stats: &mut SearchStats,
++) -> Result<ShardCandidates> {
++    stats.docs += u64::from(shard.doc_count());
++    let (units, filtered) = shard_units(shard, query, hint)?;
++    stats.shards_filtered += usize::from(filtered);
++    // A filtered shard still verifies its always-searched docs: their matches are not
++    // described by the shard's trigrams, so no filter can rule them out.
++    let mut cands = match units {
++        Some(units) => ShardCandidates {
++            docs: with_always_searched(to_candidates(shard, &units)?, &shard.markers().always_search),
++            units,
++        },
++        None => ShardCandidates {
++            docs: (0..shard.doc_count()).map(|doc| Candidate { doc, units: 0..0 }).collect(),
++            units: Vec::new(),
++        },
++    };
++    if let Some(masked) = masked {
++        cands.docs.retain(|c| !masked[c.doc as usize]);
++    }
++    if let Some(shape) = shape {
++        let mut kept = Vec::with_capacity(cands.docs.len());
++        for candidate in cands.docs {
++            // Reader-mode data may be transcoded or binary-truncated. Its source
++            // byte shapes do not constrain the matcher's transformed input.
++            if shard.markers().reader_mode.binary_search(&candidate.doc).is_ok()
++                || shape.accepts(shard.shape_mask(candidate.doc)?)
++            {
++                kept.push(candidate);
++            }
++        }
++        cands.docs = kept;
++    }
++    stats.candidates += cands.docs.len() as u64;
++    Ok(cands)
+ }
+ 
+ /// Verifies `docs`, a run of shard `si`'s planned candidates, in order, reading as much of
+--- a/crates/scout-index-native/Cargo.toml
++++ b/crates/scout-index-native/Cargo.toml
+@@ -16,6 +16,8 @@
+ [dev-dependencies]
+ grep-matcher.workspace = true
+ grep-regex.workspace = true
++scout-store-fs.workspace = true
++serde_json.workspace = true
+ tempfile = "3"
+ 
+ [lints]
+--- a/crates/scout-index-native/examples/repartition.rs
++++ b/crates/scout-index-native/examples/repartition.rs
+@@ -0,0 +1,152 @@
++//! Stress fixture: repartition real indexed text into many small repos, cycling it
++//! to reach a requested size. Per-document compression prevents duplication from
++//! creating an unrealistically tiny cross-file compressed index. This is not NX data.
++
++use std::path::PathBuf;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::time::Instant;
++
++use scout_core::catalog::{Catalog, RepoEntry, RepoIndex};
++use scout_core::indexer::{UNIT_TARGET, unit_spans};
++use scout_core::ports::{FileMeta, IndexBackend, Shard, ShardStore};
++use scout_core::trigram::TrigramExtractor;
++use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
++use scout_store_fs::FsStore;
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let args: Vec<String> = std::env::args().collect();
++    if args.len() != 5 {
++        return Err("usage: repartition <source-index> <new-index> <repo-count> <target-GiB>".into());
++    }
++    let source = FsStore::open(&PathBuf::from(&args[1]))?;
++    let dest = PathBuf::from(&args[2]);
++    let count: usize = args[3].parse()?;
++    let target = args[4].parse::<u64>()?.checked_mul(1 << 30).ok_or("target size overflow")?;
++    if count == 0 || target == 0 || dest.exists() {
++        return Err("positive sizes and a new output directory are required".into());
++    }
++    let backend = NativeBackend::new(FilterHome::Map, ContentCodec::Lz4);
++    let original = source.load_catalog()?;
++    let mut shards = Vec::new();
++    for name in original.live_shards() {
++        shards.push(backend.open(&source.local_path(name)?)?);
++    }
++    let store = FsStore::open(&dest)?;
++    let partition = partition(&shards, count, target)?;
++    let groups = partition.groups;
++    let next = AtomicUsize::new(0);
++    let started = Instant::now();
++    let results = std::thread::scope(|scope| {
++        let workers: Vec<_> = (0..2)
++            .map(|_| {
++                let (next, groups, shards, store) = (&next, &groups, &shards, &store);
++                scope.spawn(move || -> scout_core::Result<Vec<(usize, RepoEntry)>> {
++                    let mut result = Vec::new();
++                    let mut scratch = Vec::new();
++                    let mut extractor = TrigramExtractor::default();
++                    loop {
++                        let i = next.fetch_add(1, Ordering::Relaxed);
++                        let Some(group) = groups.get(i) else { break };
++                        let name = format!("repo-{i:03}");
++                        let shard_name = format!("{name}.native");
++                        let path = store.staging_path(&shard_name)?;
++                        let mut writer = backend.create(&path)?;
++                        let mut bytes = 0;
++                        for (at, &(si, doc)) in group.iter().enumerate() {
++                            let content = shards[si].content(doc, &mut scratch)?;
++                            let old = shards[si].meta(doc)?;
++                            let units: Vec<_> = unit_spans(content, UNIT_TARGET)
++                                .into_iter()
++                                .map(|r| extractor.extract(&content[r]).to_vec())
++                                .collect();
++                            let meta = FileMeta {
++                                path: format!("source-{at:06}/{}", old.path),
++                                size: content.len() as u64,
++                                mtime_ns: 0,
++                            };
++                            writer.add(&meta, content, &units)?;
++                            bytes += content.len() as u64;
++                        }
++                        writer.finish()?;
++                        store.publish(&path, &shard_name)?;
++                        let root = store.dir().join("sources").join(&name);
++                        std::fs::create_dir_all(&root).map_err(|e| scout_core::Error::io(&root, e))?;
++                        let root = root
++                            .to_str()
++                            .ok_or_else(|| scout_core::Error::Invalid("non-UTF-8 fixture path".into()))?
++                            .to_owned();
++                        result.push((
++                            i,
++                            RepoEntry {
++                                name,
++                                root,
++                                remote: None,
++                                index: Some(RepoIndex {
++                                    backend: "native".into(),
++                                    shards: vec![shard_name],
++                                    listing_digest: None,
++                                    commit: None,
++                                    files: group.len() as u64,
++                                    content_bytes: bytes,
++                                    binary_files: 0,
++                                    indexed_at_unix: 0,
++                                }),
++                            },
++                        ));
++                    }
++                    Ok(result)
++                })
++            })
++            .collect();
++        workers.into_iter().map(|w| w.join().expect("fixture worker panicked")).collect::<scout_core::Result<Vec<_>>>()
++    })?;
++    let mut entries: Vec<_> = results.into_iter().flatten().collect();
++    entries.sort_by_key(|(i, _)| *i);
++    let catalog = Catalog { repos: entries.into_iter().map(|(_, r)| r).collect(), retired: Vec::new() };
++    store.save_catalog(&catalog)?;
++    let bytes: u64 = catalog.repos.iter().filter_map(|r| r.index.as_ref()).map(|i| i.content_bytes).sum();
++    let evidence = serde_json::json!({"source": args[1], "repos":count,"requested_bytes":target,"indexed_bytes":bytes,
++        "source_documents":partition.source_docs,"document_visits":partition.visits,"method":"cycle and repartition existing plain text; no generated filler; no cross-file compression",
++        "elapsed_secs": started.elapsed().as_secs_f64()});
++    std::fs::write(dest.join("fixture.json"), serde_json::to_vec_pretty(&evidence)?)?;
++    std::io::Write::write_all(&mut std::io::stdout().lock(), format!("{evidence}\n").as_bytes())?;
++    Ok(())
++}
++
++struct Partition {
++    groups: Vec<Vec<(usize, u32)>>,
++    source_docs: usize,
++    visits: usize,
++}
++
++fn partition(shards: &[Box<dyn Shard>], count: usize, target: u64) -> scout_core::Result<Partition> {
++    let mut docs = Vec::new();
++    let mut source_bytes = 0u64;
++    for (si, shard) in shards.iter().enumerate() {
++        for doc in 0..shard.doc_count() {
++            if shard.markers().reader_mode.binary_search(&doc).is_err() {
++                let length = shard.meta(doc)?.size;
++                source_bytes += length;
++                docs.push((si, doc, length));
++            }
++        }
++    }
++    if source_bytes == 0 {
++        return Err(scout_core::Error::Invalid("no nonempty plain-text documents".into()));
++    }
++    let per_repo = target.div_ceil(count as u64);
++    let mut groups = Vec::new();
++    let mut cursor = 0;
++    for _ in 0..count {
++        let mut group = Vec::new();
++        let mut size = 0;
++        while size < per_repo {
++            let (si, doc, length) = docs[cursor % docs.len()];
++            cursor += 1;
++            group.push((si, doc));
++            size += length.max(1);
++        }
++        groups.push(group);
++    }
++    Ok(Partition { groups, source_docs: docs.len(), visits: cursor })
++}

@@ -1,0 +1,329 @@
+{
+  "index": "/mnt/ebs/idx-lazy-v7-20261027",
+  "rounds": 2,
+  "runs": 1,
+  "arms": {
+    "before": {
+      "path": "/home/keegan/small/bin-lazy-after/scout",
+      "sha256": "a0a7e86bf18ba8de0a39265187ea4bcd4218bd8889e3d042d3c0121d5c582918"
+    },
+    "after": {
+      "path": "/home/keegan/small/bin-subsecond/scout",
+      "sha256": "2467841d01d9ca92335b6b904fd65d43f950ea4b44662fb13ee79be976c8d882"
+    }
+  },
+  "catalog_sha256": "ff4bbfc66f35c090f6da32859a75b333eb5bd0ad352ec0a4200b3da6f59eb566",
+  "queries": [
+    {
+      "name": "if_lines",
+      "flags": [],
+      "pattern": "if",
+      "output": {
+        "sha256": "1cf5ea6d2ff9abea49a67d303b03c20d46fc6a0b6195d6dbae2d6ea9e5894ec7",
+        "bytes": 811859623,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 4165.937793000921,
+            "cpu_ms": 8228.131000000005,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 4979.400373998942,
+            "cpu_ms": 9720.954999999989,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 1381.0136749998492,
+            "cpu_ms": 2674.1109999999962,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 1499.2686660007166,
+            "cpu_ms": 2912.483999999992,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 4572.669083499932,
+        "after": 1440.141170500283
+      },
+      "ratio": 0.31494541682382043,
+      "rounds_won": 2
+    },
+    {
+      "name": "if_files",
+      "flags": [
+        "-l"
+      ],
+      "pattern": "if",
+      "output": {
+        "sha256": "ae4d144c7f8458169c602f67dab6a554c0fdbf9ec563f7ec5661cc3314e9fef5",
+        "bytes": 33093056,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 3547.909566001181,
+            "cpu_ms": 7001.489000000007,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 3608.539392000239,
+            "cpu_ms": 7113.586999999996,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 921.6664039995521,
+            "cpu_ms": 1756.884999999997,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 951.331295997079,
+            "cpu_ms": 1818.5979999999945,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 3578.22447900071,
+        "after": 936.4988499983156
+      },
+      "ratio": 0.26172165986071716,
+      "rounds_won": 2
+    },
+    {
+      "name": "return_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "return",
+      "output": {
+        "sha256": "6f11d4b54fdb04e499c6446e9e848e5feb20d5a736c8648a207b6da1c2097204",
+        "bytes": 428643537,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 2394.9600990017643,
+            "cpu_ms": 4712.023000000002,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 2615.1795239966305,
+            "cpu_ms": 5146.316000000013,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 861.5235090001079,
+            "cpu_ms": 1652.9140000000027,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 1043.3745740010636,
+            "cpu_ms": 2010.6879999999876,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 2505.0698114991974,
+        "after": 952.4490415005857
+      },
+      "ratio": 0.3802085822632536,
+      "rounds_won": 2
+    },
+    {
+      "name": "license_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "output": {
+        "sha256": "75894e1994a1174052bfdad1ca7b826d6e6d608c635023c196e3767307d72040",
+        "bytes": 31428314,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 1614.403821000451,
+            "cpu_ms": 3156.621000000001,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 1887.3934630028089,
+            "cpu_ms": 3699.261000000007,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 396.68063100180007,
+            "cpu_ms": 742.0809999999989,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 456.96117100305855,
+            "cpu_ms": 841.2470000000098,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 1750.89864200163,
+        "after": 426.8209010024293
+      },
+      "ratio": 0.243772478179826,
+      "rounds_won": 2
+    },
+    {
+      "name": "license_files",
+      "flags": [
+        "-l",
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "output": {
+        "sha256": "b53c8f6c03355f2e4e93dd8ecf88052b0efbd6f70b6eadfb79661a5af883fb69",
+        "bytes": 15625533,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 1559.438300999318,
+            "cpu_ms": 3045.7380000000003,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 1845.6954229986877,
+            "cpu_ms": 3613.9870000000087,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 369.80871400010074,
+            "cpu_ms": 682.3309999999979,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 496.7010689979361,
+            "cpu_ms": 916.3819999999987,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 1702.5668619990029,
+        "after": 433.2548914990184
+      },
+      "ratio": 0.2544715870895837,
+      "rounds_won": 2
+    },
+    {
+      "name": "date_lines",
+      "flags": [],
+      "pattern": "\\d{4}-\\d{2}-\\d{2}",
+      "output": {
+        "sha256": "3f43942331a99b752cd16e584d3f9059316b3af09b447260f3ae9bdfd06c627c",
+        "bytes": 61640204,
+        "exit": 0
+      },
+      "samples": {
+        "before": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 1993.7691140003153,
+            "cpu_ms": 3893.9019999999973,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 2820.6017349984904,
+            "cpu_ms": 5516.588999999996,
+            "read_bytes": 0
+          }
+        ],
+        "after": [
+          {
+            "round": 0,
+            "sample": 0,
+            "wall_ms": 1973.6337800022739,
+            "cpu_ms": 3846.7559999999994,
+            "read_bytes": 0
+          },
+          {
+            "round": 1,
+            "sample": 0,
+            "wall_ms": 3109.4253249975736,
+            "cpu_ms": 6096.037000000009,
+            "read_bytes": 0
+          }
+        ]
+      },
+      "median_ms": {
+        "before": 2407.185424499403,
+        "after": 2541.5295524999237
+      },
+      "ratio": 1.0558096300489437,
+      "rounds_won": 1
+    }
+  ],
+  "resident_mib_before_warmup": 0.0,
+  "geomean_ratio": 0.356493058097689
+}

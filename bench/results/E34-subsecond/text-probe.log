@@ -1,0 +1,20 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+parity if_lines: 811859623 bytes identical
+parity if_files: 33093056 bytes identical
+parity return_lines: 428643537 bytes identical
+parity license_lines: 31428314 bytes identical
+parity license_files: 15625533 bytes identical
+parity date_lines: 61640204 bytes identical
+round 1/2 complete
+round 2/2 complete
+| query | before ms | after ms | after/before | rounds won |
+|---|---:|---:|---:|---:|
+| if_lines | 4572.7 | 1440.1 | 0.315 | 2/2 |
+| if_files | 3578.2 | 936.5 | 0.262 | 2/2 |
+| return_lines | 2505.1 | 952.4 | 0.380 | 2/2 |
+| license_lines | 1750.9 | 426.8 | 0.244 | 2/2 |
+| license_files | 1702.6 | 433.3 | 0.254 | 2/2 |
+| date_lines | 2407.2 | 2541.5 | 1.056 | 1/2 |
+geomean after/before: 0.356
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1848 oom_kills=0 io: rbytes=1840234496 wbytes=0 rios=7227 wios=0 dbytes=0 dios=0

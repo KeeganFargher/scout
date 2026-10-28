@@ -1,0 +1,20 @@
+exhaustive E34 parity OK: common_lines
+exhaustive E34 parity OK: common_files
+exhaustive E34 parity OK: common_count
+exhaustive E34 parity OK: common_m1
+exhaustive E34 parity OK: license_lines
+exhaustive E34 parity OK: license_files
+exhaustive E34 parity OK: license_m1
+exhaustive E34 parity OK: todo_lines
+exhaustive E34 parity OK: todo_files
+exhaustive E34 parity OK: date_lines
+exhaustive E34 parity OK: date_files
+exhaustive E34 parity OK: if_lines
+exhaustive E34 parity OK: if_files
+exhaustive E34 parity OK: if_m1
+exhaustive E34 parity OK: return_lines
+exhaustive E34 parity OK: return_files
+exhaustive E34 parity OK: return_m1
+exhaustive E34 parity OK: selective_symbol
+exhaustive E34 parity OK: selective_none
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1940 oom_kills=0 io: rbytes=1945325568 wbytes=0 rios=78251 wios=0 dbytes=0 dios=0

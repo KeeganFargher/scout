@@ -1,0 +1,46 @@
+## warm, 2 reps
+| query | none ms | postings ms | postings/none | none MiB read | postings MiB read | postings faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 58 | 57 | 0.984 | 0.0 | 0.0 | 2/2 |
+| literal_common | 214 | 207 | 0.967 | 0.0 | 0.0 | 2/2 |
+| literal_none | 20 | 19 | 0.993 | 0.0 | 0.0 | 2/2 |
+| literal_long | 317 | 319 | 1.007 | 0.0 | 0.0 | 1/2 |
+| ident_regex | 178 | 180 | 1.009 | 0.0 | 0.0 | 1/2 |
+| alternation | 355 | 361 | 1.018 | 0.0 | 0.0 | 0/2 |
+| crbug_regex | 122 | 121 | 0.993 | 0.0 | 0.0 | 2/2 |
+| case_insensitive | 202 | 205 | 1.017 | 0.0 | 0.0 | 1/2 |
+| smart_case | 62 | 62 | 1.008 | 0.0 | 0.0 | 1/2 |
+| word | 207 | 206 | 0.994 | 0.0 | 0.0 | 1/2 |
+| anchored | 320 | 312 | 0.975 | 0.0 | 0.0 | 2/2 |
+| date_regex | 402 | 410 | 1.019 | 0.0 | 0.0 | 0/2 |
+| count_mode | 117 | 114 | 0.973 | 0.0 | 0.0 | 1/2 |
+| files_mode | 96 | 96 | 0.998 | 0.0 | 0.0 | 1/2 |
+| llvm_regex | 25 | 25 | 0.994 | 0.0 | 0.0 | 2/2 |
+| rare_regex | 80 | 80 | 1.006 | 0.0 | 0.0 | 1/2 |
+| selective_long | 25 | 24 | 0.981 | 0.0 | 0.0 | 2/2 |
+| selective_symbol | 24 | 24 | 0.981 | 0.0 | 0.0 | 2/2 |
+geomean postings/none: 0.995
+
+## cold, 2 reps
+| query | none ms | postings ms | postings/none | none MiB read | postings MiB read | postings faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 1812 | 1554 | 0.858 | 219.7 | 191.4 | 2/2 |
+| literal_common | 6891 | 6542 | 0.949 | 528.8 | 500.7 | 2/2 |
+| literal_none | 486 | 398 | 0.819 | 84.0 | 76.4 | 2/2 |
+| literal_long | 6801 | 6701 | 0.985 | 816.7 | 806.4 | 2/2 |
+| ident_regex | 5730 | 5596 | 0.977 | 462.6 | 436.8 | 2/2 |
+| alternation | 11580 | 11191 | 0.966 | 797.1 | 755.2 | 2/2 |
+| crbug_regex | 4958 | 4755 | 0.959 | 341.1 | 314.6 | 2/2 |
+| case_insensitive | 5438 | 5225 | 0.961 | 473.7 | 445.8 | 2/2 |
+| smart_case | 1567 | 1269 | 0.810 | 208.4 | 174.7 | 2/2 |
+| word | 7770 | 7585 | 0.976 | 512.5 | 497.9 | 2/2 |
+| anchored | 4888 | 4733 | 0.968 | 555.1 | 539.6 | 2/2 |
+| date_regex | 3559 | 3554 | 0.999 | 414.0 | 411.1 | 2/2 |
+| count_mode | 4567 | 4358 | 0.954 | 345.5 | 318.2 | 2/2 |
+| files_mode | 5559 | 5354 | 0.963 | 344.0 | 317.5 | 2/2 |
+| llvm_regex | 969 | 858 | 0.885 | 131.5 | 114.9 | 2/2 |
+| rare_regex | 2722 | 2555 | 0.939 | 274.2 | 247.6 | 2/2 |
+| selective_long | 1054 | 713 | 0.677 | 137.5 | 116.4 | 2/2 |
+| selective_symbol | 962 | 846 | 0.879 | 128.8 | 111.5 | 2/2 |
+geomean postings/none: 0.914
+

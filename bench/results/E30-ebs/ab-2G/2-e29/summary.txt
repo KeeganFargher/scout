@@ -1,0 +1,46 @@
+## cold-2cpu-2G-0ms.json: cold, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 1959 | 1959 | 244.5 | 1330 |
+| literal_common | 8891 | 8891 | 544.5 | 1409 |
+| literal_none | 560 | 560 | 78.4 | 542 |
+| literal_long | 7299 | 7299 | 825.4 | 2125 |
+| ident_regex | 6265 | 6265 | 484.6 | 1291 |
+| alternation | 13501 | 13501 | 832.2 | 1412 |
+| crbug_regex | 5464 | 5464 | 365.0 | 1313 |
+| case_insensitive | 5532 | 5532 | 553.4 | 1415 |
+| smart_case | 1968 | 1968 | 246.2 | 1344 |
+| word | 9399 | 9399 | 560.1 | 1081 |
+| anchored | 8575 | 8575 | 555.0 | 1305 |
+| date_regex | 14378 | 14378 | 1724.5 | 1390 |
+| count_mode | 4876 | 4876 | 403.6 | 1284 |
+| files_mode | 6661 | 6661 | 392.8 | 1468 |
+| llvm_regex | 995 | 995 | 143.1 | 789 |
+| rare_regex | 5264 | 5264 | 465.7 | 1178 |
+| selective_long | 1021 | 1021 | 149.0 | 987 |
+| selective_symbol | 1083 | 1083 | 146.2 | 832 |
+geomean p50 4028 ms; 2 of 18 under 1 s
+
+## warm-2cpu-2G-0ms.json: warm, 3 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 378 | 384 | 42.8 | 327 |
+| literal_common | 875 | 2432 | 52.7 | 265 |
+| literal_none | 24 | 43 | 2.6 | 25 |
+| literal_long | 2381 | 2505 | 116.0 | 726 |
+| ident_regex | 601 | 1112 | 24.2 | 136 |
+| alternation | 1285 | 1293 | 75.8 | 226 |
+| crbug_regex | 1191 | 1650 | 63.3 | 279 |
+| case_insensitive | 1016 | 2598 | 79.1 | 305 |
+| smart_case | 273 | 533 | 41.4 | 274 |
+| word | 1172 | 3708 | 30.7 | 61 |
+| anchored | 822 | 841 | 9.8 | 99 |
+| date_regex | 5685 | 6161 | 653.0 | 759 |
+| count_mode | 333 | 1438 | 15.2 | 120 |
+| files_mode | 472 | 631 | 41.6 | 321 |
+| llvm_regex | 72 | 81 | 6.4 | 63 |
+| rare_regex | 438 | 504 | 22.6 | 96 |
+| selective_long | 53 | 83 | 3.4 | 52 |
+| selective_symbol | 56 | 68 | 5.2 | 47 |
+geomean p50 440 ms; 12 of 18 under 1 s
+

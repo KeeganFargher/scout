@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/mnt/c/Users/User/source/test space/scout/bench/harness/subsecond-ab.py", line 140, in <module>
+    batch(*sys.argv[2:])
+  File "/mnt/c/Users/User/source/test space/scout/bench/harness/subsecond-ab.py", line 45, in batch
+    raise RuntimeError(f"index not evicted: {resident:.1f} MiB")
+RuntimeError: index not evicted: 29.7 MiB
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=1 cgroup_peak_mib=24 oom_kills=0 io: none

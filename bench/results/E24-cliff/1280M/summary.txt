@@ -1,0 +1,26 @@
+read_ahead_kb=8192
+
+## 1 CPU warm: p50 ms base -> e24 (median major faults; median MiB read)
+literal_rare                       8.7 ->       9.5  x1.086  (0 -> 0; 0.0 -> 0.0)
+literal_common                   961.5 ->     980.5  x1.020  (0 -> 0; 0.0 -> 0.0)
+literal_none                       1.7 ->       0.9  x0.502  (0 -> 0; 0.0 -> 0.0)
+literal_long                      32.9 ->      38.2  x1.163  (0 -> 1; 0.0 -> 1.2)
+ident_regex                       53.3 ->      55.6  x1.043  (0 -> 0; 0.0 -> 0.0)
+alternation                      159.6 ->     199.4  x1.249  (2 -> 18; 1.0 -> 15.1)
+case_insensitive                 226.9 ->     204.8  x0.902  (0 -> 0; 0.0 -> 0.0)
+smart_case                        90.5 ->     103.2  x1.140  (4 -> 14; 2.1 -> 1.7)
+word                             346.7 ->     366.0  x1.056  (0 -> 10; 0.0 -> 4.1)
+short_unindexable               1509.6 ->    1454.0  x0.963  (0 -> 0; 0.0 -> 0.0)
+anchored                           9.2 ->      11.8  x1.294  (0 -> 0; 0.0 -> 0.0)
+date_regex                       750.2 ->     794.0  x1.058  (0 -> 0; 0.0 -> 4.3)
+email_regex                      140.5 ->     135.7  x0.965  (0 -> 0; 0.0 -> 0.0)
+count_mode                        30.0 ->      27.9  x0.931  (0 -> 0; 0.0 -> 0.0)
+files_mode                        36.4 ->      35.0  x0.963  (0 -> 0; 0.0 -> 0.0)
+rare_regex                        22.4 ->      62.3  x2.782  (1 -> 10; 1.6 -> 14.4)
+selective_one                      1.2 ->       1.1  x0.907  (0 -> 0; 0.0 -> 0.0)
+selective_long                     1.5 ->       1.0  x0.641  (0 -> 0; 0.0 -> 0.0)
+selective_vendored                 2.7 ->       4.3  x1.609  (0 -> 0; 0.0 -> 0.0)
+selective_common_trigrams          9.1 ->       8.0  x0.881  (0 -> 0; 0.0 -> 0.0)
+geomean 38.3 -> 40.0 ms, ratio 1.045
+
+parity ALL OK

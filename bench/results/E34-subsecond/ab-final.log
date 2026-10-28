@@ -1,0 +1,34 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+round 1/5: before complete
+round 1/5: after complete
+round 2/5: after complete
+round 2/5: before complete
+round 3/5: before complete
+round 3/5: after complete
+round 4/5: after complete
+round 4/5: before complete
+round 5/5: before complete
+round 5/5: after complete
+| query | before ms | after ms | after/before | rounds won |
+|---|---:|---:|---:|---:|
+| common_lines | 553.2 | 206.6 | 0.373 | 5/5 |
+| common_files | 504.2 | 179.4 | 0.356 | 5/5 |
+| common_count | 538.0 | 194.9 | 0.362 | 5/5 |
+| common_m1 | 517.4 | 183.5 | 0.355 | 5/5 |
+| license_lines | 1602.0 | 328.0 | 0.205 | 5/5 |
+| license_files | 1552.0 | 300.5 | 0.194 | 5/5 |
+| license_m1 | 1561.9 | 305.1 | 0.195 | 5/5 |
+| todo_lines | 715.6 | 373.2 | 0.522 | 5/5 |
+| todo_files | 628.3 | 309.6 | 0.493 | 5/5 |
+| date_lines | 2012.4 | 362.6 | 0.180 | 5/5 |
+| date_files | 1923.9 | 282.9 | 0.147 | 5/5 |
+| if_lines | 4161.6 | 957.0 | 0.230 | 5/5 |
+| if_files | 3465.9 | 553.3 | 0.160 | 5/5 |
+| if_m1 | 3495.0 | 578.0 | 0.165 | 5/5 |
+| return_lines | 2377.3 | 714.0 | 0.300 | 5/5 |
+| return_files | 2002.4 | 469.8 | 0.235 | 5/5 |
+| return_m1 | 1987.2 | 475.8 | 0.239 | 5/5 |
+| selective_symbol | 26.7 | 24.7 | 0.925 | 5/5 |
+| selective_none | 21.3 | 20.3 | 0.957 | 5/5 |
+subsecond medians: 19/19; geomean 0.294

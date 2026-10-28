@@ -1,0 +1,6 @@
+## 1cpu: arm | builds | CPU s, user + sys (median; each) | wall s (median; each) | max RSS MiB (median) | cgroup peak MiB (median) | index bytes
+base | 5 | 6.64; 7.00, 6.72, 6.64, 6.61, 6.59 | 11.12; 13.89, 11.27, 11.12, 10.87, 9.98 | 135 | 1129 | 1074262333
+e24 | 5 | 6.68; 6.67, 6.75, 6.68, 6.77, 6.63 | 10.71; 10.77, 10.26, 11.04, 10.71, 10.00 | 135 | 1130 | 1078796093
+## 12cpu: arm | builds | CPU s, user + sys (median; each) | wall s (median; each) | max RSS MiB (median) | cgroup peak MiB (median) | index bytes
+base | 5 | 8.76; 8.68, 8.21, 9.22, 8.98, 8.76 | 3.69; 3.61, 5.18, 3.60, 5.42, 3.69 | 464 | 1440 | 1074475888
+e24 | 5 | 8.67; 9.27, 8.59, 8.67, 9.05, 8.47 | 3.57; 3.28, 3.49, 3.57, 3.58, 5.42 | 450 | 1462 | 1079019592

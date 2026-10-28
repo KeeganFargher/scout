@@ -10,8 +10,8 @@ mod sync;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -19,9 +19,12 @@ use scout_core::catalog::{Catalog, RepoEntry};
 use scout_core::ports::{IndexBackend, ShardStore};
 use scout_core::rank::Weights;
 use scout_core::ranked::{RankOptions, search_ranked};
-use scout_core::search::{CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search};
+use scout_core::search::{
+    BoundedOptions, CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, SearchReport, search,
+    search_bounded,
+};
 use scout_core::snapshots::SnapshotPack;
-use scout_index_native::{FilterHome, NativeBackend};
+use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
 use scout_index_sqlite::SqliteBackend;
 use scout_source_fs::{ChangeDetection, FsContext, FsSource};
 use scout_store_fs::FsStore;
@@ -57,7 +60,14 @@ enum Command {
         names: Vec<String>,
         #[arg(long, value_enum, default_value_t = Backend::Native)]
         backend: Backend,
-        #[arg(long)]
+        /// How the native backend stores file content: as is, or lz4 compressed, which takes
+        /// ~3x less disk and page cache for a decode on every read (E29). `auto`: lz4 once
+        /// the content of every registered repo would take more than half of this machine's
+        /// usable memory, decided for the repos this run writes. Pass `lz4` to build an
+        /// index here for a smaller machine.
+        #[arg(long, value_enum, default_value_t = ContentArg::Auto)]
+        content: ContentArg,
+        #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
         threads: Option<usize>,
         /// Indexing memory budget in MiB. Default: a quarter of usable RAM (physical RAM, capped
         /// by the cgroup memory limit on Linux), capped at 4 GiB. Usable RAM is read on Windows
@@ -71,11 +81,14 @@ enum Command {
     Sync {
         #[arg(long)]
         config: PathBuf,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
         threads: Option<usize>,
         /// Indexing memory budget in MiB (default as for `index`).
         #[arg(long)]
         memory_mb: Option<u64>,
+        /// How reindexed repos store file content (as for `index`; native only).
+        #[arg(long, value_enum, default_value_t = ContentArg::Auto)]
+        content: ContentArg,
     },
     /// Serve searches over HTTP while syncing every `interval_secs` of the config.
     Serve {
@@ -85,7 +98,7 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:7700")]
         listen: String,
         /// Threads per search, and for indexing. Default: the cores.
-        #[arg(long)]
+        #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
         threads: Option<usize>,
         /// Concurrent searches. Default: a quarter of the cores, 1 to 8.
         #[arg(long)]
@@ -98,6 +111,9 @@ enum Command {
         search_timeout_secs: u64,
         #[arg(long)]
         memory_mb: Option<u64>,
+        /// How reindexed repos store file content (as for `index`; native only).
+        #[arg(long, value_enum, default_value_t = ContentArg::Auto)]
+        content: ContentArg,
     },
 }
 
@@ -121,10 +137,20 @@ struct SearchArgs {
     count: bool,
     #[arg(short = 'm', long)]
     max_count: Option<u64>,
+    /// Return at most this many matching lines globally, with completion metadata on
+    /// stderr. Requires --freshness off; stops before planning later shards.
+    #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..), conflicts_with_all = ["rank", "files_with_matches"])]
+    max_results: Option<usize>,
+    /// With --max-results: cap complete formatted output records at this many bytes.
+    #[arg(long, default_value_t = 65_536, requires = "max_results", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+    result_bytes: usize,
+    /// With --max-results: cooperative processing budget in milliseconds.
+    #[arg(long, default_value_t = 1000, requires = "max_results", value_parser = clap::value_parser!(u64).range(1..))]
+    budget_ms: u64,
     /// Only search these repos (by name). Repeatable.
     #[arg(long = "repo")]
     repos: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     threads: Option<usize>,
     #[arg(long, value_enum, default_value_t = FreshnessArg::Strict)]
     freshness: FreshnessArg,
@@ -155,6 +181,23 @@ enum Backend {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum ContentArg {
+    Auto,
+    Raw,
+    Lz4,
+}
+
+impl From<ContentArg> for ingest::Content {
+    fn from(arg: ContentArg) -> Self {
+        match arg {
+            ContentArg::Auto => Self::Auto,
+            ContentArg::Raw => Self::Raw,
+            ContentArg::Lz4 => Self::Lz4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum FreshnessArg {
     Strict,
     Off,
@@ -167,10 +210,11 @@ enum DetectionArg {
 }
 
 /// The native backend for a process per query: its shards probe their trigram filters in
-/// place (E24). Indexing uses it too, since writing does not depend on where they are kept.
-pub(crate) static NATIVE: NativeBackend = NativeBackend::new(FilterHome::Map);
+/// place (E24). Only for reading, where the codec plays no part: an index run builds its
+/// own backend with the codec it picks (`ingest::Content`).
+static NATIVE: NativeBackend = NativeBackend::new(FilterHome::Map, ContentCodec::Raw);
 /// The native backend for `serve`, which keeps every shard's filter on the heap (E24).
-static NATIVE_SERVER: NativeBackend = NativeBackend::new(FilterHome::Heap);
+static NATIVE_SERVER: NativeBackend = NativeBackend::new(FilterHome::Heap, ContentCodec::Raw);
 
 /// `filter` says where native shards keep their trigram filters: [`FilterHome::Map`] for a
 /// process per query, [`FilterHome::Heap`] for `serve`.
@@ -219,10 +263,23 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Add { paths, discover, max_depth } => cmd_add(&store, &paths, discover, max_depth),
         Command::Remove { names } => cmd_remove(&store, &names),
         Command::List => cmd_list(&store),
-        Command::Index { names, backend, threads, memory_mb } => cmd_index(&store, &names, backend, threads, memory_mb),
+        Command::Index { names, backend, content, threads, memory_mb } => {
+            cmd_index(&store, &names, backend, content, threads, memory_mb)
+        }
         Command::Search(args) => cmd_search(&store, &args),
-        Command::Sync { config, threads, memory_mb } => cmd_sync(&store, &config, threads, memory_mb),
-        Command::Serve { config, listen, threads, http_workers, max_output_mb, search_timeout_secs, memory_mb } => {
+        Command::Sync { config, threads, memory_mb, content } => {
+            cmd_sync(&store, &config, threads, memory_mb, content.into())
+        }
+        Command::Serve {
+            config,
+            listen,
+            threads,
+            http_workers,
+            max_output_mb,
+            search_timeout_secs,
+            memory_mb,
+            content,
+        } => {
             let budget = ingest::Budget::for_host(threads, memory_mb)?;
             let opts = serve::ServeOptions {
                 listen,
@@ -233,6 +290,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     .context("--max-output-mb is too large")?,
                 search_timeout: std::time::Duration::from_secs(search_timeout_secs),
                 budget,
+                content: content.into(),
             };
             serve::serve(&store, &scout_sync::config::Config::load(&config)?, &opts)?;
             Ok(ExitCode::SUCCESS)
@@ -312,11 +370,13 @@ fn cmd_sync(
     config: &Path,
     threads: Option<usize>,
     memory_mb: Option<u64>,
+    content: ingest::Content,
 ) -> anyhow::Result<ExitCode> {
     let cfg = scout_sync::config::Config::load(config)?;
     let token = scout_sync::Token::from_env(&cfg.token_env)?;
     let git = cfg.git(token.clone())?;
-    let report = sync::run_cycle(store, &cfg, &git, token.as_ref(), ingest::Budget::for_host(threads, memory_mb)?)?;
+    let budget = ingest::Budget::for_host(threads, memory_mb)?;
+    let report = sync::run_cycle(store, &cfg, &git, token.as_ref(), budget, content)?;
     sync::log_report(&report);
     if !report.failures.is_empty() {
         bail!("{} failure(s) in this cycle", report.failures.len());
@@ -328,12 +388,16 @@ fn cmd_index(
     store: &FsStore,
     names: &[String],
     backend: Backend,
+    content: ContentArg,
     threads: Option<usize>,
     memory_mb: Option<u64>,
 ) -> anyhow::Result<ExitCode> {
-    let backend: &dyn IndexBackend = match backend {
-        Backend::Native => &NATIVE,
-        Backend::Sqlite => &SqliteBackend,
+    let format = match (backend, content) {
+        (Backend::Native, content) => ingest::Format::Native(content.into()),
+        (Backend::Sqlite, ContentArg::Auto | ContentArg::Raw) => ingest::Format::Sqlite,
+        (Backend::Sqlite, ContentArg::Lz4) => {
+            bail!("--content lz4 is a native-backend format; sqlite stores content as is")
+        }
     };
     let held = store.lock_writer()?;
     let catalog = store.load_catalog()?;
@@ -358,7 +422,15 @@ fn cmd_index(
             ingest::Job { repo, commit }
         })
         .collect();
-    let outcomes = ingest::index_repos(store, &held, &jobs, backend, ingest::Budget::for_host(threads, memory_mb)?)?;
+    let other_content = catalog
+        .repos
+        .iter()
+        .filter(|r| !jobs.iter().any(|j| j.repo.name == r.name))
+        .filter_map(|r| r.index.as_ref())
+        .map(|i| i.content_bytes)
+        .sum();
+    let budget = ingest::Budget::for_host(threads, memory_mb)?;
+    let outcomes = ingest::index_repos(store, &held, &jobs, format, other_content, budget)?;
     let mut catalog = catalog;
     let mut pack = SnapshotPack::load(store)?;
     let failed = ingest::apply(&mut catalog, &mut pack, outcomes)?;
@@ -482,6 +554,9 @@ fn write_rank_features(path: &Path, r: &scout_core::ranked::RankedReport) -> any
 }
 
 fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
+    if a.max_results.is_some() && !matches!(a.freshness, FreshnessArg::Off) {
+        bail!("--max-results searches the published index; use --freshness off");
+    }
     let started = Instant::now();
     let threads = a.threads.unwrap_or_else(host::cores);
     let catalog = store.load_catalog()?;
@@ -499,38 +574,15 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         FilterHome::Map,
     )?;
     let opened = started.elapsed();
-    let opts = SearchOptions {
-        pattern: a.pattern.clone(),
-        fixed_strings: a.fixed_strings,
-        case: if a.ignore_case {
-            CaseMode::Insensitive
-        } else if a.smart_case {
-            CaseMode::Smart
-        } else {
-            CaseMode::Sensitive
-        },
-        word: a.word_regexp,
-        line_number: a.line_number,
-        output: if a.files_with_matches {
-            OutputMode::FilesWithMatches
-        } else if a.count {
-            OutputMode::Count
-        } else {
-            OutputMode::Lines
-        },
-        max_count: a.max_count,
-        threads,
-        // Unbounded: the CLI streams to whoever runs it.
-        limits: Limits::default(),
-        freshness: match a.freshness {
-            FreshnessArg::Strict => Freshness::Strict,
-            FreshnessArg::Off => Freshness::Off,
-        },
-    };
+    let opts = search_options(a, threads);
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::with_capacity(1 << 16, stdout.lock());
     let handles: Vec<&RepoHandle> = repos.iter().collect();
-    let searched = if a.rank {
+    let searched = if let Some(max_matches) = a.max_results {
+        let bounds =
+            BoundedOptions { max_matches, max_bytes: a.result_bytes, timeout: Duration::from_millis(a.budget_ms) };
+        run_bounded(&opts, bounds, &handles, &mut out)
+    } else if a.rank {
         let rank = RankOptions { top: usize::try_from(a.top)?, weights: Weights::default() };
         search_ranked(&opts, &rank, &handles, &mut out).and_then(|r| {
             if let Some(path) = &a.rank_features {
@@ -580,21 +632,84 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         ));
     }
     release_repos(repos, threads);
-    Ok(if stats.matched_files > 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    Ok(if a.max_results.is_some() || stats.matched_files > 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
-/// Drops the opened repos across `threads` threads.
+fn search_options(a: &SearchArgs, threads: usize) -> SearchOptions {
+    SearchOptions {
+        pattern: a.pattern.clone(),
+        fixed_strings: a.fixed_strings,
+        case: if a.ignore_case {
+            CaseMode::Insensitive
+        } else if a.smart_case {
+            CaseMode::Smart
+        } else {
+            CaseMode::Sensitive
+        },
+        word: a.word_regexp,
+        line_number: a.line_number,
+        output: if a.files_with_matches {
+            OutputMode::FilesWithMatches
+        } else if a.count {
+            OutputMode::Count
+        } else {
+            OutputMode::Lines
+        },
+        max_count: a.max_count,
+        threads,
+        // Unbounded: the CLI streams to whoever runs it.
+        limits: Limits::default(),
+        freshness: match a.freshness {
+            FreshnessArg::Strict => Freshness::Strict,
+            FreshnessArg::Off => Freshness::Off,
+        },
+    }
+}
+
+fn run_bounded(
+    opts: &SearchOptions,
+    bounds: BoundedOptions,
+    repos: &[&RepoHandle],
+    out: &mut dyn Write,
+) -> scout_core::Result<SearchReport> {
+    let r = search_bounded(opts, bounds, repos, out)?;
+    let metadata = if opts.output == OutputMode::Count {
+        serde_json::json!({"count": r.count_estimate(), "complete": r.complete(), "stop_reason": r.stop})
+    } else {
+        serde_json::json!({"complete": r.complete(), "stop_reason": r.stop,
+            "returned_matches": r.returned_matches, "elapsed_ms": r.stats.elapsed.as_secs_f64() * 1000.0})
+    };
+    if opts.output == OutputMode::Count {
+        writeln!(out, "{metadata}").map_err(|e| scout_core::Error::io("<stdout>", e))?;
+    } else {
+        err_line(&format!("scout-bounded {metadata}"));
+    }
+    Ok(SearchReport { stats: r.stats, snapshots: Vec::new() })
+}
+
+/// Drops the opened repos' shards across `threads` threads.
 ///
 /// Unmapping shard pages the search touched costs ~0.17 ms per MiB on Windows, and the
 /// kernel does it serially if left to process exit (measured: leaking the maps saves
 /// nothing). Unmapping from several threads at once overlaps that work: `literal_rare`
-/// went from 21 to 7 ms of teardown, `-F function` from 184 to 138 ms wall.
-fn release_repos(mut repos: Vec<RepoHandle>, threads: usize) {
-    let chunk = repos.len().div_ceil(threads.max(1)).max(1);
+/// went from 21 to 7 ms of teardown, `-F function` from 184 to 138 ms wall (E6). The unit is
+/// a shard, taken from a shared queue, not a repo: with few large repos, per-repo release
+/// left one thread unmapping chromium's ~3 GiB, ~460 ms after a full scan (E26). The rest of
+/// a repo handle (name, source, snapshot) is small heap memory and drops right here.
+fn release_repos(repos: Vec<RepoHandle>, threads: usize) {
+    let shards: Vec<_> = repos.into_iter().flat_map(|r| r.shards).collect();
+    let workers = threads.min(shards.len());
+    let queue = Mutex::new(shards);
     std::thread::scope(|s| {
-        while !repos.is_empty() {
-            let part: Vec<RepoHandle> = repos.drain(..chunk.min(repos.len())).collect();
-            s.spawn(move || drop(part));
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    // Pop under the lock, drop outside it, so unmaps run concurrently.
+                    let next = queue.lock().unwrap_or_else(PoisonError::into_inner).pop();
+                    let Some(shard) = next else { break };
+                    drop(shard);
+                }
+            });
         }
     });
 }

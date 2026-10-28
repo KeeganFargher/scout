@@ -127,18 +127,23 @@ pub fn search_ranked(
     // Phase 2: print the top files exactly as the plain search would print each.
     let mut searcher = build_searcher(opts);
     let mut printer = Printer::new(opts.output);
+    let mut buf = Vec::new();
     for &i in order.iter().take(rank.top) {
         let f = &found[i];
         let repo = repos[f.repo];
         let path = &f.features.path;
         match &f.loc {
             OwnedLoc::Indexed { shard, doc, mode } => {
-                let content = repo.shards[*shard].content(*doc)?;
-                printer.search(&mut searcher, &matcher, Doc { path, content: &content, mode: *mode })?;
+                let content = repo.shards[*shard].content(*doc, &mut buf)?;
+                printer.search(&mut searcher, &matcher, Doc { path, content, mode: *mode, first_line: 1 })?;
             }
             OwnedLoc::Dirty(rel) => {
                 let content = repo.source.read(rel)?;
-                printer.search(&mut searcher, &matcher, Doc { path, content: &content, mode: Mode::Reader })?;
+                printer.search(
+                    &mut searcher,
+                    &matcher,
+                    Doc { path, content: &content, mode: Mode::Reader, first_line: 1 },
+                )?;
             }
         }
         if let Some(cap) = opts.limits.output_bytes
@@ -199,6 +204,7 @@ fn features(
     doc: Doc<'_>,
 ) -> Result<Option<FileFeatures>> {
     let mut sink = TermSink { terms: term_matchers, hits: vec![TermHits::default(); term_matchers.len()], lines: 0 };
+    searcher.set_first_line_number(doc.first_line);
     let r = match doc.mode {
         Mode::Slice => searcher.search_slice(matcher, doc.content, &mut sink),
         // A fresh clone per reader doc, for the reason given in `search::run`.

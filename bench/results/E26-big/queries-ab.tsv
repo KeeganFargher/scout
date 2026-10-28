@@ -1,0 +1,9 @@
+literal_ident	-F	RenderFrameHostImpl
+literal_common	-F	std::unique_ptr
+literal_none	-F	zqxjvbnm_nothing_here
+literal_long	-F	Use of this source code is governed by a BSD-style license
+short_unindexable		if
+huge_output	-F	return
+date_regex		\d{4}-\d{2}-\d{2}
+selective_symbol	-F	getAsCXXRecordDecl
+nomatch_unicode_regex		\bxq\d{12}\b

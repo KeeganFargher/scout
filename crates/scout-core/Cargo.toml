@@ -12,6 +12,7 @@ grep-printer.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 memchr.workspace = true
+itoa.workspace = true
 regex-syntax.workspace = true
 serde.workspace = true
 termcolor = "1.4"

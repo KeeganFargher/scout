@@ -1,0 +1,10 @@
+Pipe ceiling (`pipe_ceiling.py run C:/Users/User/source/bigcorpus-tmp`): a Python producer writing a file it already holds in memory into a pipe read by subprocess capture_output, median of 3. The .out files are `scout search -n -- if` and `scout search -n -F -- return` redirected to a file. The lines below the blank one were recorded by hand from separate runs.
+if 860 MiB, writes of 64 KiB: 2966 ms writing
+if 860 MiB, writes of 1024 KiB: 1510 ms writing
+if 860 MiB, writes of 8192 KiB: 1505 ms writing
+return 457 MiB, writes of 64 KiB: 1168 ms writing
+return 457 MiB, writes of 1024 KiB: 808 ms writing
+return 457 MiB, writes of 8192 KiB: 833 ms writing
+
+scout (E26) wall, median of 5: if 2255 ms to a pipe, 997 ms to NUL; return 1241 ms to a pipe, 542 ms to NUL.
+E25 and E26 output sha256 identical for if, return, date_regex and literal_ident.

@@ -1,0 +1,13 @@
+## subsecond-rg-parity  (2 repos, 697675 files, 5126 MiB content, 2863 MiB index)
+
+| query | scout ms | p90 | p99 | rg ms | speedup | candidates | matched files | results | parity | peak WS MiB | peak private MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|---:|---:|
+| common_lines | 241.8 | - | - | 33423.4 | 138.2x | 51043 | 50302 | 194262 | ok | ? | ? |
+| license_files | 327.1 | - | - | 6528.2 | 20.0x | 190474 | 182037 | 182037 | ok | ? | ? |
+| todo_count | 382.5 | - | - | 5376.1 | 14.1x | 49040 | 44213 | 44213 | ok | ? | ? |
+| date_lines | 405.3 | - | - | 5411.7 | 13.4x | 56542 | 5699 | 81929 | ok | ? | ? |
+| if_files | 585.7 | - | - | 8509.8 | 14.5x | 377412 | 367730 | 367730 | ok | ? | ? |
+| return_m1 | 496.2 | - | - | 6917.0 | 13.9x | 220875 | 208838 | 208838 | ok | ? | ? |
+
+geomean speedup 21.7x | total scout 2439 ms vs rg 66166 ms | parity ALL OK
+ebs cpus=2 mem=4G mbps=max iops=max rc=0 cgroup_peak_mib=1926 oom_kills=0 io: rbytes=1708908544 wbytes=0 rios=140682 wios=0 dbytes=0 dios=0

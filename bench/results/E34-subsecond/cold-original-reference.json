@@ -1,0 +1,306 @@
+{
+  "reference_role": "Original task-start build, before E33 lazy decoding and E34 optimizations",
+  "source_warm_report": "/mnt/c/Users/User/source/test space/scout/bench/results/E33-lazy/warm.json",
+  "validated_against_final_report": "/mnt/c/Users/User/source/test space/scout/bench/results/E34-subsecond/ab-final/summary.json",
+  "schema_note": "The after slot selects the build tested by cold-subsecond.py; here it explicitly identifies the original build.",
+  "arms": {
+    "after": {
+      "exe": "/home/keegan/small/bin-lazy-before/scout",
+      "index": "/mnt/ebs/idx-lazy-v7-20261027",
+      "binary_sha256": "377ff3575b47f46cabd9a18fa570890f40da7fcd7799f99bfb2a4b3b117c7259",
+      "catalog_sha256": "ff4bbfc66f35c090f6da32859a75b333eb5bd0ad352ec0a4200b3da6f59eb566"
+    }
+  },
+  "queries": [
+    {
+      "name": "common_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "std::unique_ptr",
+      "output": {
+        "sha256": "413144da3ac6ae9eab16fc6c21eb408b92d24231a1c0e0d3d7af97217e46d234",
+        "bytes": 31996445,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 552.2701350009811
+      }
+    },
+    {
+      "name": "common_files",
+      "flags": [
+        "-l",
+        "-F"
+      ],
+      "pattern": "std::unique_ptr",
+      "output": {
+        "sha256": "a4f1f4cab22ea8f0b140049bfc07ccfa7d59d72312858c224aadd3e98f015308",
+        "bytes": 4185368,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 522.8937279998718
+      }
+    },
+    {
+      "name": "common_count",
+      "flags": [
+        "-c",
+        "-F"
+      ],
+      "pattern": "std::unique_ptr",
+      "output": {
+        "sha256": "ecd7ea00e54b25826f5468c915fa6a9baf8aa69bc8a8c78802ddd0bfed37f7be",
+        "bytes": 4289820,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 561.5786685002604
+      }
+    },
+    {
+      "name": "common_m1",
+      "flags": [
+        "-m",
+        "1",
+        "-F"
+      ],
+      "pattern": "std::unique_ptr",
+      "output": {
+        "sha256": "ed1c71d0a948834498a9339d216a10ddc559f600ac96faa40442b1ea1f61df47",
+        "bytes": 9671921,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 543.8865129999613
+      }
+    },
+    {
+      "name": "license_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "output": {
+        "sha256": "75894e1994a1174052bfdad1ca7b826d6e6d608c635023c196e3767307d72040",
+        "bytes": 31428314,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 1590.3335160001006
+      }
+    },
+    {
+      "name": "license_files",
+      "flags": [
+        "-l",
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "output": {
+        "sha256": "b53c8f6c03355f2e4e93dd8ecf88052b0efbd6f70b6eadfb79661a5af883fb69",
+        "bytes": 15625533,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 1561.8523209996056
+      }
+    },
+    {
+      "name": "license_m1",
+      "flags": [
+        "-m",
+        "1",
+        "-F"
+      ],
+      "pattern": "Use of this source code is governed by a BSD-style license",
+      "output": {
+        "sha256": "f89c7176bdc875a612c7a5057bb5c30cd8d06936ad175f14385a091ee31ee37b",
+        "bytes": 30412308,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 1628.1516515000476
+      }
+    },
+    {
+      "name": "todo_lines",
+      "flags": [],
+      "pattern": "TODO|FIXME|HACK",
+      "output": {
+        "sha256": "b41a9924b684a70ef36a003e34d3b16c3fdedecfc0da1849b897d2dc9cab54ab",
+        "bytes": 22588921,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 717.0653970006242
+      }
+    },
+    {
+      "name": "todo_files",
+      "flags": [
+        "-l"
+      ],
+      "pattern": "TODO|FIXME|HACK",
+      "output": {
+        "sha256": "d55709d37c6cfe8321b51cf660bb0921f07a7fac97e3af36b728987bf568e64e",
+        "bytes": 3649432,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 659.90293249979
+      }
+    },
+    {
+      "name": "date_lines",
+      "flags": [],
+      "pattern": "\\d{4}-\\d{2}-\\d{2}",
+      "output": {
+        "sha256": "3f43942331a99b752cd16e584d3f9059316b3af09b447260f3ae9bdfd06c627c",
+        "bytes": 61640204,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 2162.282719500581
+      }
+    },
+    {
+      "name": "date_files",
+      "flags": [
+        "-l"
+      ],
+      "pattern": "\\d{4}-\\d{2}-\\d{2}",
+      "output": {
+        "sha256": "6ce371a4c31e3ffe3b31032342b58ed1ed6ee7a9fe8f9cefbc627d1e17b02694",
+        "bytes": 569199,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 2115.416109499165
+      }
+    },
+    {
+      "name": "if_lines",
+      "flags": [],
+      "pattern": "if",
+      "output": {
+        "sha256": "1cf5ea6d2ff9abea49a67d303b03c20d46fc6a0b6195d6dbae2d6ea9e5894ec7",
+        "bytes": 811859623,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 4225.63300550064
+      }
+    },
+    {
+      "name": "if_files",
+      "flags": [
+        "-l"
+      ],
+      "pattern": "if",
+      "output": {
+        "sha256": "ae4d144c7f8458169c602f67dab6a554c0fdbf9ec563f7ec5661cc3314e9fef5",
+        "bytes": 33093056,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 3726.9804199995633
+      }
+    },
+    {
+      "name": "if_m1",
+      "flags": [
+        "-m",
+        "1"
+      ],
+      "pattern": "if",
+      "output": {
+        "sha256": "8f451fcaf4b51a9718b220776968ba0ef646dc7f20bd7b5c451f3402d5af3f91",
+        "bytes": 109985924,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 3765.6301060005717
+      }
+    },
+    {
+      "name": "return_lines",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "return",
+      "output": {
+        "sha256": "6f11d4b54fdb04e499c6446e9e848e5feb20d5a736c8648a207b6da1c2097204",
+        "bytes": 428643537,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 2424.5775155004594
+      }
+    },
+    {
+      "name": "return_files",
+      "flags": [
+        "-l",
+        "-F"
+      ],
+      "pattern": "return",
+      "output": {
+        "sha256": "764ad3c1f350a5bbc9fc4ee79df56092f07d7225e2b83099764e5d9cc0a1c842",
+        "bytes": 18360375,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 2092.5660109996898
+      }
+    },
+    {
+      "name": "return_m1",
+      "flags": [
+        "-m",
+        "1",
+        "-F"
+      ],
+      "pattern": "return",
+      "output": {
+        "sha256": "cccb4c7bf5b3e0613503790c3923760699409f7243911aa24aaf56cad488a0f0",
+        "bytes": 38678004,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 2172.9970935011806
+      }
+    },
+    {
+      "name": "selective_symbol",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "getAsCXXRecordDecl",
+      "output": {
+        "sha256": "c8e264d39e7e2fc8dd00161409feb7955e53fc7af93d16f8a89ec4f21d091d4b",
+        "bytes": 123127,
+        "exit": 0
+      },
+      "median_ms": {
+        "after": 27.643844499834813
+      }
+    },
+    {
+      "name": "selective_none",
+      "flags": [
+        "-F"
+      ],
+      "pattern": "zqxjvbnm_nothing_here",
+      "output": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "exit": 1
+      },
+      "median_ms": {
+        "after": 20.788000000720785
+      }
+    }
+  ]
+}

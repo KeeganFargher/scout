@@ -1,0 +1,255 @@
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (/home/keegan/scout-lazy-target/release/deps/scout_bench-5f46e37c3866cb9f)
+
+running 1 test
+test tests::key_path_recovers_the_file_of_every_key_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/scout-rank-eval.rs (/home/keegan/scout-lazy-target/release/deps/scout_rank_eval-6ffe300355f32c40)
+
+running 6 tests
+test tests::a_copy_counts_as_noise_and_dedup_moves_it_back ... ok
+test tests::a_known_item_target_and_its_copies_are_the_answer ... ok
+test tests::labels_must_name_dump_files_and_copies_must_agree ... ok
+test tests::ndcg_is_one_for_the_ideal_order_and_unjudged_files_count_as_zero ... ok
+test tests::the_random_baseline_is_stable ... ok
+test tests::identical_systems_are_not_significant_and_a_consistent_win_is ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (/home/keegan/scout-lazy-target/release/deps/scout-adb9596ccc5d423b)
+
+running 2 tests
+test ingest::tests::auto_content_compresses_past_half_of_memory ... ok
+test ingest::tests::retired_and_orphaned_shards_are_deleted_after_the_grace_period ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bounded.rs (/home/keegan/scout-lazy-target/release/deps/bounded-b67ad5b7c3c20d57)
+
+running 5 tests
+test stopping_does_not_plan_a_corrupt_later_shard ... ok
+test native_lz4_bounded_prefix_and_counts ... ok
+test native_raw_bounded_prefix_and_counts ... ok
+test sqlite_bounded_prefix_and_counts ... ok
+test a_giant_line_is_not_buffered_for_a_small_preview_but_can_be_counted ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/filter.rs (/home/keegan/scout-lazy-target/release/deps/filter-ed402d45b0850aa5)
+
+running 2 tests
+test a_sqlite_shard_has_no_filter_to_skip_with ... ok
+test a_native_shard_lacking_a_query_trigram_is_skipped ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/freshness.rs (/home/keegan/scout-lazy-target/release/deps/freshness-c7a6195719a54e68)
+
+running 2 tests
+test strict_freshness_with_journal ... ok
+test strict_freshness_with_scan ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/rank.rs (/home/keegan/scout-lazy-target/release/deps/rank-b21870c7fe2f9732)
+
+running 1 test
+test ranked_search_puts_the_definition_first_and_keeps_rgs_files ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/sync.rs (/home/keegan/scout-lazy-target/release/deps/sync-92c28712122667d3)
+
+running 3 tests
+test a_mirror_dir_with_other_content_is_never_adopted ... ok
+test sync_cycles_follow_the_remotes ... ok
+test serve_picks_up_pushes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+     Running tests/units.rs (/home/keegan/scout-lazy-target/release/deps/units-b03e78f1cd42d27f)
+
+running 9 tests
+test sqlite_units_filter_and_keep_line_numbers ... ok
+test native_lz4_units_filter_and_keep_line_numbers ... ok
+test native_units_filter_and_keep_line_numbers ... ok
+test sqlite_shape_filter_keeps_unicode_and_reader_matches ... ok
+test lz4_shape_filter_keeps_unicode_and_reader_matches ... ok
+test raw_shape_filter_keeps_unicode_and_reader_matches ... ok
+test lz4_blocks_keep_file_wide_printer_semantics ... ok
+test raw_blocks_keep_file_wide_printer_semantics ... ok
+test sqlite_keeps_file_wide_printer_semantics ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_core-900710bad24c05a1)
+
+running 44 tests
+test catalog::tests::replaced_and_removed_shards_expire_after_the_grace_period ... ok
+test query::tests::alternation_becomes_or ... ok
+test indexer::tests::read_ahead_edge_cases ... ok
+test indexer::tests::unit_spans_end_after_newlines_and_cover_everything ... ok
+test indexer::tests::read_ahead_consumer_panic_stops_the_readers ... ok
+test query::tests::large_classes_are_unconstrained_but_neighbours_still_count ... ok
+test query::tests::literal_becomes_and_of_trigrams ... ok
+test query::tests::invalid_pattern_is_an_error ... ok
+test indexer::tests::read_ahead_stops_on_the_first_consumer_error ... ok
+test indexer::tests::read_ahead_reader_panic_stops_the_run ... ok
+test query::tests::literals_around_wildcards_are_all_required ... ok
+test query::tests::optional_parts_do_not_constrain ... ok
+test query::tests::plus_keeps_constraint_of_its_operand ... ok
+test query::tests::short_or_unbounded_patterns_are_unconstrained ... ok
+test query::tests::small_classes_expand_and_case_folds ... ok
+test rank::tests::copies_move_behind_every_first_copy_and_none_is_dropped ... ok
+test rank::tests::covering_more_terms_beats_repeating_one ... ok
+test rank::tests::definitions ... ok
+test rank::tests::noise_classes ... ok
+test rank::tests::noise_demotes_but_never_hides_a_strong_match ... ok
+test rank::tests::rare_terms_weigh_more ... ok
+test rank::tests::saturation_keeps_a_data_dump_below_a_definition ... ok
+test ranked::tests::smart_case_resolves_once ... ok
+test ranked::tests::terms_are_the_top_level_branches ... ok
+test search::bounded::tests::an_expired_count_is_a_zero_lower_bound_never_an_exact_zero ... ok
+test search::tests::a_long_and_counts_only_the_trigrams_the_hint_ranks_rarest ... ok
+test search::tests::a_skipped_list_leaves_a_superset_and_the_rest_of_the_and_still_applies ... ok
+test search::tests::a_trigram_the_filter_rejects_empties_its_and_before_any_read ... ok
+test search::tests::an_and_stops_decoding_once_verifying_is_cheaper ... ok
+test search::tests::candidates_keep_their_units_and_always_searched_docs_are_read_whole ... ok
+test search::tests::read_ahead_queues_every_doc_once_before_it_is_verified_and_stays_bounded ... ok
+test search::tests::set_ops ... ok
+test search::tests::the_first_failing_chunk_is_the_error_reported ... ok
+test shape::tests::digits_include_every_unicode_character_without_relying_on_a_unicode_version ... ok
+test search::tests::output_does_not_depend_on_chunking_or_threads ... ok
+test search::tests::reader_output_does_not_depend_on_previous_docs ... ok
+test shape::tests::short_alternatives_and_raw_invalid_byte_patterns_impose_no_filter ... ok
+test snapshots::tests::damage_is_an_error ... ok
+test snapshots::tests::round_trips ... ok
+test trigram::tests::extracts_distinct_folded_trigrams_skipping_newlines ... ok
+test shape::tests::projected_prefixes_never_reject_real_unicode_or_byte_edge_matches ... ok
+test indexer::tests::read_ahead_consumes_in_order_within_the_window ... ok
+test indexer::tests::shards_do_not_depend_on_read_threads ... ok
+test search::tests::indexed_text_output_matches_the_rg_printers_on_byte_and_line_edges ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_index_native-577352d9fa100e16)
+
+running 15 tests
+test tests::rejects_garbage ... ok
+test tests::loads_marker_docs_at_open ... ok
+test tests::heap_and_mapped_filters_answer_the_same ... ok
+test tests::small_lz4_documents_borrow_the_map_without_touching_decode_storage ... ok
+test tests::round_trips_docs_content_and_postings ... ok
+test tests::initialized_decode_storage_survives_smaller_reads_without_exposing_stale_bytes ... ok
+test tests::the_filter_hash_is_pinned ... ok
+test tests::rejects_content_outside_the_content_section ... ok
+test tests::rejects_sections_that_do_not_follow_each_other ... ok
+test tests::rejects_an_lz4_block_that_does_not_decode ... ok
+test tests::rejects_doc_blocks_that_do_not_match_the_doc ... ok
+test tests::stopped_visits_never_decode_later_payloads ... ok
+test tests::finds_every_trigram_across_fence_blocks ... ok
+test tests::lz4_content_round_trips_and_shrinks_the_shard ... ok
+test tests::visits_only_the_asked_units_with_their_line_numbers ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_index_sqlite-5326854c4023dd93)
+
+running 3 tests
+test tests::loads_marker_docs_at_open ... ok
+test tests::round_trips_docs_content_and_postings ... ok
+test tests::count_rejects_a_truncated_list ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_source_fs-d51aff458d93f0f5)
+
+running 20 tests
+test os::tests::mem_total ... ok
+test snapshot::tests::digest_matches_the_listing ... ok
+test snapshot::tests::other_formats_are_ignored_and_damage_is_an_error ... ok
+test snapshot::tests::round_trips ... ok
+test dirs::tests::sizes_and_mtimes_match_std_metadata ... ok
+test os::tests::cgroup_paths_the_mount_cannot_show_are_errors ... ok
+test os::tests::cgroup_v1_memory_controller_wins_over_the_unified_line ... ok
+test os::tests::cgroup_limit_is_the_tightest_on_the_path_to_the_root ... ok
+test tests::lists_with_rg_ignore_rules ... ok
+test tests::missing_root_is_an_error ... ok
+test tests::changed_ignore_file_falls_back_to_full_walk ... ok
+test tests::rejects_relative_roots ... ok
+test tests::usable_memory_is_plausible ... ok
+test tests::kind_change_is_decided_again ... ok
+test tests::deleted_and_replaced_directories ... ok
+test tests::renamed_directory_moves_its_files ... ok
+test tests::refreshed_listing_matches_full_walk_after_changes ... ok
+test tests::refreshes_chain_through_persisted_snapshots ... ok
+test tests::new_file_in_fileless_directory_is_found ... ok
+test tests::random_changes_always_match_full_walk ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_store_fs-f19b754258141d23)
+
+running 1 test
+test tests::catalog_round_trip_and_publish ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/keegan/scout-lazy-target/release/deps/scout_sync-1d6bd5c16272bf2a)
+
+running 14 tests
+test git::tests::remotes_that_could_inject_options_or_leak_credentials_are_rejected ... ok
+test git::tests::versions_parse ... ok
+test tests::names_come_from_owner_and_repo ... ok
+test tests::auth_prefix_follows_the_api_host ... ok
+test github::tests::follows_pages_filters_and_sends_the_token ... ok
+test config::tests::parses_repos_and_owners_and_rejects_typos ... ok
+test github::tests::rate_limits_and_errors_fail_the_listing ... ok
+test tests::one_remote_is_mirrored_once_whatever_it_is_called ... ok
+test tests::tokens_never_print ... ok
+test git::tests::failures_are_errors_and_foreign_directories_are_left_alone ... ok
+test git::tests::the_token_reaches_git_scoped_to_its_host_and_nowhere_else ... ok
+test git::tests::a_pinned_branch_is_followed ... ok
+test git::tests::clones_then_follows_the_remote ... ok
+test git::tests::a_hung_remote_is_killed_at_the_deadline ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.04s
+
+   Doc-tests scout_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests scout_index_native
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests scout_index_sqlite
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests scout_source_fs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests scout_store_fs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests scout_sync
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

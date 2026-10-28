@@ -1,0 +1,15 @@
+## E25-big  (2 repos, 697675 files, 5180 MiB content, 5879 MiB index)
+
+| query | scout ms | p90 | p99 | rg ms | speedup | candidates | matched files | results | parity | peak WS MiB | peak private MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|---:|---:|
+| literal_ident | 88.5 | - | - | 208652.1 | 2357.5x | 2337 | 729 | 7105 | ok | 218 | 75 |
+| literal_common | 223.1 | - | - | 249944.0 | 1120.1x | 50644 | 50302 | 194262 | ok | 947 | 75 |
+| literal_none | 41.3 | - | - | 133915.8 | 3246.0x | 76 | 0 | 0 | ok | 70 | 75 |
+| literal_long | 521.0 | - | - | 234791.6 | 450.6x | 184684 | 182037 | 182266 | ok | 1554 | 75 |
+| ident_regex | 216.7 | - | - | 263203.8 | 1214.6x | 22211 | 4241 | 5163 | ok | 841 | 75 |
+| alternation | 386.0 | - | - | 292933.0 | 758.9x | 49040 | 44213 | 113666 | ok | 1687 | 74 |
+| crbug_regex | 165.5 | - | - | 177614.8 | 1073.5x | 15573 | 15301 | 31111 | ok | 521 | 75 |
+| case_insensitive | 254.1 | - | - | 190055.3 | 748.0x | 16138 | 9108 | 36986 | ok | 1023 | 75 |
+BENCHDONE
+
+Stopped after 8 of 20 queries at the user's request (rg took 134-293 s a query). Parity OK on all 8.

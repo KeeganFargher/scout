@@ -390,6 +390,21 @@ fn serve_picks_up_pushes() {
     assert_eq!(get(&format!("{base}/search?q=needle&top=1")).0, 400, "top without rank");
     assert_eq!(get(&format!("{base}/search?q=needle&rank=1&top=0")).0, 400, "top 0");
 
+    let response = ureq::get(&format!("{base}/search?q=needle&limit=1&n=1")).call().unwrap();
+    assert_eq!(response.header("X-Scout-Complete"), Some("false"));
+    assert_eq!(response.header("X-Scout-Stop-Reason"), Some("match_limit"));
+    assert_eq!(response.into_string().unwrap().lines().count(), 1);
+    let (status, body, _) = get(&format!("{base}/search?q=needle&c=1&limit=1"));
+    assert_eq!(status, 200);
+    let count: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(count["count"], serde_json::json!({"kind":"lower_bound","value":1}));
+    let (status, body, _) = get(&format!("{base}/search?q=needle&c=1&limit=100"));
+    assert_eq!(status, 200);
+    let count: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(count["count"], serde_json::json!({"kind":"exact","value":2}));
+    assert_eq!(get(&format!("{base}/search?q=x&limit=1&rank=1")).0, 400);
+    assert_eq!(get(&format!("{base}/search?q=x&max_bytes=100")).0, 400);
+
     // Output past --max-output-mb is refused, not buffered; narrowing the search works.
     let bulk = "bulk match line padding padding padding padding\n".repeat(30_000);
     alpha.push(&[("bulk.txt", &bulk)], &[]);

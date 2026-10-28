@@ -1,0 +1,21 @@
+== base, cold (first read of the fresh clones; the first index this machine built of them) 10:28
+indexing 2 repo(s): 2 worker(s), shard cap 409 MiB, budget 4096 MiB, backend native
+  llvm-project                              187463 files   2221.8 MiB  6 shard(s) 1381.57s
+  chromium                                  510212 files   2958.5 MiB  8 shard(s) 4087.61s
+done in 4087.7s
+== e25 11:57:28
+indexing 2 repo(s): 2 worker(s), shard cap 409 MiB, budget 4096 MiB, backend native
+  llvm-project                              187463 files   2221.8 MiB  6 shard(s) 301.64s
+  chromium                                  510212 files   2958.5 MiB  8 shard(s) 944.14s
+done in 944.2s
+== base 12:13:13
+indexing 2 repo(s): 2 worker(s), shard cap 409 MiB, budget 4096 MiB, backend native
+  llvm-project                              187463 files   2221.8 MiB  6 shard(s) 1419.83s
+base arm stopped at 12:39 after 1526 s without finishing (e25 finished in 944 s)
+== e25 (repeat) 12:40:23
+indexing 2 repo(s): 2 worker(s), shard cap 409 MiB, budget 4096 MiB, backend native
+  llvm-project                              187463 files   2221.8 MiB  6 shard(s) 384.64s
+  chromium                                  510212 files   2958.5 MiB  8 shard(s) 998.21s
+done in 998.3s
+
+CPU time of the cold base build, sampled with Get-Process while it ran: 111 s about 12 min in, 182 s at 35 min, 245 s at 65 min (it finished at 68 min).

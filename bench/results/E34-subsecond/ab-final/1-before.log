@@ -1,0 +1,20 @@
+round 1 common_count 542.5 ms
+round 1 if_lines 4186.6 ms
+round 1 license_files 1567.9 ms
+round 1 todo_files 621.5 ms
+round 1 return_m1 2039.3 ms
+round 1 if_files 3460.4 ms
+round 1 date_files 1950.8 ms
+round 1 todo_lines 714.2 ms
+round 1 return_lines 2388.6 ms
+round 1 common_lines 548.4 ms
+round 1 if_m1 3489.5 ms
+round 1 selective_symbol 27.3 ms
+round 1 return_files 2004.6 ms
+round 1 common_m1 519.0 ms
+round 1 date_lines 2012.4 ms
+round 1 license_m1 1557.4 ms
+round 1 selective_none 22.0 ms
+round 1 common_files 568.6 ms
+round 1 license_lines 1600.5 ms
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1870 oom_kills=0 io: rbytes=1862414336 wbytes=0 rios=42230 wios=0 dbytes=0 dios=0

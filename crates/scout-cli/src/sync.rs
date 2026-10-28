@@ -36,6 +36,7 @@ pub fn run_cycle(
     git: &Git,
     token: Option<&Token>,
     budget: Budget,
+    content: ingest::Content,
 ) -> anyhow::Result<CycleReport> {
     let started = Instant::now();
     let resolved = scout_sync::resolve(cfg, token);
@@ -96,7 +97,15 @@ pub fn run_cycle(
         .filter(|j| catalog.find(&j.repo.name).is_none())
         .map(|j| (j.repo.name.clone(), j.repo.clone()))
         .collect();
-    let outcomes = ingest::index_repos(store, &held, &jobs, &crate::NATIVE, budget)?;
+    let other_content = catalog
+        .repos
+        .iter()
+        .filter(|r| !jobs.iter().any(|j| j.repo.name == r.name))
+        .filter_map(|r| r.index.as_ref())
+        .map(|i| i.content_bytes)
+        .sum();
+    let format = ingest::Format::Native(content);
+    let outcomes = ingest::index_repos(store, &held, &jobs, format, other_content, budget)?;
     let mut reindexed = Vec::new();
     for o in &outcomes {
         match &o.result {

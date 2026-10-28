@@ -1,0 +1,11 @@
+| query | e25 ms | e26 ms | e26/e25 | e26 faster in rounds |
+|---|---:|---:|---:|---:|
+| literal_ident | 84.3 | 67.0 | 0.794 | 5/5 |
+| literal_common | 273.7 | 210.4 | 0.768 | 5/5 |
+| literal_none | 35.1 | 34.1 | 0.974 | 4/5 |
+| literal_long | 476.5 | 363.7 | 0.763 | 5/5 |
+| short_unindexable | 2605.1 | 2304.7 | 0.885 | 5/5 |
+| huge_output | 1445.7 | 1242.6 | 0.859 | 5/5 |
+| date_regex | 1167.2 | 878.1 | 0.752 | 5/5 |
+| selective_symbol | 47.7 | 46.2 | 0.970 | 5/5 |
+| nomatch_unicode_regex | 932.6 | 653.6 | 0.701 | 5/5 |

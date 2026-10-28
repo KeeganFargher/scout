@@ -1,0 +1,6 @@
+indexing 137 repo(s): 12 worker(s), shard cap 68 MiB, budget 4096 MiB, backend native, content Raw
+done in 7.7s
+1.1G	/home/keegan/small/idx-e29-raw
+indexing 137 repo(s): 12 worker(s), shard cap 68 MiB, budget 4096 MiB, backend native, content Lz4
+done in 3.2s
+421M	/home/keegan/small/idx-e29-lz4

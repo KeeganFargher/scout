@@ -1,0 +1,46 @@
+## cold-2cpu-2G-0ms.json: cold, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 1863 | 1863 | 211.7 | 1052 |
+| literal_common | 8691 | 8691 | 492.4 | 1104 |
+| literal_none | 577 | 577 | 83.2 | 511 |
+| literal_long | 6601 | 6601 | 712.1 | 884 |
+| ident_regex | 6641 | 6641 | 439.8 | 1124 |
+| alternation | 13887 | 13887 | 758.0 | 1362 |
+| crbug_regex | 5360 | 5360 | 326.5 | 1071 |
+| case_insensitive | 5860 | 5860 | 453.3 | 1185 |
+| smart_case | 1573 | 1573 | 199.8 | 1223 |
+| word | 9565 | 9565 | 480.8 | 993 |
+| anchored | 8878 | 8878 | 494.3 | 900 |
+| date_regex | 14391 | 14391 | 1727.2 | 1377 |
+| count_mode | 5183 | 5183 | 388.8 | 1164 |
+| files_mode | 6354 | 6354 | 324.1 | 1056 |
+| llvm_regex | 819 | 819 | 126.7 | 741 |
+| rare_regex | 5295 | 5295 | 385.7 | 1140 |
+| selective_long | 915 | 915 | 135.0 | 839 |
+| selective_symbol | 959 | 959 | 126.3 | 690 |
+geomean p50 3897 ms; 4 of 18 under 1 s
+
+## warm-2cpu-2G-0ms.json: warm, 3 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 314 | 496 | 29.5 | 159 |
+| literal_common | 1139 | 3012 | 38.8 | 201 |
+| literal_none | 40 | 54 | 3.2 | 35 |
+| literal_long | 3060 | 4163 | 85.1 | 105 |
+| ident_regex | 810 | 1551 | 44.2 | 130 |
+| alternation | 2810 | 4235 | 117.1 | 309 |
+| crbug_regex | 1408 | 1440 | 56.0 | 189 |
+| case_insensitive | 1638 | 2722 | 86.1 | 230 |
+| smart_case | 270 | 300 | 37.1 | 288 |
+| word | 1531 | 4453 | 39.8 | 80 |
+| anchored | 736 | 767 | 9.0 | 68 |
+| date_regex | 5740 | 5827 | 671.1 | 842 |
+| count_mode | 525 | 2046 | 39.0 | 132 |
+| files_mode | 420 | 426 | 35.2 | 265 |
+| llvm_regex | 73 | 103 | 11.5 | 92 |
+| rare_regex | 454 | 773 | 26.4 | 108 |
+| selective_long | 76 | 88 | 9.4 | 87 |
+| selective_symbol | 64 | 69 | 7.6 | 75 |
+geomean p50 537 ms; 11 of 18 under 1 s
+

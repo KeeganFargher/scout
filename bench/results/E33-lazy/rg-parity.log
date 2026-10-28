@@ -1,0 +1,13 @@
+## lazy-blocks-rg-parity  (2 repos, 697675 files, 5126 MiB content, 2354 MiB index)
+
+| query | scout ms | p90 | p99 | rg ms | speedup | candidates | matched files | results | parity | peak WS MiB | peak private MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|---:|---:|
+| common_lines | 589.2 | - | - | 28529.5 | 48.4x | 51043 | 50302 | 194262 | ok | ? | ? |
+| license_files | 1564.1 | - | - | 6505.3 | 4.2x | 190474 | 182037 | 182037 | ok | ? | ? |
+| todo_count | 709.8 | - | - | 5324.9 | 7.5x | 49040 | 44213 | 44213 | ok | ? | ? |
+| date_lines | 2115.8 | - | - | 5650.5 | 2.7x | 697675 | 5699 | 81929 | ok | ? | ? |
+| if_files | 3703.2 | - | - | 8628.2 | 2.3x | 697675 | 367730 | 367730 | ok | ? | ? |
+| return_m1 | 2181.6 | - | - | 8197.0 | 3.8x | 220875 | 208838 | 208838 | ok | ? | ? |
+
+geomean speedup 5.7x | total scout 10864 ms vs rg 62835 ms | parity ALL OK
+ebs cpus=2 mem=4G mbps=max iops=max rc=0 cgroup_peak_mib=1975 oom_kills=0 io: rbytes=1781035008 wbytes=0 rios=144329 wios=0 dbytes=0 dios=0

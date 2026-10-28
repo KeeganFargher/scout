@@ -1,0 +1,14 @@
+2.3G	/mnt/ebs/idx-e29
+52
+'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+added chromium  /mnt/ebs/big/chromium
+added llvm-project  /mnt/ebs/big/llvm-project
+2 repo(s) added, 2 registered
+ebs cpus=2 mem=4G mbps=max iops=max rc=0 cgroup_peak_mib=1 oom_kills=0 io: none
+indexing 2 repo(s): 2 worker(s), shard cap 102 MiB, budget 1024 MiB, backend native, content Lz4
+  llvm-project                              187463 files   2174.6 MiB 22 shard(s)  83.62s
+  chromium                                  510212 files   2951.0 MiB 29 shard(s) 177.18s
+done in 194.2s
+ebs cpus=2 mem=4G mbps=max iops=max rc=0 cgroup_peak_mib=4096 oom_kills=0 io: rbytes=9042493440 wbytes=2434813952 rios=811440 wios=319 dbytes=0 dios=0
+194.31 s 776408 KiB

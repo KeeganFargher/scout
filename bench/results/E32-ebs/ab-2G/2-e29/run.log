@@ -1,0 +1,4 @@
+cli warm: geomean p50 483.4 ms (read_ahead_kb=128)
+ebs cpus=2 mem=2G mbps=125 iops=3000 rc=0 cgroup_peak_mib=2048 oom_kills=0 io: rbytes=7270043648 wbytes=0 rios=333281 wios=0 dbytes=0 dios=0
+cli cold: geomean p50 4040.7 ms (read_ahead_kb=128)
+ebs cpus=2 mem=2G mbps=125 iops=3000 rc=0 cgroup_peak_mib=1875 oom_kills=0 io: rbytes=8835911680 wbytes=0 rios=232928 wios=0 dbytes=0 dios=0

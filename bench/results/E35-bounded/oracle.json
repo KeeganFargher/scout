@@ -1,0 +1,54 @@
+{
+  "complete": true,
+  "binary_sha256": "5de438f4f5bf77daaaea631ad2bce60b547e9abda1a1fd9769cd4f649598ea83",
+  "exhaustive_if": {
+    "matching_lines": 8585236,
+    "matching_files": 638795,
+    "wall_ms": 26008.058939005423,
+    "cpu_ms": 5648.692000000001,
+    "read_bytes": 3150954496,
+    "resident_mib_before": 0.0,
+    "scope": "cold CLI exhaustive -c plus streamed count aggregation"
+  },
+  "prefix_checks": [
+    {
+      "query": "if",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "return",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "export",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "todo",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "date",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "symbol",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "none",
+      "checks": 4,
+      "passed": true
+    },
+    {
+      "query": "unindexable_sparse",
+      "empty_incomplete_prefix": true
+    }
+  ]
+}

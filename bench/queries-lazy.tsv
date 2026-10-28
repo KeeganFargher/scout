@@ -1,0 +1,20 @@
+# name<TAB>flags<TAB>pattern; broad outputs are hashed without retaining them.
+common_lines	-F	std::unique_ptr
+common_files	-l -F	std::unique_ptr
+common_count	-c -F	std::unique_ptr
+common_m1	-m 1 -F	std::unique_ptr
+license_lines	-F	Use of this source code is governed by a BSD-style license
+license_files	-l -F	Use of this source code is governed by a BSD-style license
+license_m1	-m 1 -F	Use of this source code is governed by a BSD-style license
+todo_lines		TODO|FIXME|HACK
+todo_files	-l	TODO|FIXME|HACK
+date_lines		\d{4}-\d{2}-\d{2}
+date_files	-l	\d{4}-\d{2}-\d{2}
+if_lines		if
+if_files	-l	if
+if_m1	-m 1	if
+return_lines	-F	return
+return_files	-l -F	return
+return_m1	-m 1 -F	return
+selective_symbol	-F	getAsCXXRecordDecl
+selective_none	-F	zqxjvbnm_nothing_here

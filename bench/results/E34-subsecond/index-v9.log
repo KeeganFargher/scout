@@ -1,0 +1,10 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+added chromium  /mnt/ebs/big/chromium
+added llvm-project  /mnt/ebs/big/llvm-project
+2 repo(s) added, 2 registered
+indexing 2 repo(s): 2 worker(s), shard cap 102 MiB, budget 1024 MiB, backend native, content Lz4
+  llvm-project                              187463 files   2174.6 MiB 22 shard(s) 218.22s
+  chromium                                  510212 files   2951.0 MiB 29 shard(s) 269.48s
+done in 269.5s
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=4096 oom_kills=0 io: rbytes=5881036800 wbytes=2700386304 rios=436167 wios=345 dbytes=0 dios=0

@@ -182,6 +182,9 @@ pub struct Config {
     stop_on_nonmatch: bool,
     /// The maximum number of matches this searcher should emit.
     max_matches: Option<u64>,
+    /// scout patch: the line number of the first line searched (1 unless set
+    /// with `Searcher::set_first_line_number`).
+    first_line_number: u64,
 }
 
 impl Default for Config {
@@ -201,6 +204,7 @@ impl Default for Config {
             bom_sniffing: true,
             stop_on_nonmatch: false,
             max_matches: None,
+            first_line_number: 1,
         }
     }
 }
@@ -792,6 +796,13 @@ impl Searcher {
             log::trace!("slice reader: searching via slice-by-line strategy");
             SliceByLine::new(self, matcher, slice, write_to).run()
         }
+    }
+
+    /// scout patch: number the lines of the next searches from `n`, for a
+    /// haystack that starts at line `n` of a larger one (a span of a file, its
+    /// first `n - 1` lines not searched). Only line numbers change.
+    pub fn set_first_line_number(&mut self, n: u64) {
+        self.config.first_line_number = n;
     }
 
     /// Set the binary detection method used on this searcher.

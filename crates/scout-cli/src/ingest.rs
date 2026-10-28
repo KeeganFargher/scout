@@ -12,8 +12,10 @@ use std::time::Instant;
 use anyhow::Context;
 use scout_core::catalog::{Catalog, RepoEntry, now_unix};
 use scout_core::indexer::{IndexOptions, IndexReport, index_repo, new_generation};
-use scout_core::ports::{IndexBackend, ShardStore, WriterLock};
+use scout_core::ports::{IndexBackend, RepoSource, ShardStore, WriterLock};
 use scout_core::snapshots::{PACK_NAME, SnapshotPack};
+use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+use scout_index_sqlite::SqliteBackend;
 use scout_source_fs::{ChangeDetection, FsContext, FsSource};
 
 use crate::{err_line, host};
@@ -34,6 +36,39 @@ impl Budget {
             None => (host::usable_memory()? / 4).min(4 << 30),
         };
         Ok(Self { threads: threads.unwrap_or_else(host::cores), memory })
+    }
+}
+
+/// How a native index stores file content (E29).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Content {
+    Raw,
+    Lz4,
+    /// lz4 when the index's content would take more than half of usable memory, else raw:
+    /// see [`resolve_content`].
+    Auto,
+}
+
+/// What an index run writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Native(Content),
+    Sqlite,
+}
+
+/// The codec for an index whose content totals `total` bytes on a machine with `usable`
+/// bytes of memory. Raw while the content takes at most half of memory: the index is the
+/// content plus 15-30% of postings and tables, and it is fast only while the page cache
+/// holds all of it (E21: one 1.07 GB index ran at 36-40 ms down to a 1280 MiB limit, 5.6x
+/// slower at 1 GiB), next to the process and everything else on the box. Past that, the
+/// pages a search misses are read again from disk on every query, which on a network
+/// volume costs far more than decoding lz4 content, ~3x smaller, that the page cache can
+/// hold (E28, E29). Below it, lz4 would only add a decode to every read.
+fn resolve_content(content: Content, total: u64, usable: u64) -> ContentCodec {
+    match content {
+        Content::Lz4 => ContentCodec::Lz4,
+        Content::Auto if total > usable / 2 => ContentCodec::Lz4,
+        Content::Raw | Content::Auto => ContentCodec::Raw,
     }
 }
 
@@ -64,29 +99,52 @@ fn plan_indexing(threads: usize, budget: u64, repos: usize) -> (usize, u64) {
 
 /// Builds and stages-then-publishes shards for every job, reporting each repo as it
 /// finishes. Nothing becomes visible to searches until [`commit`] saves the catalog.
+/// `other_content` is the content of the registered repos this run leaves as they are,
+/// which [`Content::Auto`] counts with the jobs' own.
 pub fn index_repos(
     store: &dyn ShardStore,
     _held: &WriterLock,
     jobs: &[Job],
-    backend: &dyn IndexBackend,
+    format: Format,
+    other_content: u64,
     budget: Budget,
 ) -> anyhow::Result<Vec<Outcome>> {
     if jobs.is_empty() {
         return Ok(Vec::new());
     }
+    let ctx = Arc::new(FsContext::new(ChangeDetection::Journal));
+    let native;
+    let (backend, content): (&dyn IndexBackend, String) = match format {
+        Format::Sqlite => (&SqliteBackend, String::new()),
+        Format::Native(content) => {
+            let codec = match content {
+                Content::Auto => {
+                    // The budget may come from --memory-mb because usable memory cannot be
+                    // read here; auto needs the real figure, so it names its own way out.
+                    let usable = host::usable_memory().context("--content auto (pass --content raw or lz4)")?;
+                    let total = other_content + listed_bytes(jobs, budget.threads, &ctx)?;
+                    resolve_content(content, total, usable)
+                }
+                Content::Raw | Content::Lz4 => resolve_content(content, 0, 0),
+            };
+            native = NativeBackend::new(FilterHome::Map, codec);
+            (&native, format!(", content {codec:?}"))
+        }
+    };
     let (workers, cap) = plan_indexing(budget.threads, budget.memory, jobs.len());
     let walk_threads = (budget.threads / workers).max(1);
     err_line(&format!(
-        "indexing {} repo(s): {workers} worker(s), shard cap {} MiB, budget {} MiB, backend {}",
+        "indexing {} repo(s): {workers} worker(s), shard cap {} MiB, budget {} MiB, backend {}{content}",
         jobs.len(),
         cap >> 20,
         budget.memory >> 20,
         backend.name()
     ));
-    let opts = IndexOptions { shard_content_cap: cap, generation: new_generation()? };
+    // One CPU reads inline: a read-ahead thread only adds handoff cost there (E25).
+    let read_threads = if budget.threads == 1 { 0 } else { walk_threads };
+    let opts = IndexOptions { shard_content_cap: cap, generation: new_generation()?, read_threads };
     let next = AtomicUsize::new(0);
     let results = Mutex::new(Vec::with_capacity(jobs.len()));
-    let ctx = Arc::new(FsContext::new(ChangeDetection::Journal));
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
@@ -111,6 +169,23 @@ pub fn index_repos(
         }
     });
     Ok(results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+/// Bytes of every file the jobs' repos list now: what [`Content::Auto`] weighs, since a
+/// repo's previous index (if any) may be far from what is about to be indexed. The
+/// listings are dropped, not kept for the indexing that lists again: a fleet's listings
+/// all held at once could cost a small box hundreds of MiB, and one more listing costs
+/// about 1% of indexing chromium. A repo that cannot be listed fails the run: counting it
+/// as nothing could pick the wrong codec for every repo the run writes.
+fn listed_bytes(jobs: &[Job], threads: usize, ctx: &Arc<FsContext>) -> anyhow::Result<u64> {
+    let mut total = 0;
+    for job in jobs {
+        let listing = FsSource::new(Path::new(&job.repo.root), threads, Arc::clone(ctx))
+            .and_then(|s| s.list(None))
+            .with_context(|| format!("listing {} to size it for --content auto", job.repo.name))?;
+        total += listing.files.iter().map(|f| f.size).sum::<u64>();
+    }
+    Ok(total)
 }
 
 fn report(name: &str, result: &anyhow::Result<IndexReport>, started: Instant) {
@@ -214,6 +289,16 @@ mod tests {
             binary_files: 0,
             indexed_at_unix: 0,
         }
+    }
+
+    #[test]
+    fn auto_content_compresses_past_half_of_memory() {
+        let gib = 1u64 << 30;
+        assert_eq!(resolve_content(Content::Auto, 2 * gib, 4 * gib), ContentCodec::Raw);
+        assert_eq!(resolve_content(Content::Auto, 2 * gib + 1, 4 * gib), ContentCodec::Lz4);
+        // Explicit choices ignore the sizes.
+        assert_eq!(resolve_content(Content::Raw, 100 * gib, gib), ContentCodec::Raw);
+        assert_eq!(resolve_content(Content::Lz4, 0, 100 * gib), ContentCodec::Lz4);
     }
 
     /// Replaced shards stay on disk through the grace period and are deleted after it;

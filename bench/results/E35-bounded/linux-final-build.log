@@ -1,0 +1,9 @@
+   Compiling scout-core v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-core)
+   Compiling scout-store-fs v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-store-fs)
+   Compiling scout-source-fs v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-source-fs)
+   Compiling scout-index-native v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-index-native)
+   Compiling scout-index-sqlite v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-index-sqlite)
+   Compiling scout-sync v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-sync)
+   Compiling scout-cli v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-cli)
+   Compiling scout-bench v0.1.0 (/home/keegan/scout-bounded-after-20261028/crates/scout-bench)
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 46s

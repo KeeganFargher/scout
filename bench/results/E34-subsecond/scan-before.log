@@ -1,0 +1,15 @@
+wsl: Failed to translate 'E:\Program Files (x86)\Androidsdk\platform-tools'
+wsl: Failed to translate 'E:\Android\platform-tools'
+mode=metadata run=1 elapsed_ms=12.571 bytes=6785132406 hits=49144021
+mode=metadata run=2 elapsed_ms=10.420 bytes=6785132406 hits=49144021
+mode=metadata run=3 elapsed_ms=8.026 bytes=6785132406 hits=49144021
+mode=decode run=1 elapsed_ms=856.025 bytes=5374575444 hits=0
+mode=decode run=2 elapsed_ms=854.527 bytes=5374575444 hits=0
+mode=decode run=3 elapsed_ms=835.690 bytes=5374575444 hits=0
+mode=decode-newlines run=1 elapsed_ms=902.022 bytes=5374575444 hits=117089755
+mode=decode-newlines run=2 elapsed_ms=903.633 bytes=5374575444 hits=117089755
+mode=decode-newlines run=3 elapsed_ms=958.963 bytes=5374575444 hits=117089755
+mode=decode-if run=1 elapsed_ms=904.702 bytes=5374575444 hits=5325199
+mode=decode-if run=2 elapsed_ms=958.007 bytes=5374575444 hits=5325199
+mode=decode-if run=3 elapsed_ms=959.175 bytes=5374575444 hits=5325199
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=98 oom_kills=0 io: none

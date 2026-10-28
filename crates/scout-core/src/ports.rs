@@ -116,6 +116,25 @@ pub type DocId = u32;
 /// so mapping a sorted unit list to docs keeps it sorted.
 pub type UnitId = u32;
 
+/// What a search reads of a doc: all of it, or only the units that can match (E32).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extent<'a> {
+    Whole,
+    /// Sorted, not empty, all the doc's own.
+    Units(&'a [UnitId]),
+}
+
+/// A doc a search is about to read, and how much of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Want<'a> {
+    pub doc: DocId,
+    pub extent: Extent<'a>,
+}
+
+/// Visits line-aligned content in file order. `false` stops before the next block is
+/// decoded; the line number is relative to the whole file, including skipped units.
+pub type BlockVisitor<'a> = dyn FnMut(&[u8], u64) -> Result<bool> + 'a;
+
 /// Encodes and decodes shards. Trigram extraction happens in core, so every backend
 /// indexes exactly the same keys and differs only in storage.
 pub trait IndexBackend: Send + Sync {
@@ -144,6 +163,9 @@ pub trait Shard: Send + Sync {
 
     fn meta(&self, doc: DocId) -> Result<DocMeta<'_>>;
 
+    /// Conservative character-shape summary, read without decoding document content.
+    fn shape_mask(&self, doc: DocId) -> Result<crate::shape::ShapeMask>;
+
     /// Sorted ids of units containing `tri`; empty when the trigram is absent.
     fn postings(&self, tri: Trigram) -> Result<Vec<UnitId>>;
 
@@ -166,7 +188,23 @@ pub trait Shard: Send + Sync {
     /// The document a unit belongs to.
     fn unit_doc(&self, unit: UnitId) -> Result<DocId>;
 
-    fn content(&self, doc: DocId) -> Result<Cow<'_, [u8]>>;
+    /// `doc`'s content: a slice of the shard where it is stored as is, else decoded into
+    /// `buf` (E29). One buffer per verifying thread serves every doc it reads, so a
+    /// compressed index costs a decode per read, not an allocation too.
+    fn content<'a>(&'a self, doc: DocId, buf: &'a mut Vec<u8>) -> Result<&'a [u8]>;
+
+    /// Visits `want`'s text a block at a time, borrowing raw storage or reusing `buf` to
+    /// decode it. A visitor can stop decoding after its first match or a file-wide limit.
+    /// A backend's storage granularity may require reading the whole doc as one block.
+    fn visit_content(&self, want: Want<'_>, buf: &mut Vec<u8>, visit: &mut BlockVisitor<'_>) -> Result<()>;
+
+    /// Starts reading what `wants` will read from disk in the background, ahead of the
+    /// [`Shard::content`] and [`Shard::visit_content`] calls that will need it (E28).
+    /// Without it a search whose index is not in the page cache waits on one read at a time
+    /// per verifying thread, each a page fault; on a network volume (EBS) every one of those
+    /// pays the volume's latency. A hint: it reads nothing a later read would not, and a
+    /// backend with nothing to read ahead does nothing.
+    fn prefetch(&self, wants: &[Want<'_>]) -> Result<()>;
 }
 
 /// Docs carrying the marker pseudo-trigrams [`ALWAYS_SEARCH`] and [`READER_MODE`].

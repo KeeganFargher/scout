@@ -1,0 +1,180 @@
+{
+  "baseline": "Original task-start build, before E33 and E34",
+  "sources": {
+    "warm_before": "/mnt/c/Users/User/source/test space/scout/bench/results/E33-lazy/warm.json",
+    "warm_after": "/mnt/c/Users/User/source/test space/scout/bench/results/E34-subsecond/ab-final/summary.json",
+    "cold_before": "/mnt/c/Users/User/source/test space/scout/bench/results/E34-subsecond/cold-original/summary.json",
+    "cold_after": "/mnt/c/Users/User/source/test space/scout/bench/results/E34-subsecond/cold/summary.json"
+  },
+  "method": "Separate three-run cold sweeps under identical limits, not interleaved. Warm medians from separate original and final campaigns.",
+  "cold_max_resident_mib_before": 0.125,
+  "cold_samples_zero_resident": 35,
+  "warm": [
+    {
+      "name": "common_lines",
+      "before_ms": 552.2701350009811,
+      "after_ms": 206.59503349997976,
+      "ratio": 0.37408329802156104
+    },
+    {
+      "name": "common_files",
+      "before_ms": 522.8937279998718,
+      "after_ms": 179.404787500971,
+      "ratio": 0.3430999032771244
+    },
+    {
+      "name": "common_count",
+      "before_ms": 561.5786685002604,
+      "after_ms": 194.90425349977158,
+      "ratio": 0.34706491615908164
+    },
+    {
+      "name": "common_m1",
+      "before_ms": 543.8865129999613,
+      "after_ms": 183.54500550049124,
+      "ratio": 0.337469308602812
+    },
+    {
+      "name": "license_lines",
+      "before_ms": 1590.3335160001006,
+      "after_ms": 327.9722165007115,
+      "ratio": 0.2062285760823334
+    },
+    {
+      "name": "license_files",
+      "before_ms": 1561.8523209996056,
+      "after_ms": 300.54456449943245,
+      "ratio": 0.1924282856058248
+    },
+    {
+      "name": "license_m1",
+      "before_ms": 1628.1516515000476,
+      "after_ms": 305.082119501094,
+      "ratio": 0.18737942452720294
+    },
+    {
+      "name": "todo_lines",
+      "before_ms": 717.0653970006242,
+      "after_ms": 373.22889999995823,
+      "ratio": 0.5204949249554058
+    },
+    {
+      "name": "todo_files",
+      "before_ms": 659.90293249979,
+      "after_ms": 309.5887195013347,
+      "ratio": 0.4691428151843123
+    },
+    {
+      "name": "date_lines",
+      "before_ms": 2162.282719500581,
+      "after_ms": 362.5536625004315,
+      "ratio": 0.16767171990542012
+    },
+    {
+      "name": "date_files",
+      "before_ms": 2115.416109499165,
+      "after_ms": 282.881154500501,
+      "ratio": 0.13372364577835916
+    },
+    {
+      "name": "if_lines",
+      "before_ms": 4225.63300550064,
+      "after_ms": 956.9716689984489,
+      "ratio": 0.22646823984778816
+    },
+    {
+      "name": "if_files",
+      "before_ms": 3726.9804199995633,
+      "after_ms": 553.2728939997469,
+      "ratio": 0.14845071120599332
+    },
+    {
+      "name": "if_m1",
+      "before_ms": 3765.6301060005717,
+      "after_ms": 577.9653845002031,
+      "ratio": 0.15348437531854472
+    },
+    {
+      "name": "return_lines",
+      "before_ms": 2424.5775155004594,
+      "after_ms": 714.017166499616,
+      "ratio": 0.29449137506838385
+    },
+    {
+      "name": "return_files",
+      "before_ms": 2092.5660109996898,
+      "after_ms": 469.8399225017056,
+      "ratio": 0.22452812481516277
+    },
+    {
+      "name": "return_m1",
+      "before_ms": 2172.9970935011806,
+      "after_ms": 475.82807800063165,
+      "ratio": 0.2189731773796195
+    },
+    {
+      "name": "selective_symbol",
+      "before_ms": 27.643844499834813,
+      "after_ms": 24.67668700046488,
+      "ratio": 0.8926648028501367
+    },
+    {
+      "name": "selective_none",
+      "before_ms": 20.788000000720785,
+      "after_ms": 20.344776999991154,
+      "ratio": 0.9786789012548459
+    }
+  ],
+  "cold": [
+    {
+      "name": "license_lines",
+      "before_ms": 6410.844494999765,
+      "after_ms": 6589.146611000615,
+      "ratio": 1.0278125785362473,
+      "before_read_mib": 685.890625,
+      "after_read_mib": 790.4375
+    },
+    {
+      "name": "return_lines",
+      "before_ms": 23962.270392999926,
+      "after_ms": 12175.038119999954,
+      "ratio": 0.5080920096601795,
+      "before_read_mib": 1157.33984375,
+      "after_read_mib": 1314.421875
+    },
+    {
+      "name": "date_lines",
+      "before_ms": 14373.824635997153,
+      "after_ms": 3551.452709998557,
+      "ratio": 0.24707778200552555,
+      "before_read_mib": 1708.5,
+      "after_read_mib": 395.0390625
+    },
+    {
+      "name": "if_lines",
+      "before_ms": 14374.919737998425,
+      "after_ms": 14579.010662000655,
+      "ratio": 1.0141977087679133,
+      "before_read_mib": 1708.5,
+      "after_read_mib": 1674.1484375
+    },
+    {
+      "name": "selective_symbol",
+      "before_ms": 737.8117539992672,
+      "after_ms": 699.616279998736,
+      "ratio": 0.9482314102567561,
+      "before_read_mib": 93.19140625,
+      "after_read_mib": 95.48046875
+    },
+    {
+      "name": "selective_none",
+      "before_ms": 461.9564070017077,
+      "after_ms": 515.048380002554,
+      "ratio": 1.1149285348057747,
+      "before_read_mib": 59.6953125,
+      "after_read_mib": 60.359375
+    }
+  ],
+  "warm_lower_count": 19,
+  "warm_geomean_ratio": 0.28360211377512834
+}

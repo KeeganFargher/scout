@@ -1,0 +1,1 @@
+volume /mnt/ebs on dm-0 (254:0), read delay 0 ms, read_ahead_kb 128

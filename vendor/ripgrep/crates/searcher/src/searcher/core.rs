@@ -43,8 +43,11 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         sink: S,
         binary: bool,
     ) -> Core<'s, M, S> {
-        let line_number =
-            if searcher.config.line_number { Some(1) } else { None };
+        let line_number = if searcher.config.line_number {
+            Some(searcher.config.first_line_number)
+        } else {
+            None
+        };
         let core = Core {
             config: &searcher.config,
             matcher,

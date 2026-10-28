@@ -1,0 +1,22 @@
+[
+  {
+    "Path": "C:\\Users\\User\\source\\test space\\scout\\bench\\harness\\lazy-ab.py",
+    "Hash": "DB2D670035A66B29B9F6383FACB0829C4BD2D3E6BA75E6B0DEA2CE6BCB107DB9"
+  },
+  {
+    "Path": "C:\\Users\\User\\source\\test space\\scout\\bench\\harness\\run-lazy-ab.sh",
+    "Hash": "F8BC4C66B83CCA280BA6348B8D518BEA5A1C34233581C836DA006A22209FF8BE"
+  },
+  {
+    "Path": "C:\\Users\\User\\source\\test space\\scout\\bench\\harness\\run-lazy-parity.sh",
+    "Hash": "758AC7AACB3BC312F15ECFFC3F694AB755A35158A805CD4A97E4A9BEDF88C98D"
+  },
+  {
+    "Path": "C:\\Users\\User\\source\\test space\\scout\\bench\\queries-lazy.tsv",
+    "Hash": "1DDAC773EC3F103C9C2CD85F7333A4AE02FC263FD076A6E6A536DE1FE8864E53"
+  },
+  {
+    "Path": "C:\\Users\\User\\source\\test space\\scout\\bench\\queries-lazy-parity.tsv",
+    "Hash": "B3404E5CBA5FAD43B121184DBBCD0CFA0DB1F28284F383FF1FAFE66F65120AB6"
+  }
+]

@@ -1,0 +1,5 @@
+indexing 137 repo(s): 12 worker(s), shard cap 68 MiB, budget 4096 MiB, backend native
+done in 5.4s
+index_wall_s=5.42 user_s=6.16 sys_s=2.82 maxrss_kib=462292
+profile cpus=12 mem=infinity rc=0 cgroup_peak_mib=1449 oom_kills=0
+index_bytes=1074475888
