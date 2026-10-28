@@ -111,6 +111,11 @@ enum Command {
         search_timeout_secs: u64,
         #[arg(long)]
         memory_mb: Option<u64>,
+        /// Heap in MiB each generation of opened shards may fill with their tables (E37);
+        /// shards past it read them through the map. Default: an eighth of usable RAM, read
+        /// on Windows and Linux only; elsewhere pass this.
+        #[arg(long)]
+        table_mb: Option<u64>,
         /// How reindexed repos store file content (as for `index`; native only).
         #[arg(long, value_enum, default_value_t = ContentArg::Auto)]
         content: ContentArg,
@@ -209,22 +214,16 @@ enum DetectionArg {
     Scan,
 }
 
-/// The native backend for a process per query: its shards probe their trigram filters and
-/// dictionaries in place (E24, E36). Only for reading, where the codec plays no part: an index run builds its
+/// The native backend for a process per query: its shards read their tables (filter,
+/// dictionary, doc rows) in place through the map (E24, E36, E37). Only for reading, where the codec plays no part: an index run builds its
 /// own backend with the codec it picks (`ingest::Content`).
 static NATIVE: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
-/// The native backend for `serve`, which keeps every shard's filter and dictionary on the
-/// heap (E24, E36).
-static NATIVE_SERVER: NativeBackend = NativeBackend::new(LookupHome::Heap, ContentCodec::Raw);
 
-/// `lookup` says where native shards keep their filters and dictionaries: [`LookupHome::Map`]
-/// for a process per query, [`LookupHome::Heap`] for `serve`.
-fn backend_by_name(name: &str, lookup: LookupHome) -> anyhow::Result<&'static dyn IndexBackend> {
+/// `native` opens native shards: [`NATIVE`] for a process per query, `serve`'s own (its
+/// tables on the heap, E37) for a server.
+fn backend_by_name<'a>(name: &str, native: &'a NativeBackend) -> anyhow::Result<&'a dyn IndexBackend> {
     match name {
-        "native" => Ok(match lookup {
-            LookupHome::Map => &NATIVE,
-            LookupHome::Heap => &NATIVE_SERVER,
-        }),
+        "native" => Ok(native),
         "sqlite" => Ok(&SqliteBackend),
         other => bail!("unknown index backend {other:?} in catalog"),
     }
@@ -279,9 +278,18 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             max_output_mb,
             search_timeout_secs,
             memory_mb,
+            table_mb,
             content,
         } => {
             let budget = ingest::Budget::for_host(threads, memory_mb)?;
+            // An eighth of memory per generation: while a sync opens the next one the
+            // last serves on, so two usually hold tables (more only while a search outlives
+            // a second sync), a quarter of memory, and the page cache keeps the rest for
+            // content. 512 MiB on a 4 GiB box, every table of a ~6 GiB index at E37's 8%.
+            let table_bytes = match table_mb {
+                Some(mb) => mb << 20,
+                None => host::usable_memory().context("--table-mb default (pass --table-mb)")? / 8,
+            };
             let opts = serve::ServeOptions {
                 listen,
                 threads: budget.threads,
@@ -292,6 +300,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 search_timeout: std::time::Duration::from_secs(search_timeout_secs),
                 budget,
                 content: content.into(),
+                table_bytes,
             };
             serve::serve(&store, &scout_sync::config::Config::load(&config)?, &opts)?;
             Ok(ExitCode::SUCCESS)
@@ -453,7 +462,7 @@ fn open_repos(
     walk_threads: usize,
     with_snapshots: bool,
     ctx: &Arc<FsContext>,
-    lookup: LookupHome,
+    native: &NativeBackend,
 ) -> anyhow::Result<Vec<RepoHandle>> {
     for n in only {
         if catalog.find(n).is_none() {
@@ -467,7 +476,7 @@ fn open_repos(
     }
     let open_one = |r: &RepoEntry| -> anyhow::Result<RepoHandle> {
         let idx = r.index.as_ref().context("checked above")?;
-        let backend = backend_by_name(&idx.backend, lookup)?;
+        let backend = backend_by_name(&idx.backend, native)?;
         let shards = idx
             .shards
             .iter()
@@ -565,15 +574,8 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         DetectionArg::Journal => ChangeDetection::Journal,
         DetectionArg::Scan => ChangeDetection::Scan,
     }));
-    let repos = open_repos(
-        store,
-        &catalog,
-        &a.repos,
-        threads,
-        matches!(a.freshness, FreshnessArg::Strict),
-        &ctx,
-        LookupHome::Map,
-    )?;
+    let repos =
+        open_repos(store, &catalog, &a.repos, threads, matches!(a.freshness, FreshnessArg::Strict), &ctx, &NATIVE)?;
     let opened = started.elapsed();
     let opts = search_options(a, threads);
     let stdout = std::io::stdout();

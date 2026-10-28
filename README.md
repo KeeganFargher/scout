@@ -54,7 +54,8 @@ included), the indexing budget is a quarter of usable RAM (capped at 4 GiB; a co
 or systemd unit's cgroup memory limit counts, not the host's RAM; where scout cannot see its
 own cgroup, as in a cgroup v1 container without its own namespace, it stops and asks for
 `--memory-mb`), and the index is mmapped, so it does not have to
-fit in memory. Measured with 137 repos (54k files, a 1.0 GiB / 1.07 GB index):
+fit in memory. `serve` copies shard tables to the heap up to an eighth of usable RAM
+(`--table-mb`); the rest stay mapped. Measured with 137 repos (54k files, a 1.0 GiB / 1.07 GB index):
 
 - **1 CPU / 2 GiB** works: indexing 16 s at a 130 MiB peak, selective searches 2–7 ms
   served (12–24 ms as a fresh CLI process), about 29 served searches a second.

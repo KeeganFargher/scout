@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let results = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..2)
             .map(|_| {
-                let (next, groups, shards, store) = (&next, &groups, &shards, &store);
+                let (next, groups, shards, store, backend) = (&next, &groups, &shards, &store, &backend);
                 scope.spawn(move || -> scout_core::Result<Vec<(usize, RepoEntry)>> {
                     let mut result = Vec::new();
                     let mut scratch = Vec::new();

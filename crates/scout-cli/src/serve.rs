@@ -18,7 +18,7 @@ use scout_core::ranked::{RankOptions, search_ranked};
 use scout_core::search::{
     BoundedOptions, CaseMode, Freshness, Limits, OutputMode, RepoHandle, SearchOptions, search, search_bounded,
 };
-use scout_index_native::LookupHome;
+use scout_index_native::{ContentCodec, LookupHome, NativeBackend, TableBudget};
 use scout_source_fs::{ChangeDetection, FsContext};
 use scout_store_fs::FsStore;
 use scout_sync::Token;
@@ -44,6 +44,8 @@ pub struct ServeOptions {
     pub budget: Budget,
     /// How each cycle's reindexed repos store their content.
     pub content: Content,
+    /// Bytes of shard tables each generation may hold on the heap (E37).
+    pub table_bytes: u64,
 }
 
 struct Generation {
@@ -83,6 +85,7 @@ struct State {
     current: RwLock<Arc<Generation>>,
     last_cycle: Mutex<Option<LastCycle>>,
     threads: usize,
+    table_bytes: u64,
     max_output_bytes: usize,
     search_timeout: Duration,
 }
@@ -101,11 +104,12 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
     let token = Token::from_env(&cfg.token_env)?;
     let git = cfg.git(token.clone())?;
     // Serve what is already indexed right away; the first cycle starts immediately after.
-    let first = open_generation(store, store.load_catalog()?, 1, opts.threads)?;
+    let first = open_generation(store, store.load_catalog()?, 1, opts.threads, opts.table_bytes)?;
     let state = Arc::new(State {
         current: RwLock::new(Arc::new(first)),
         last_cycle: Mutex::new(None),
         threads: opts.threads,
+        table_bytes: opts.table_bytes,
         max_output_bytes: opts.max_output_bytes,
         search_timeout: opts.search_timeout,
     });
@@ -187,7 +191,7 @@ fn reconcile(store: &FsStore, state: &State, next_id: &mut u64) {
     if fingerprint(&catalog) == fingerprint(&state.generation().catalog) {
         return;
     }
-    match open_generation(store, catalog, *next_id, state.threads) {
+    match open_generation(store, catalog, *next_id, state.threads, state.table_bytes) {
         Ok(g) => {
             *state.current.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(g);
             err_line(&format!("serving generation {next_id}"));
@@ -200,14 +204,24 @@ fn reconcile(store: &FsStore, state: &State, next_id: &mut u64) {
 /// Opens every indexed repo of `catalog`. Unindexed repos are left out rather than
 /// failing the generation: sync only registers repos after their first index, so these
 /// can only be path-added repos nobody indexed yet.
-fn open_generation(store: &FsStore, catalog: Catalog, id: u64, threads: usize) -> anyhow::Result<Generation> {
+/// Each generation's shards copy their tables to the heap within `table_bytes` of their
+/// own: a generation opens while the one before still serves, and drops with its shards.
+fn open_generation(
+    store: &FsStore,
+    catalog: Catalog,
+    id: u64,
+    threads: usize,
+    table_bytes: u64,
+) -> anyhow::Result<Generation> {
     let indexed: Vec<String> = catalog.repos.iter().filter(|r| r.index.is_some()).map(|r| r.name.clone()).collect();
     let repos = if indexed.is_empty() {
         Vec::new()
     } else {
         // Off-mode searches never look at the working copy, so change detection is moot.
         let ctx = Arc::new(FsContext::new(ChangeDetection::Scan));
-        crate::open_repos(store, &catalog, &indexed, threads, false, &ctx, LookupHome::Heap)?
+        // Reading only: the codec is a writer's choice.
+        let native = NativeBackend::new(LookupHome::Heap(Arc::new(TableBudget::new(table_bytes))), ContentCodec::Raw);
+        crate::open_repos(store, &catalog, &indexed, threads, false, &ctx, &native)?
     };
     Ok(Generation { id, catalog, repos })
 }

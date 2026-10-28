@@ -101,10 +101,13 @@ Each repo becomes one or more shards. A shard holds:
 - **Trigram filter**: a register-blocked Bloom filter over the shard's trigram keys. Each
   key sets 4 bits inside one 64-bit word, and there are 6 bits of filter per key. A query
   that needs a trigram the shard lacks skips the shard without reading its dictionary or
-  postings (E24). `serve` copies the filters and the dictionaries (keys and values) to the
-  heap at startup, so a query on an index the page cache has dropped finds its lists
-  without a read: ~105 MiB for chromium + llvm-project (4% of the index), and cold selective
-  queries 2x faster (E36). The CLI probes both in place through the map, so a short-lived
+  postings (E24). `serve` copies every table between content and postings (docs, blocks,
+  paths, units, the dictionary, the filter) to the heap at startup, so a query on an index
+  the page cache has dropped reads only postings and content: ~211 MiB for chromium +
+  llvm-project (8% of the index). Cold selective queries ran 3–6x faster than with only
+  the filter there (`selective_long` 522 → 133 ms, no-match 242 → 40; E36 then E37,
+  separate A/Bs). Each generation of shards may copy an eighth of memory by default
+  (`--table-mb`); shards past that read their tables through the map. The CLI reads them in place through the map, so a short-lived
   process reads only what its query looks up instead of copying everything.
 
 Native format v9 (`SCOUTNI9`): header, content, docs, content blocks, paths, units,

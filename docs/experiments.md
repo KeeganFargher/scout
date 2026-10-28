@@ -51,6 +51,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E31 | A repo's shards share trigram counts; a long AND counts only the 6 the shard before ranked rarest                                                                                                                                                                                                                            | —                                                     | —           | **rejected, removed** (cold 0.993 at 4 GiB, 1.013 at 1 GiB, same bytes read; `literal_none` warm 10 → 20 ms from 4 more candidates)                                                                                                                                                                                                                                                                                        |
 | E32 | Format v7: blocks carry their line offset; a large candidate is read and searched only at its candidate units (vendored grep-searcher patched to start line numbers at N)                                                                                                                                                    | —                                                     | —           | **kept** (with E31 and E30's WILLNEED, vs e29: 4 GiB warm 0.915, cold 0.956, 8,714 → 7,866 MiB read cold, broad queries slower cold; 2 GiB warm 0.954, cold 0.980; outputs identical)                                                                                                                                                                                                                                      |
 | E36 | `serve` keeps every shard's dictionary (keys, values) on the heap with its filter                                                                                                                                                                                                                                            | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: cold 0.778, `selective_long` 522 → 232 ms, no-match 242 → 79; warm 0.994; startup on an evicted index +0.6 s; ~105 MiB heap, 4% of the index)                                                                                                                                                                                                                                         |
+| E37 | `serve` keeps every table (docs, blocks, paths, units, dictionary, filter) on the heap, within an eighth of memory per generation                                                                                                                                                                                            | —                                                     | —           | **B kept** (`serve` at 2 CPUs / 4 GiB vs E36: cold 0.784, faster on 18/18, `literal_none` 83 → 40 ms, `selective_long` 210 → 133; warm 0.984; startup +0.85 s; ~211 MiB heap, 8% of the index). A (content `MADV_RANDOM`) rejected: same bytes, 2x the IOs                                                                                                                                                                 |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1212,7 +1213,42 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   Warm 0.994 (`case_insensitive` 0.91, `smart_case` 1.09). Outputs identical. Time to
   ready on an evicted index 0.67–0.81 → 1.34–1.38 s: the open reads the dictionaries.
 - **Kept.** The heap grows with the index, 16.75 bytes per key, ~4% of this one: an index
-  several times memory would hold a matching share of a 4 GiB box. Not yet bounded.
+  several times memory would hold a matching share of a 4 GiB box. Not yet bounded (E37
+  bounds it).
+
+### E37: the server keeps every table on the heap
+
+- A (rejected, a probe): content sections `MADV_RANDOM` too, since verification already
+  asks for each candidate's blocks (E28). `coldmap.py`, CLI, cold, 2 CPUs / 4 GiB: content
+  read 23.2 → 22.8, 32.0 → 31.5, 62.1 → 61.5 MiB on `selective_long`,
+  `selective_symbol`, `literal_ident`, in 1,266 → 2,453, 1,358 → 2,548, 3,311 → 4,502
+  IOs. The content a selective query reads is its candidates' own blocks, not
+  read-around; without it the same bytes take twice the requests. Not A/B'd.
+- B: with E36, a cold selective query still read its candidates' doc rows, paths, blocks
+  and units through the map, each a 128 KiB read-around for a few bytes. Change: `Heap`
+  copies every section between content and postings (docs, blocks, paths, units, keys,
+  values, fence, filter; ~211 MiB on chromium + llvm-project, 8% of the index) in one
+  slice; the shard reads them all through one accessor by absolute offset, so the CLI's
+  mapped path and the server's heap path are the same code.
+- `serve-ab.sh` against E36, 2 interleaved reps at 2 CPUs / 4 GiB
+  ([results](../bench/results/E37-serve/ab-4G)). Cold geomean **0.784**, faster on 18/18
+  in both reps: `literal_none` 83 → 40 ms, `selective_long` 210 → 133 (43 → 26 MiB
+  read), `llvm_regex` 352 → 183, `smart_case` 871 → 480, `date_regex` 3,662 → 2,714;
+  bytes read cold fell on every query. Warm 0.984. Time to ready on an evicted index
+  1.37–1.52 → 2.25–2.32 s.
+- Bound: the heap grows with the index, so it is capped. `serve` gives each generation a
+  `TableBudget`, by default an eighth of usable memory (`--table-mb` sets it), taken
+  first come, first served at open; a shard that does not fit reads its tables through
+  the map, as the CLI does. Two generations usually overlap while a sync opens the next
+  (more only while a search outlives a second sync), so tables usually hold at most a
+  quarter of memory. 512 MiB on a 4 GiB box holds every table of an index ~6 GiB at
+  this 8% (extrapolated). Against the unbounded build, 2 reps
+  ([results](../bench/results/E37-serve/budget-4G)): cold 0.998 with identical bytes,
+  warm 1.014 (noise: only open changed), ready 2.22–2.26 → 2.23–2.31 s. That index's
+  211 MiB fits the budget, so this measures only the bookkeeping; over budget, which
+  shards stay mapped depends on open order (parallel) and is covered by a unit test,
+  not measured.
+- Parity gate ALL OK on raw and lz4 at 1 and 12 CPUs. **B kept**, bounded.
 
 ## Ranking experiments
 

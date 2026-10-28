@@ -37,8 +37,8 @@
 //! the planner asks it for every trigram of a query first, so a shard that lacks one is
 //! skipped without reading its dictionary or postings, which is what a cold query mostly
 //! waits on. It sits right after the fence, which every open reads, so a cold open fetches
-//! both in one read-around for a typical shard. Where an opened shard keeps it, and its
-//! dictionary, is the backend's [`LookupHome`].
+//! both in one read-around for a typical shard. Where an opened shard keeps it, and every
+//! other table between content and postings, is the backend's [`LookupHome`].
 //!
 //! Content is cut into blocks (E29), the line-aligned ~64 KiB spans posting units use, so
 //! a large file is stored as several. With [`ContentCodec::Lz4`] a block is stored lz4
@@ -70,6 +70,8 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use scout_core::indexer::{UNIT_TARGET, unit_spans};
 use scout_core::ports::{
@@ -108,24 +110,46 @@ const FILTER_K: u64 = 4;
 // the two choices would correlate and the false-positive rate would rise.
 const _: () = assert!(6 * FILTER_K <= 32);
 
-/// Where an opened shard keeps the data every query looks up before it reaches content:
-/// its trigram filter (E24) and its dictionary, keys and values (E36).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where an opened shard keeps its tables: every section between content and postings
+/// (docs, blocks, paths, units, the dictionary's keys, values and fence, the filter), the
+/// data a query looks up before and beside the content it reads.
+#[derive(Debug, Clone)]
 pub enum LookupHome {
-    /// Copied to the heap at open. A long-running server probes every shard's filter and
-    /// dictionary on every query; on the heap the page cache cannot drop them, so after the
+    /// Copied to the heap at open. A long-running server reads these on every query: the
+    /// filter (E24) and dictionary (E36) for every shard, a doc's row, path, blocks and
+    /// units for every candidate. On the heap the page cache cannot drop them, so after the
     /// index's pages are evicted (memory pressure on an index bigger than memory) a query
-    /// still skips the shards it rejects, and finds its lists, without a read. A dictionary
-    /// lookup touches 16 bytes, but a cold one reads the 128 KiB around them: on
-    /// chromium + llvm-project keys and values were half of a selective query's cold reads
-    /// (E36). Costs 16.75 bytes per key, ~105 MiB there (4% of the index), read once at
-    /// open.
-    Heap,
+    /// reads only postings and content. Each such lookup touches a few bytes, but a cold
+    /// one reads the 128 KiB around them: on chromium + llvm-project the dictionary was
+    /// half of a selective query's cold reads, the doc tables most of the rest (E36, E37).
+    /// Costs ~8% of the index there (211 MiB), read once at open. Only while the
+    /// [`TableBudget`] lasts: a shard whose tables do not fit what is left reads them
+    /// through the map, so an index many times memory does not move into the heap. Which
+    /// shards fit then depends on the order they open in, which `serve` does in parallel.
+    Heap(Arc<TableBudget>),
     /// Probed in place through the map, so a probe reads a page of the filter (one a cold
     /// open has usually just read with the fence beside it). A process per query (the CLI)
-    /// would otherwise copy every shard's filter and dictionary on each start, more than
-    /// one query's lookups read.
+    /// would otherwise copy every shard's tables on each start, far more than one query's
+    /// lookups read.
     Map,
+}
+
+/// Bytes of tables the shards opened with one [`LookupHome::Heap`] may copy to the heap,
+/// taken first come, first served, and never returned: a set of shards is opened together
+/// and dropped together (`serve`'s generations), and the next set gets its own budget.
+#[derive(Debug)]
+pub struct TableBudget(AtomicU64);
+
+impl TableBudget {
+    #[must_use]
+    pub const fn new(bytes: u64) -> Self {
+        Self(AtomicU64::new(bytes))
+    }
+
+    /// Takes `n` bytes if that many are left.
+    fn take(&self, n: u64) -> bool {
+        self.0.fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(n)).is_ok()
+    }
 }
 
 /// How a writer stores content blocks (E29). Reading handles both, block by block.
@@ -138,7 +162,7 @@ pub enum ContentCodec {
     Lz4,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NativeBackend {
     lookup: LookupHome,
     codec: ContentCodec,
@@ -163,7 +187,7 @@ impl IndexBackend for NativeBackend {
     }
 
     fn open(&self, path: &Path) -> Result<Box<dyn Shard>> {
-        Ok(Box::new(NativeShard::open(path, self.lookup)?))
+        Ok(Box::new(NativeShard::open(path, &self.lookup)?))
     }
 }
 
@@ -442,25 +466,18 @@ pub struct NativeShard {
     /// Every FENCE-th key, copied out of the map at open (E23): every lookup reads it, and
     /// on the heap the page cache cannot drop it (~1.4 KiB per shard).
     fence: Vec<u32>,
-    /// The keys and values sections, where the [`LookupHome`] says.
-    dict: Dict,
-    filter: Filter,
+    filter_off: usize,
     /// Words in the filter, at least one.
     filter_words: usize,
+    /// The sections from `docs_off` to `postings_off`, where the [`LookupHome`] says; read
+    /// through [`Self::tables`] by absolute offset.
+    tables: Tables,
     markers: Markers,
 }
 
-/// A shard's dictionary: its keys then its values, as in the map.
-enum Dict {
+enum Tables {
     Heap(Box<[u8]>),
     Map,
-}
-
-/// A shard's trigram filter, where its [`LookupHome`] says.
-enum Filter {
-    Heap(Vec<u64>),
-    /// The section's offset in the map.
-    Map(usize),
 }
 
 fn le_u32(b: &[u8], at: usize) -> u32 {
@@ -476,7 +493,7 @@ fn le_u64(b: &[u8], at: usize) -> u64 {
 }
 
 impl NativeShard {
-    pub fn open(path: &Path, home: LookupHome) -> Result<Self> {
+    pub fn open(path: &Path, home: &LookupHome) -> Result<Self> {
         let file = File::open(path).map_err(|e| Error::io(path, e))?;
         // SAFETY: shards are immutable once published (the store replaces them by
         // rename, never in place), so the mapping cannot change underneath us. A user
@@ -516,9 +533,9 @@ impl NativeShard {
             vals_off: off(6)?,
             postings_off: off(9)?,
             fence: Vec::new(),
-            dict: Dict::Map,
-            filter: Filter::Map(filter_off),
+            filter_off,
             filter_words: 0,
+            tables: Tables::Map,
             markers: Markers::default(),
             name: name.clone(),
             map,
@@ -563,10 +580,10 @@ impl NativeShard {
         }
         shard.filter_words = filter_len / 8;
         shard.fence = (fence_off..fence_end).step_by(4).map(|at| le_u32(&shard.map, at)).collect();
-        if home == LookupHome::Heap {
-            shard.filter =
-                Filter::Heap((filter_off..shard.postings_off).step_by(8).map(|at| le_u64(&shard.map, at)).collect());
-            shard.dict = Dict::Heap(shard.map[shard.keys_off..fence_off].into());
+        if let LookupHome::Heap(budget) = home
+            && budget.take((shard.postings_off - shard.docs_off) as u64)
+        {
+            shard.tables = Tables::Heap(shard.map[shard.docs_off..shard.postings_off].into());
         }
         // A posting list is read once per query that needs it, and its neighbours belong to
         // other trigrams, so a cold fault's 128 KiB read-around on a cloud disk mostly reads
@@ -594,12 +611,28 @@ impl NativeShard {
         Ok(self.docs_off + doc as usize * DOC_LEN)
     }
 
-    /// The keys section then the values section, from the heap or the map.
-    fn dict(&self) -> &[u8] {
-        match &self.dict {
-            Dict::Heap(bytes) => bytes,
-            Dict::Map => &self.map[self.keys_off..self.vals_off + self.trigram_count as usize * VAL_LEN],
+    /// The sections from `docs_off` to `postings_off`, from the heap or the map: index it
+    /// with an absolute offset minus `docs_off`, as [`Self::t32`] and [`Self::t64`] do.
+    fn tables(&self) -> &[u8] {
+        match &self.tables {
+            Tables::Heap(bytes) => bytes,
+            Tables::Map => &self.map[self.docs_off..self.postings_off],
         }
+    }
+
+    /// The u32 at absolute offset `at`, which lies in the tables.
+    fn t32(&self, at: usize) -> u32 {
+        le_u32(self.tables(), at - self.docs_off)
+    }
+
+    /// The u64 at absolute offset `at`, which lies in the tables.
+    fn t64(&self, at: usize) -> u64 {
+        le_u64(self.tables(), at - self.docs_off)
+    }
+
+    /// The bytes of absolute `range`, if it lies in the tables.
+    fn t_slice(&self, range: std::ops::Range<usize>) -> Option<&[u8]> {
+        self.tables().get(range.start.checked_sub(self.docs_off)?..range.end.checked_sub(self.docs_off)?)
     }
 
     /// `(unit_count, postings offset, end of its list)` of `tri`: the fence picks the one
@@ -608,24 +641,22 @@ impl NativeShard {
     /// the end of the section).
     fn dict_entry(&self, tri: Trigram) -> Option<(u32, usize, usize)> {
         let n = self.trigram_count as usize;
-        let dict = self.dict();
-        let vals = n * 4;
         // The last block whose first key is <= tri.
         let block = self.fence.partition_point(|&k| k <= tri.0).checked_sub(1)?;
         let (mut lo, mut hi) = (block * FENCE, ((block + 1) * FENCE).min(n));
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match le_u32(dict, mid * 4).cmp(&tri.0) {
+            match self.t32(self.keys_off + mid * 4).cmp(&tri.0) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
                 std::cmp::Ordering::Equal => {
-                    let at = vals + mid * VAL_LEN;
+                    let at = self.vals_off + mid * VAL_LEN;
                     let end = if mid + 1 < n {
-                        le_u64(dict, at + VAL_LEN + 4) as usize
+                        self.t64(at + VAL_LEN + 4) as usize
                     } else {
                         self.map.len() - self.postings_off
                     };
-                    return Some((le_u32(dict, at), le_u64(dict, at + 4) as usize, end));
+                    return Some((self.t32(at), self.t64(at + 4) as usize, end));
                 }
             }
         }
@@ -636,7 +667,9 @@ impl NativeShard {
 impl Shard for NativeShard {
     fn shape_mask(&self, doc: DocId) -> Result<ShapeMask> {
         let row = self.row(doc)?;
-        ShapeMask::from_bytes(&self.map[row + 40..row + DOC_LEN])
+        ShapeMask::from_bytes(
+            self.t_slice(row + 40..row + DOC_LEN).ok_or_else(|| self.corrupt("doc row out of bounds"))?,
+        )
     }
     fn doc_count(&self) -> u32 {
         self.doc_count
@@ -644,11 +677,15 @@ impl Shard for NativeShard {
 
     fn meta(&self, doc: DocId) -> Result<DocMeta<'_>> {
         let r = self.row(doc)?;
-        let start = self.paths_off + le_u32(&self.map, r + 28) as usize;
-        let end = start + le_u32(&self.map, r + 32) as usize;
-        let bytes = self.map.get(start..end).ok_or_else(|| self.corrupt("path out of bounds"))?;
+        let start = self.paths_off + self.t32(r + 28) as usize;
+        let end = start + self.t32(r + 32) as usize;
+        // Held to the paths section: a corrupt row must not return another section's bytes.
+        let bytes = (end <= self.units_off)
+            .then(|| self.t_slice(start..end))
+            .flatten()
+            .ok_or_else(|| self.corrupt("path out of bounds"))?;
         let path = std::str::from_utf8(bytes).map_err(|_| self.corrupt("path is not UTF-8"))?;
-        Ok(DocMeta { path: Cow::Borrowed(path), size: le_u64(&self.map, r + 8), mtime_ns: le_u64(&self.map, r + 16) })
+        Ok(DocMeta { path: Cow::Borrowed(path), size: self.t64(r + 8), mtime_ns: self.t64(r + 16) })
     }
 
     fn postings(&self, tri: Trigram) -> Result<Vec<UnitId>> {
@@ -695,11 +732,7 @@ impl Shard for NativeShard {
 
     fn may_contain(&self, tri: Trigram) -> bool {
         let (word, bits) = filter_slot(tri.0, self.filter_words);
-        let w = match &self.filter {
-            Filter::Heap(words) => words[word],
-            Filter::Map(off) => le_u64(&self.map, off + word * 8),
-        };
-        w & bits == bits
+        self.t64(self.filter_off + word * 8) & bits == bits
     }
 
     fn markers(&self) -> &Markers {
@@ -710,7 +743,7 @@ impl Shard for NativeShard {
         if unit >= self.unit_count {
             return Err(self.corrupt("unit id out of range"));
         }
-        let doc = le_u32(&self.map, self.units_off + unit as usize * 4);
+        let doc = self.t32(self.units_off + unit as usize * 4);
         if doc >= self.doc_count {
             return Err(self.corrupt("unit points past the docs table"));
         }
@@ -852,12 +885,9 @@ impl NativeShard {
     /// document, and corrupt block lengths could decode past its buffer.
     fn stored(&self, doc: DocId) -> Result<Stored> {
         let r = self.row(doc)?;
-        let first = le_u32(&self.map, r + 36) as usize;
-        let last = if doc + 1 < self.doc_count {
-            le_u32(&self.map, r + DOC_LEN + 36) as usize
-        } else {
-            self.block_count as usize
-        };
+        let first = self.t32(r + 36) as usize;
+        let last =
+            if doc + 1 < self.doc_count { self.t32(r + DOC_LEN + 36) as usize } else { self.block_count as usize };
         if first >= last || last > self.block_count as usize {
             return Err(self.corrupt("doc blocks out of range"));
         }
@@ -881,10 +911,10 @@ impl NativeShard {
             len += l;
             raw &= p == l;
         }
-        if len != le_u32(&self.map, r + 24) as usize {
+        if len != self.t32(r + 24) as usize {
             return Err(self.corrupt("doc blocks do not add up to its length"));
         }
-        let start = usize::try_from(le_u64(&self.map, r)).ok().and_then(|o| self.content_off.checked_add(o));
+        let start = usize::try_from(self.t64(r)).ok().and_then(|o| self.content_off.checked_add(o));
         match start.and_then(|s| Some(s..s.checked_add(packed)?)) {
             Some(bytes) if bytes.end <= self.docs_off => Ok(Stored { bytes, blocks: first..last, len, raw }),
             _ => Err(self.corrupt("content out of bounds")),
@@ -895,7 +925,7 @@ impl NativeShard {
     /// `block_count`.
     fn block(&self, b: usize) -> (usize, usize) {
         let at = self.blocks_off + b * BLOCK_LEN;
-        (le_u32(&self.map, at) as usize, le_u32(&self.map, at + 4) as usize)
+        (self.t32(at) as usize, self.t32(at + 4) as usize)
     }
 
     /// One block's content into `dst`, sized to its content length: copied when stored as
@@ -919,7 +949,7 @@ impl NativeShard {
 
     /// Lines of its doc before block `b`, bounded like [`Self::block`].
     fn block_lines(&self, b: usize) -> u64 {
-        u64::from(le_u32(&self.map, self.blocks_off + b * BLOCK_LEN + 8))
+        u64::from(self.t32(self.blocks_off + b * BLOCK_LEN + 8))
     }
 
     /// `(stored, content)` offset of each of the doc's blocks from the doc's start, plus
@@ -938,7 +968,7 @@ impl NativeShard {
 
     /// The doc's first unit: the units table lists each unit's doc, docs ascending.
     fn first_unit(&self, doc: DocId) -> Result<UnitId> {
-        let doc_of = |u: usize| le_u32(&self.map, self.units_off + u * 4);
+        let doc_of = |u: usize| self.t32(self.units_off + u * 4);
         let (mut lo, mut hi) = (0usize, self.unit_count as usize);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
@@ -1022,7 +1052,10 @@ mod tests {
     type Doc<'a> = (&'a str, &'a [u8], &'a [&'a [u8]]);
 
     const MAPPED: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
-    const HEAP: NativeBackend = NativeBackend::new(LookupHome::Heap, ContentCodec::Raw);
+
+    fn heap(budget: u64) -> NativeBackend {
+        NativeBackend::new(LookupHome::Heap(Arc::new(TableBudget::new(budget))), ContentCodec::Raw)
+    }
     const LZ4: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Lz4);
 
     fn content(s: &dyn Shard, doc: DocId) -> Vec<u8> {
@@ -1172,7 +1205,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.native");
         text_shard(&path);
-        let (mapped, heap) = (MAPPED.open(&path).unwrap(), HEAP.open(&path).unwrap());
+        let (mapped, heap) = (MAPPED.open(&path).unwrap(), heap(u64::MAX).open(&path).unwrap());
         // Every printable-ASCII trigram: the shard's own and a few hundred thousand misses,
         // through the filter and the dictionary (the shard's last key ends its list at the
         // map's end, which the heap copy does not hold).
@@ -1186,6 +1219,37 @@ mod tests {
             found += usize::from(count > 0);
         }
         assert!(found > 10, "the shard's own trigrams were looked up: {found}");
+        // And every doc's row, path, shape mask and unit, read from the tables (E37).
+        assert!(mapped.doc_count() > 1);
+        for doc in 0..mapped.doc_count() {
+            let (m, h) = (mapped.meta(doc).unwrap(), heap.meta(doc).unwrap());
+            assert_eq!((m.path, m.size, m.mtime_ns), (h.path, h.size, h.mtime_ns));
+            assert_eq!(mapped.shape_mask(doc).unwrap(), heap.shape_mask(doc).unwrap());
+        }
+        let units = NativeShard::open(&path, &LookupHome::Map).unwrap().unit_count;
+        assert!(units > 1);
+        for unit in 0..units {
+            assert_eq!(mapped.unit_doc(unit).unwrap(), heap.unit_doc(unit).unwrap());
+        }
+    }
+
+    #[test]
+    fn shards_copy_their_tables_only_while_the_budget_lasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.native");
+        text_shard(&path);
+        let probe = NativeShard::open(&path, &LookupHome::Map).unwrap();
+        let len = (probe.postings_off - probe.docs_off) as u64;
+        let on_heap = |s: &NativeShard| matches!(s.tables, Tables::Heap(_));
+        assert!(!on_heap(&probe));
+        // Room for exactly two shards' tables: the third open finds none left and maps.
+        let home = LookupHome::Heap(Arc::new(TableBudget::new(2 * len)));
+        let opened: Vec<_> = (0..3).map(|_| NativeShard::open(&path, &home).unwrap()).collect();
+        assert_eq!(opened.iter().map(on_heap).collect::<Vec<_>>(), [true, true, false]);
+        // The mapped one answers like the others.
+        let t = Trigram::from_bytes(b'a', b'b', b'c');
+        assert_eq!(opened[2].postings(t).unwrap(), opened[0].postings(t).unwrap());
+        assert_eq!(opened[2].meta(0).unwrap().path, opened[0].meta(0).unwrap().path);
     }
 
     /// The filter's hash is part of the format: a reader hashing differently from the writer
@@ -1471,7 +1535,7 @@ mod tests {
         let mut w = LZ4.create(&path).unwrap();
         w.add(&FileMeta { path: "large.txt".into(), size: text.len() as u64, mtime_ns: 0 }, &text, &units).unwrap();
         w.finish().unwrap();
-        let shard = NativeShard::open(&path, LookupHome::Map).unwrap();
+        let shard = NativeShard::open(&path, &LookupHome::Map).unwrap();
         let stored = shard.stored(0).unwrap();
         let second = stored.blocks.start + 1;
         let start = stored.bytes.start + shard.block(stored.blocks.start).0;
@@ -1482,7 +1546,7 @@ mod tests {
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[start..start + packed].fill(0);
         std::fs::write(&path, bytes).unwrap();
-        let shard = NativeShard::open(&path, LookupHome::Map).unwrap();
+        let shard = NativeShard::open(&path, &LookupHome::Map).unwrap();
         let mut buf = Vec::new();
         for extent in [Extent::Whole, Extent::Units(&[0, 1])] {
             let mut calls = 0;
