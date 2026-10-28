@@ -1,0 +1,21 @@
+rank-ab.sh bin-e39 (A) against bin-e41 (B, variant A), idx-e38-hc, --top 20, 9 runs
+query identical a_ms b_ms b/a
+literal_ident yes 64 63 0.984
+literal_common yes 285 281 0.986
+literal_none yes 11 10 0.909
+literal_long yes 656 651 0.992
+ident_regex yes 189 191 1.011
+alternation yes 422 417 0.988
+crbug_regex yes 148 147 0.993
+case_insensitive yes 255 246 0.965
+smart_case yes 83 83 1.000
+word yes 249 249 1.000
+anchored yes 405 425 1.049
+date_regex yes 470 479 1.019
+count_mode yes 152 153 1.007
+files_mode yes 135 133 0.985
+llvm_regex yes 41 40 0.976
+rare_regex yes 114 110 0.965
+selective_long yes 26 26 1.000
+selective_symbol yes 35 34 0.971
+geomean b/a 0.988 over 18 queries

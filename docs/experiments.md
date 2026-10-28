@@ -55,6 +55,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E38 | Content blocks encoded with lz4 HC level 6 instead of lz4_flex's fast encoder (same block format, same reader). Probe: why not rewrite `-i`/`-w`/`-S` queries                                                                                                                                                                | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: warm 0.970, cold 0.964, index 2,864 → 2,580 MiB, build 304 → 295 s; outputs identical). Query rewrites not tried: `-w`, `-i`, `-S` cost 7–23 ms over `-F`, and the matcher beats Aho-Corasick                                                                                                                                                                                         |
 | E39 | `--rank` verifies the plain search's chunks on every thread (was one thread per repo), with the shape filter, and scores each file in one pass                                                                                                                                                                               | —                                                     | —           | **kept** (`--rank --top 20`, warm, 2 CPUs: geomean 0.609, `date_regex` 1,937 → 514 ms, `literal_long` 1,542 → 732; output identical on all 18 queries and the 79 golden queries' features)                                                                                                                                                                                                                                 |
 | E40 | Simulation, no scout change: `--rank --top N` that stops early, either after a cap of matches in a path-only order, or exactly, once the top N beat every unvisited file's path-only score bound                                                                                                                             | —                                                     | —           | **rejected** (a cap of 20–200 costs 0.24–0.34 nDCG@10 on the broad golden queries; the exact stop at N = 10 still decodes 65–96% of the matched bytes on 12 of the 16 chromium + llvm queries with matches)                                                                                                                                                                                                                |
+| E41 | `--rank` per-file work: features moved instead of cloned, one hit buffer per chunk, line count stopped once `classify` is settled, head lowercased on the stack; variant A also classified paths without allocating                                                                                                          | —                                                     | —           | **rejected** (output identical; A: geomean 0.988 / 0.993 at 9 / 21 runs but +6% instructions on `literal_long`; B: −1–2% instructions, cycles within ±2% noise on all 5 broad queries)                                                                                                                                                                                                                                     |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1392,6 +1393,39 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
     A stop that first verifies only path-matching candidates, then falls back to the full
     ranking when they do not settle the top N, would get that class. It is left for when
     that class matters, and `cap` and `visits` stay in `scout-rank-eval` to measure it.
+
+### E41: trimming the ranked pass's per-file work
+
+- Why: after E39, a profile of ranked `literal_long` (182k matched files, warm, 2 CPUs)
+  put LZ4 decode at 28%, which the plain search pays too. The rest was spread across
+  per-file work: the chunk callback 5%, xxh3 of the content 4.8%, `classify` 4%, newline
+  counting 3.5%, and malloc/free about 4%.
+- Change, output unchanged:
+  - features moved out of the collected files instead of cloned for scoring;
+  - one term-hit buffer per chunk instead of one per candidate;
+  - `classify_content`, which stops counting newlines once `classify`'s two line tests
+    are settled (50 lines, or a script's average line over 110 bytes; a test covers every
+    count and width around both edges);
+  - the head lowercased into a stack buffer for the generated-marker search.
+  - Variant A also walked path segments without collecting them and compared test
+    names ignoring case in place, to avoid three allocations per file.
+- Exactness: the 79 golden queries' feature dumps were identical to E39's, and so was the
+  `--top 200` output of all 18 queries-big queries.
+- Variant A, `rank-ab.sh` warm at 2 CPUs ([9 runs](../bench/results/E41-rank/top20-warm.txt),
+  [21 runs](../bench/results/E41-rank/top20-warm-21.txt)): geomean 0.988 and 0.993, with
+  signs mixed per query between the two runs. Only `literal_long` was faster in both
+  (656 → 651 and 656 → 637 ms).
+- `perf stat -r 10` on five broad queries ([results](../bench/results/E41-rank/perf-stat.txt))
+  settles it, because wall time on 2 CPUs cannot resolve 1%:
+  - Variant A ran **6% more instructions** on `literal_long`. Re-splitting the path for
+    each directory test and comparing test names byte by byte cost more than the
+    allocations they saved.
+  - Variant B (A without the path changes) ran 1–2% fewer instructions on four of the
+    five queries, but cycles and task-clock stayed within ±2% of E39's on every query.
+- **Rejected.** None of it is measurable: these per-file costs are cheap next to the
+  decoding and matching every candidate already pays, and the profile's percentages
+  overstated what removing them would save. Ranked search is now within 0.95–2.4x of the
+  plain search, so the next milliseconds are in the plain search's own decode and verify.
 
 ## Ranking experiments
 
