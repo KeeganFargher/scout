@@ -56,6 +56,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E39 | `--rank` verifies the plain search's chunks on every thread (was one thread per repo), with the shape filter, and scores each file in one pass                                                                                                                                                                               | —                                                     | —           | **kept** (`--rank --top 20`, warm, 2 CPUs: geomean 0.609, `date_regex` 1,937 → 514 ms, `literal_long` 1,542 → 732; output identical on all 18 queries and the 79 golden queries' features)                                                                                                                                                                                                                                 |
 | E40 | Simulation, no scout change: `--rank --top N` that stops early, either after a cap of matches in a path-only order, or exactly, once the top N beat every unvisited file's path-only score bound                                                                                                                             | —                                                     | —           | **rejected** (a cap of 20–200 costs 0.24–0.34 nDCG@10 on the broad golden queries; the exact stop at N = 10 still decodes 65–96% of the matched bytes on 12 of the 16 chromium + llvm queries with matches)                                                                                                                                                                                                                |
 | E41 | `--rank` per-file work: features moved instead of cloned, one hit buffer per chunk, line count stopped once `classify` is settled, head lowercased on the stack; variant A also classified paths without allocating                                                                                                          | —                                                     | —           | **rejected** (output identical; A: geomean 0.988 / 0.993 at 9 / 21 runs but +6% instructions on `literal_long`; B: −1–2% instructions, cycles within ±2% noise on all 5 broad queries)                                                                                                                                                                                                                                     |
+| E42 | `prefetch` joins candidates' content ranges across gaps of up to 32 KiB (was 4 KiB), so a cold query issues fewer, larger reads                                                                                                                                                                                              | —                                                     | —           | **kept** (serve on the EBS-like box, 2 reps: cold geomean **0.731**, `alternation` 10.0 → 5.8 s, `word` 6.6 → 3.5 s; warm 0.978; `literal_long` cold +4%)                                                                                                                                                                                                                                                                  |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1426,6 +1427,79 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   decoding and matching every candidate already pays, and the profile's percentages
   overstated what removing them would save. Ranked search is now within 0.95–2.4x of the
   plain search, so the next milliseconds are in the plain search's own decode and verify.
+
+### E42: fewer, larger cold reads
+
+- Why: E38's cold times on the EBS-like box (2 CPUs / 4 GiB, gp3's 125 MB/s and
+  3000 IOPS) were 0.1–10 s a query, against 2–400 ms warm. A probe (`cold-io.sh`: a serve
+  per IOPS cap, the index evicted from its cgroup before each query, reads (bios) and
+  bytes from the cgroup's `io.stat`) found most of them bound by reads, not bytes
+  ([results](../bench/results/E42-coldio/cold-io-e39.txt)):
+  - At 3000 IOPS, the nine queries over 1.7 s with 11–18 KiB reads took reads / 3000 to
+    within 2% (`alternation`: 29,885 reads, 9.96 s; its 490 MiB alone would take 4.1 s
+    at 125 MB/s). `literal_long` took 2.1x that, bound by bytes.
+  - Reads averaged 11–25 KiB on every query but `literal_long` (81), `anchored` (38),
+    `date_regex` (30), the two selective ones (38, 45) and `literal_none` (5).
+  - Lifting the IOPS cap, same bytes, made those nine 2.1–3.3x faster (`files_mode`
+    3.25x, `alternation` 2.39x), `literal_ident` and `smart_case` (23–25 KiB) 1.8x and
+    1.6x, and `llvm_regex` (140 ms) 1.15x; `literal_long` did not move.
+  - The candidates' content is queued with `MADV_WILLNEED` (E28), joining ranges only
+    across gaps of up to 4 KiB, so on an lz4 index (E29: a few KiB per small file) most
+    candidates were a read of their own.
+- Change: `prefetch` joins ranges across gaps of up to `PREFETCH_GAP` = 32 KiB, in a
+  pure `coalesce` with a unit test of the edges. One read saved is worth ~41 KB of transfer
+  at 125 MB/s ÷ 3000, less what the gap costs a query already bound by bytes.
+- Gap sweep, cold at 3000 IOPS, a single pass of the 18 queries per gap, so noisy (in it
+  32 KiB's `literal_long` was +17%; in the A/B below, +4%)
+  ([4](../bench/results/E42-coldio/cold-io-e39.txt),
+  [16](../bench/results/E42-coldio/cold-io-gap16.txt),
+  [32](../bench/results/E42-coldio/cold-io-gap32.txt),
+  [64](../bench/results/E42-coldio/cold-io-gap64.txt),
+  [128 KiB](../bench/results/E42-coldio/cold-io-gap128.txt)). Time against 4 KiB (geomean),
+  reads, and the 18 queries' total:
+
+  | gap     | time  | reads | total  |
+  | ------- | ----- | ----- | ------ |
+  | 4 KiB   | 1     | 1     | 57.0 s |
+  | 16 KiB  | 0.818 | 0.684 | 38.8 s |
+  | 32 KiB  | 0.776 | 0.524 | 37.7 s |
+  | 64 KiB  | 0.873 | 0.406 | 44.7 s |
+  | 128 KiB | 1.070 | 0.366 | 54.2 s |
+
+  64 and 128 KiB were dropped on this pass alone: 64 KiB cut reads further but read so
+  many more bytes that it was slower than 16 and 32 (and 128 KiB, slower than 4 KiB by
+  geomean though not in total).
+
+- `serve-ab.sh`, 2 interleaved reps, warm 3 rounds and cold 1, against e39 on
+  `idx-e38-hc` ([32 KiB](../bench/results/E42-coldio/ab-gap32/summary.txt),
+  [16 KiB](../bench/results/E42-coldio/ab-gap16/summary.txt)):
+  - 32 KiB cold geomean **0.731**, faster in both reps on 13 of 18 queries:
+    `alternation` 9,992 → 5,810 ms, `word` 6,569 → 3,479, `literal_common` 5,803 → 3,623,
+    `files_mode` 4,633 → 2,136, `crbug_regex` 3,954 → 1,957. It read 25% more bytes over
+    the pass, up to 49.5% more on a query (`files_mode`).
+  - Slower cold in both reps: `literal_long` 4,899 → 5,111 (+4%) and `anchored` +2%, both
+    bound by bytes, and `selective_symbol` 235 → 238 ms (+1%). In one rep, `llvm_regex`
+    (+5% median) and `selective_long` (+10%), which take 120–140 ms.
+  - Warm geomean 0.978, with no bytes read; time to ready unchanged.
+  - 16 KiB: cold 0.776, warm 0.990, `llvm_regex` 1.34 in both reps.
+  - 32 against 16 was not run head to head: each ran against its own e39 baseline. 16 KiB
+    did better on the largest read-bound queries (`literal_common` 0.538 against 0.624,
+    `word` 0.497 against 0.530, `alternation` 0.531 against 0.582) and on `literal_long`
+    (1.017 against 1.043). 32 KiB won on geomean (0.731 against 0.776) and on total cold
+    time (0.650 against 0.675 of e39's), so it is the one kept.
+  - Memory ([peaks](../bench/results/E42-coldio/memory-peaks.txt)): the gaps are read on
+    top of the read-ahead window, which counts content bytes only, so a block of n
+    candidates queues at most (n − 1) × 32 KiB more. The server's cgroup peak went from
+    1,793–1,806 MiB to 1,868–1,910 of the 4 GiB, all reclaimable page cache, with no OOM
+    kill.
+- Caveat: the harness's `io.max` throttles and counts every bio against the cap. Real
+  gp3 merges sequential small reads into one I/O. The ranges joined here are separate
+  candidates with gaps between them, which gp3 would count as separate I/Os too. But some
+  of the bios behind the base's 11–25 KiB average may have been merged on gp3, so the win
+  on EBS itself may be smaller than measured.
+- Gates: clippy, tests (132 on Linux), parity ALL OK on all four bench profiles
+  ([parity](../bench/results/E42-coldio/parity.txt)).
+- **Kept.**
 
 ## Ranking experiments
 

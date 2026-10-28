@@ -1037,8 +1037,10 @@ fn want<'a>(shard: &dyn Shard, cands: &'a ShardCandidates, c: &Candidate, readin
 /// memory pressure can evict them. Counted in content bytes (`meta.size`), the only size
 /// the port exposes: on an lz4 index (E29) a block is ~1.3 MiB of disk, so the window
 /// holds ~3x fewer bytes in flight; E29 measured it as is rather than tuned for that. A
-/// doc bigger than a block is a block by itself and advised whole, which only queues page
-/// cache reads, reclaimable, not process memory.
+/// shard may also read the gaps between candidates it joins into one request (the native
+/// one, up to 32 KiB each, E42), on top of this count. A doc bigger than a block is a block
+/// by itself and advised whole. All of it only queues page cache reads, reclaimable, not
+/// process memory.
 const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
 
 /// Queues the content of a run of candidates for reading, block by block, ahead of the

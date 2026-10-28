@@ -95,6 +95,19 @@ const BLOCK_LEN: usize = 12;
 const LZ4_MAX_EXPANSION: usize = 255;
 /// The page size the read advice is sized against: 4 KiB on every target scout serves.
 const PAGE: usize = 4096;
+/// The largest gap between two candidates' content that `prefetch` reads through to queue
+/// them as one range. Most cold queries on gp3 were bound by its 3000 IOPS, not its
+/// 125 MB/s: their reads averaged 11–25 KiB, and lifting the IOPS cap alone made the
+/// largest of them 2.1–3.3x faster (E42). One read saved is worth ~41 KB of transfer (125 MB/s ÷ 3000),
+/// less the bytes the gap adds to queries already bound by bandwidth. Against 4 KiB, cold
+/// geomean 0.73 at 32 KiB and 0.78 at 16 (separate A/Bs); one sweep pass put 64 KiB at
+/// 0.87 and 128 KiB at 1.07.
+///
+/// The gaps are read on top of the caller's window, which counts content bytes only: a
+/// block of n candidates queues at most (n - 1) × 32 KiB more. Measured, that was 25% more
+/// bytes over a cold pass, and the server's peak memory rose 60–120 MiB of 4 GiB, all
+/// reclaimable page cache.
+const PREFETCH_GAP: usize = 32 << 10;
 const VAL_LEN: usize = 12;
 /// Keys per fence block: 128 × 4 bytes is one short cache-friendly run (usually within one
 /// page), and the fence of a 44k-trigram shard is ~350 keys, ~1.4 KiB.
@@ -817,39 +830,41 @@ impl Shard for NativeShard {
     }
 
     fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
-        // A filtered scan skips small files between candidates. Queue their nearby
-        // ranges together instead of issuing repeated syscalls for the same pages.
-        // At most 4 KiB per gap is read additionally, within the caller's bounded window.
-        let mut run: Option<std::ops::Range<usize>> = None;
-        let mut add = |next: std::ops::Range<usize>| -> Result<()> {
-            match &mut run {
-                Some(r) if next.start >= r.end && next.start - r.end <= 4096 => r.end = next.end,
-                _ => {
-                    if let Some(done) = run.replace(next) {
-                        self.will_need(done)?;
-                    }
-                }
-            }
-            Ok(())
-        };
+        let mut ranges = Vec::with_capacity(wants.len());
         for want in wants {
             let stored = self.stored(want.doc)?;
             match want.extent {
-                Extent::Whole => add(stored.bytes)?,
+                Extent::Whole => ranges.push(stored.bytes),
                 Extent::Units(units) => {
                     let offs = self.offsets(&stored);
                     let base = stored.bytes.start;
                     for r in self.unit_blocks(want.doc, &stored, units)? {
-                        add(base + offs[r.start].0..base + offs[r.end].0)?;
+                        ranges.push(base + offs[r.start].0..base + offs[r.end].0);
                     }
                 }
             }
         }
-        match run {
-            Some(r) => self.will_need(r),
-            None => Ok(()),
+        for r in coalesce(ranges, PREFETCH_GAP) {
+            self.will_need(r)?;
+        }
+        Ok(())
+    }
+}
+
+/// `ranges`, in order, with each one that starts at most `gap` bytes after the previous
+/// run ends joined to that run. A filtered scan skips the files between candidates, and on
+/// a cloud disk one read across a short gap costs less than two reads (`PREFETCH_GAP`). A
+/// range that starts before the run ends (out of order, or overlapping) begins a new run:
+/// joining it could extend a run backwards over bytes no one asked for.
+fn coalesce(ranges: Vec<std::ops::Range<usize>>, gap: usize) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for next in ranges {
+        match out.last_mut() {
+            Some(r) if next.start >= r.end && next.start - r.end <= gap => r.end = next.end,
+            _ => out.push(next),
         }
     }
+    out
 }
 
 /// Where a doc's content is stored: its bytes in the map and its blocks.
@@ -1069,6 +1084,17 @@ mod tests {
         NativeBackend::new(LookupHome::Heap(Arc::new(TableBudget::new(budget))), ContentCodec::Raw)
     }
     const LZ4: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Lz4);
+
+    #[test]
+    fn prefetch_joins_ranges_across_short_gaps_only() {
+        let g = PREFETCH_GAP;
+        // Adjacent, a gap of exactly `g`, and one byte more.
+        assert_eq!(coalesce(vec![0..10, 10..20, 20 + g..30 + g], g), vec![0..30 + g]);
+        assert_eq!(coalesce(vec![0..10, 11 + g..20 + g], g), vec![0..10, 11 + g..20 + g]);
+        // Out of order or overlapping starts a new run instead of reaching back.
+        assert_eq!(coalesce(vec![100..200, 50..60, 55..70], g), vec![100..200, 50..60, 55..70]);
+        assert_eq!(coalesce(Vec::new(), g), Vec::<std::ops::Range<usize>>::new());
+    }
 
     fn content(s: &dyn Shard, doc: DocId) -> Vec<u8> {
         s.content(doc, &mut Vec::new()).unwrap().to_vec()
