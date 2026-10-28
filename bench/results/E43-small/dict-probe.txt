@@ -1,0 +1,12 @@
+shards=6 blocks=72205 raw_mib=614.8
+under 4 KiB: 9.6% of raw bytes; in single-block docs: 52.1%
+hc6 stored_mib=195.3 ratio=3.148 encode_mb_s=117 decode_ms=129.4 decode_gb_s=4.98
+hc6+min1k stored_mib=168.7 ratio=3.645 encode_mb_s=113 decode_ms=141.1 decode_gb_s=4.57
+hc6+small stored_mib=166.1 ratio=3.701 encode_mb_s=107 decode_ms=141.1 decode_gb_s=4.57
+hc6+small+global stored_mib=138.1 ratio=4.453 encode_mb_s=31 decode_ms=152.7 decode_gb_s=4.22
+per-shard dictionaries (2m): trained in 0.5 s
+hc6+small+shard2m stored_mib=150.2 ratio=4.093 encode_mb_s=43 decode_ms=149.6 decode_gb_s=4.31
+hc6+small+shard2m+alone stored_mib=152.0 ratio=4.046 encode_mb_s=49 decode_ms=148.3 decode_gb_s=4.35
+per-shard dictionaries (8m): trained in 1.7 s
+hc6+small+shard8m stored_mib=146.0 ratio=4.211 encode_mb_s=38 decode_ms=151.7 decode_gb_s=4.25
+hc6+small+shard8m+alone stored_mib=148.2 ratio=4.149 encode_mb_s=42 decode_ms=149.5 decode_gb_s=4.31

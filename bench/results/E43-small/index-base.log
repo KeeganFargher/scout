@@ -1,0 +1,5 @@
+indexing 2 repo(s): 2 worker(s), shard cap 102 MiB, budget 1024 MiB, backend native, content Lz4
+  llvm-project                              187463 files   2174.6 MiB 22 shard(s) 166.79s
+  chromium                                  510212 files   2951.0 MiB 29 shard(s) 299.53s
+done in 299.6s
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=0 cgroup_peak_mib=4096 oom_kills=0 io: rbytes=9042583552 wbytes=2673590272 rios=811460 wios=343 dbytes=0 dios=0

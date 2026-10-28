@@ -57,6 +57,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E40 | Simulation, no scout change: `--rank --top N` that stops early, either after a cap of matches in a path-only order, or exactly, once the top N beat every unvisited file's path-only score bound                                                                                                                             | —                                                     | —           | **rejected** (a cap of 20–200 costs 0.24–0.34 nDCG@10 on the broad golden queries; the exact stop at N = 10 still decodes 65–96% of the matched bytes on 12 of the 16 chromium + llvm queries with matches)                                                                                                                                                                                                                |
 | E41 | `--rank` per-file work: features moved instead of cloned, one hit buffer per chunk, line count stopped once `classify` is settled, head lowercased on the stack; variant A also classified paths without allocating                                                                                                          | —                                                     | —           | **rejected** (output identical; A: geomean 0.988 / 0.993 at 9 / 21 runs but +6% instructions on `literal_long`; B: −1–2% instructions, cycles within ±2% noise on all 5 broad queries)                                                                                                                                                                                                                                     |
 | E42 | `prefetch` joins candidates' content ranges across gaps of up to 32 KiB (was 4 KiB), so a cold query issues fewer, larger reads                                                                                                                                                                                              | —                                                     | —           | **kept** (serve on the EBS-like box, 2 reps: cold geomean **0.731**, `alternation` 10.0 → 5.8 s, `word` 6.6 → 3.5 s; warm 0.978; `literal_long` cold +4%)                                                                                                                                                                                                                                                                  |
+| E43 | Writer compresses every content block lz4 shrinks, small ones too (was: blocks under 4 KiB stored raw)                                                                                                                                                                                                                       | —                                                     | —           | **rejected** (fails the rule set before the run: cold geomean 0.959 against ≤ 0.95; index 2,580 → 2,305 MiB, `literal_long` cold 0.842 but warm 1.107, over 10% slower in both reps; warm geomean 1.018)                                                                                                                                                                                                                   |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1500,6 +1501,56 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - Gates: clippy, tests (132 on Linux), parity ALL OK on all four bench profiles
   ([parity](../bench/results/E42-coldio/parity.txt)).
 - **Kept.**
+
+### E43: small blocks compressed too
+
+- Why: after E42 the cold queries were bound by bytes, not reads. `cold-io.sh` on the E42
+  build at caps "3000 max", one pass each
+  ([output](../bench/results/E43-small/cold-io-e42-caps.txt)): every query took within
+  8% of the same time at 3000 IOPS and with no cap but `rare_regex` (1.45),
+  `literal_ident` (1.19) and `selective_symbol` (0.85), and the broad ones took about
+  their bytes at 125 MB/s (`alternation`: 685 MiB, 5.77 s against 5.75 predicted). Their
+  candidates nearly all match (`--stats`, warm;
+  [counts](../bench/results/E43-small/candidates.txt)): `literal_long` 184,684
+  candidates, 182,037 files matched; `literal_common` 50,646 and 50,302; `files_mode`
+  22,456 and 22,339. A tighter filter would not cut those bytes; only storing content
+  smaller would.
+- `dict-probe` (new example: the blocks of 6 sampled shards, 615 MiB, re-encoded on one
+  core; [output](../bench/results/E43-small/dict-probe.txt)): blocks under 4 KiB, which
+  the writer kept raw, are 9.6% of the content but 30% of what is stored. Compressing
+  every block lz4 shrinks: 195.3 → 166.1 MiB stored (−15%), decode 4.98 → 4.57 GB/s. A 1
+  KiB floor stored 168.7 at the same decode speed, so none was kept. The probe times a
+  raw block as a copy, which the reader does not pay (it borrows the map), so it
+  understates what compressing small blocks costs to decode. Its dictionary arms are not
+  an experiment yet: a per-shard dictionary trained on a shard's first 8 MiB stored 146.0
+  (148.2 used only for single-block docs, which hold 52% of the content), decode 4.25–4.31.
+- Rule set before the run: keep if cold geomean ≤ 0.95, warm geomean ≤ 1.05 and no warm
+  query more than 10% slower in both reps, all from the interleaved `serve-ab.sh` reps.
+- Change: the writer's `ContentCodec::Lz4` arm compressed every block, keeping it raw only
+  when lz4 did not shrink it. The reader needed no change: a block whose two lengths
+  differ was already lz4 at any length.
+- `run-e43.sh`: both builds index chromium + llvm-project `--content lz4` at 2 CPUs / 4
+  GiB ([index](../bench/results/E43-small/index.txt)): 299.6 → 295.0 s, shards 2,580 →
+  2,305 MiB (−10.7%, postings included). Parity ALL OK on all four profiles.
+  `serve-ab.sh`, 2 interleaved reps ([summary](../bench/results/E43-small/ab-summary.txt),
+  [reps](../bench/results/E43-small/ab-4G)):
+  - Cold **0.959**: `literal_long` 5,104 → 4,296 ms (0.842), `anchored` 0.837,
+    `literal_common` 0.893, `files_mode` 0.914, the rest 0.925–1.006 but `literal_none`
+    1.038 and `llvm_regex` 1.224, which is one rep (172 against 119 ms; the other 114
+    against 115). Without `llvm_regex` the geomean would be 0.946. Bytes read fell 15–17%
+    on `literal_long` and `anchored`, 11% on `literal_common`, 0–7% on the rest: most of
+    what those queries read is not in blocks under 4 KiB.
+  - Warm 1.018: `literal_long` 280.7 → 310.8 ms (1.107; 1.115 and 1.102 per rep),
+    `anchored` 1.052, `crbug_regex` 1.059, `selective_symbol` 9.0 → 9.3 ms.
+  - Ready time unchanged (2.24–2.30 s both).
+  - `cold-io.sh` at 3000 IOPS, one pass per index, base then small, not interleaved
+    ([base](../bench/results/E43-small/cold-io-base.txt),
+    [small](../bench/results/E43-small/cold-io-small.txt)): geomean 0.949, `literal_long`
+    0.841, `anchored` 0.848, `llvm_regex` 1.006. Not what the rule reads, and the one pass
+    is ordered.
+- **Rejected**: two of the rule's three clauses fail. Cold 0.959 misses 0.95 (by one noisy
+  query), and `literal_long` is more than 10% slower warm in both reps: the warm cost
+  lands on the same queries as the cold win.
 
 ## Ranking experiments
 

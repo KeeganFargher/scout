@@ -1,0 +1,4 @@
+geomean speedup 4.4x | total scout 2275 ms vs rg 5502 ms | parity ALL OK
+geomean speedup 19.0x | total scout 2809 ms vs rg 24440 ms | parity ALL OK
+geomean speedup 5.3x | total scout 2082 ms vs rg 5209 ms | parity ALL OK
+geomean speedup 28.8x | total scout 2047 ms vs rg 24474 ms | parity ALL OK

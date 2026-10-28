@@ -1,0 +1,19 @@
+# --stats of the E42 build on /mnt/ebs/idx-e38-hc (warm), the 18 serve queries
+literal_ident candidates=2342 matched_files=729 
+literal_common candidates=50646 matched_files=50302 
+literal_none candidates=76 matched_files=0 
+literal_long candidates=184684 matched_files=182037 
+ident_regex candidates=22206 matched_files=4241 
+alternation candidates=49040 matched_files=44213 
+crbug_regex candidates=15573 matched_files=15301 
+case_insensitive candidates=16139 matched_files=9108 
+smart_case candidates=1603 matched_files=1425 
+word candidates=31758 matched_files=16602 
+anchored candidates=83223 matched_files=47569 
+date_regex candidates=56542 matched_files=5699 
+count_mode candidates=11735 matched_files=8574 
+files_mode candidates=22456 matched_files=22339 
+llvm_regex candidates=926 matched_files=535 
+rare_regex candidates=5781 matched_files=322 
+selective_long candidates=106 matched_files=0 
+selective_symbol candidates=374 matched_files=230 

@@ -20,6 +20,10 @@ grep-regex.workspace = true
 scout-store-fs.workspace = true
 serde_json.workspace = true
 tempfile = "3"
+# Only `dict-probe`'s dictionary arms (E43): lz4 with a dictionary (lzzzz wraps the same C
+# library as `lz4`), and zstd for its dictionary trainer.
+lzzzz = "2.0.0"
+zstd = "0.14.3"
 
 [lints]
 workspace = true
