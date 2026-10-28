@@ -1,0 +1,7 @@
+blocks=72205 raw_mib=614.8
+flex stored_mib=232.0 ratio=2.650 encode_mb_s=691 decode_ms=147.5 decode_gb_s=4.37
+fast stored_mib=231.5 ratio=2.656 encode_mb_s=641 decode_ms=151.9 decode_gb_s=4.24
+hc3 stored_mib=199.5 ratio=3.081 encode_mb_s=180 decode_ms=134.1 decode_gb_s=4.81
+hc6 stored_mib=195.3 ratio=3.148 encode_mb_s=125 decode_ms=129.8 decode_gb_s=4.97
+hc9 stored_mib=194.6 ratio=3.159 encode_mb_s=76 decode_ms=128.9 decode_gb_s=5.00
+hc12 stored_mib=193.6 ratio=3.175 encode_mb_s=27 decode_ms=126.8 decode_gb_s=5.09

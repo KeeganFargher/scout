@@ -1,0 +1,36 @@
+== files_mode: -l #include <vector>
+    57.01%  scout    scout                 [.] LZ4_decompress_safe
+     3.74%  scout    scout                 [.] <scout_index_native::NativeShard as scout_core::ports::Shard>::postings
+     2.67%  scout    scout                 [.] core::str::converts::from_utf8
+     2.26%  scout    scout                 [.] scout_core::search::intersect
+== literal_common: -F std::unique_ptr
+    62.68%  scout    scout                 [.] LZ4_decompress_safe
+    10.07%  scout    scout                 [.] memchr::arch::x86_64::avx2::packedpair::Finder::find_impl
+== literal_long: -F Use of this source code is governed by a BSD-style license
+    61.26%  scout    scout              [.] LZ4_decompress_safe
+     6.20%  scout    scout              [.] memchr::arch::x86_64::avx2::packedpair::Finder::find_prefilter_impl
+     4.75%  scout    scout              [.] <scout_index_native::NativeShard as scout_core::ports::Shard>::postings
+     3.70%  scout    scout              [.] scout_core::search::intersect
+     2.37%  scout    scout              [.] core::str::converts::from_utf8
+== case_insensitive: -i deprecated
+    55.80%  scout    scout              [.] LZ4_decompress_safe
+    15.42%  scout    scout              [.] <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<4_usize> as aho_corasick::packed::teddy::builder::SearcherT>::find
+== word: -w DCHECK
+    56.77%  scout    scout                 [.] LZ4_decompress_safe
+     7.06%  scout    scout                 [.] memchr::arch::x86_64::avx2::packedpair::Finder::find_impl
+     2.25%  scout    scout                 [.] memchr::arch::x86_64::avx2::memchr::One::find_raw_avx2
+== alternation: TODO|FIXME|HACK
+    56.34%  scout    scout                 [.] LZ4_decompress_safe
+    16.65%  scout    scout                 [.] <aho_corasick::packed::teddy::builder::x86_64::SlimAVX2<4_usize> as aho_corasick::packed::teddy::builder::SearcherT>::find
+     2.13%  scout    scout                 [.] memchr::arch::x86_64::avx2::memchr::One::find_raw_avx2
+== anchored: ^#include "base/\w+\.h"$
+    39.45%  scout    scout                 [.] regex_automata::hybrid::search::find_fwd
+    37.02%  scout    scout                 [.] LZ4_decompress_safe
+     4.67%  scout    scout                 [.] memchr::arch::x86_64::avx2::packedpair::Finder::find_impl
+     2.37%  scout    scout                 [.] memchr::arch::x86_64::avx2::memchr::One::find_raw_avx2
+== date_regex: \d{4}-\d{2}-\d{2}
+    26.28%  scout    scout                 [.] regex_automata::dfa::search::find_fwd
+    24.51%  scout    scout                 [.] LZ4_decompress_safe
+    10.94%  scout    libc.so.6             [.] 0x0000000000189087
+     5.58%  scout    scout                 [.] memchr::arch::x86_64::avx2::memchr::One::find_raw_avx2
+     3.26%  scout    scout                 [.] regex_automata::meta::limited::dfa_try_search_half_rev

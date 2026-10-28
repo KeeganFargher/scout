@@ -1,0 +1,6 @@
+-w DCHECK wall_ms=174 candidates=31758 search_ms=165.49 
+-F DCHECK wall_ms=159 candidates=31758 search_ms=149.62 
+-i deprecated wall_ms=168 candidates=16139 search_ms=153.75 
+-F deprecated wall_ms=145 candidates=16139 search_ms=140.11 
+-S webassembly wall_ms=43 candidates=1603 search_ms=31.32 
+-F webassembly wall_ms=36 candidates=1603 search_ms=25.56 

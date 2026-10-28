@@ -1,0 +1,2 @@
+base: done in 303.9s size=2864 MiB
+hc: done in 295.1s size=2580 MiB

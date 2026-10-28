@@ -7,13 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-lz4_flex.workspace = true
 lz4.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
 scout-core.workspace = true
 
 [dev-dependencies]
+# Only `codec-probe`'s baseline arm: the encoder the writer used before E38.
+lz4_flex = { version = "0.11.6", default-features = false, features = ["std", "safe-encode"] }
 grep-matcher.workspace = true
 grep-regex.workspace = true
 scout-store-fs.workspace = true

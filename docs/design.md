@@ -75,7 +75,8 @@ Each repo becomes one or more shards. A shard holds:
   (Defender, NTFS), so this is likely the biggest single win. It also makes a shard
   self-contained, which is what lets remote stores work.
 - **Content blocks** (E29): each doc's content is stored as its units' spans, each block
-  either as is or lz4-compressed (only where that is smaller), with a table of stored and
+  either as is or lz4-compressed (HC level 6, only where that is smaller: HC output is
+  smaller and decodes faster than lz4's fast mode, E38), with a table of stored and
   raw lengths. A raw index borrows content straight from the map; an lz4 index decodes a
   doc into a per-thread buffer. `scout index --content auto` (the default, also used by
   `sync`) picks lz4 once the content of every registered repo is more than half of usable

@@ -42,11 +42,13 @@
 //!
 //! Content is cut into blocks (E29), the line-aligned ~64 KiB spans posting units use, so
 //! a large file is stored as several. With [`ContentCodec::Lz4`] a block is stored lz4
-//! compressed when that makes it smaller: source code shrinks about 3x (chromium +
-//! llvm-project: 5.0 GiB to 1.6), so an index that would not fit a small server's page
+//! compressed when that makes it smaller: source code shrinks 3–4x (chromium +
+//! llvm-project: 5.0 GiB to ~1.3), so an index that would not fit a small server's page
 //! cache may, and every read that misses it moves
-//! that much less over a network volume. Reading a compressed doc costs decoding it
-//! (~3.6 GB/s per core), which an index that fits RAM uncompressed only loses to, so the
+//! that much less over a network volume. Blocks are encoded with lz4's high-compression
+//! mode, which also decodes faster than its fast mode (E38). Reading a compressed doc
+//! costs decoding it (4.6–5 GB/s per core), which an index that fits RAM uncompressed only
+//! loses to, so the
 //! codec is the writer's choice per index. A doc whose blocks are all stored as is is
 //! still one contiguous slice of the map, read without a copy.
 //!
@@ -248,6 +250,13 @@ impl NativeWriter {
     }
 }
 
+/// lz4's high-compression level for content blocks (E38). The output is plain lz4 blocks,
+/// so readers do not change, but HC finds longer matches: on chromium + llvm-project they
+/// stored 16% smaller than `lz4_flex`'s fast encoder and decoded 14% faster (4.97 against
+/// 4.37 GB/s a core), and decoding is most of a warm broad query. Encoding costs 5x (125
+/// MB/s a core); levels past 6 shrink and speed little more for much slower encodes.
+const LZ4_HC_LEVEL: i32 = 6;
+
 fn to_u32(n: usize, what: &str) -> Result<u32> {
     u32::try_from(n).map_err(|_| Error::Invalid(format!("{what} exceeds u32 range")))
 }
@@ -280,9 +289,12 @@ impl ShardWriter for NativeWriter {
             // calls on broad queries. Borrow them raw; compress larger blocks only when
             // smaller. Equal lengths are how a reader recognizes raw storage.
             let packed = match self.codec {
-                ContentCodec::Lz4 if raw.len() >= 4096 => {
-                    Some(lz4_flex::block::compress(raw)).filter(|c| c.len() < raw.len())
-                }
+                ContentCodec::Lz4 if raw.len() >= 4096 => Some(
+                    lz4::block::compress(raw, Some(lz4::block::CompressionMode::HIGHCOMPRESSION(LZ4_HC_LEVEL)), false)
+                        // Not I/O: lz4 refuses only input past its own limit.
+                        .map_err(|e| Error::Invalid(format!("lz4 cannot encode a content block: {e}")))?,
+                )
+                .filter(|c| c.len() < raw.len()),
                 _ => None,
             };
             let stored = packed.as_deref().unwrap_or(raw);

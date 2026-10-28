@@ -52,6 +52,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E32 | Format v7: blocks carry their line offset; a large candidate is read and searched only at its candidate units (vendored grep-searcher patched to start line numbers at N)                                                                                                                                                    | —                                                     | —           | **kept** (with E31 and E30's WILLNEED, vs e29: 4 GiB warm 0.915, cold 0.956, 8,714 → 7,866 MiB read cold, broad queries slower cold; 2 GiB warm 0.954, cold 0.980; outputs identical)                                                                                                                                                                                                                                      |
 | E36 | `serve` keeps every shard's dictionary (keys, values) on the heap with its filter                                                                                                                                                                                                                                            | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: cold 0.778, `selective_long` 522 → 232 ms, no-match 242 → 79; warm 0.994; startup on an evicted index +0.6 s; ~105 MiB heap, 4% of the index)                                                                                                                                                                                                                                         |
 | E37 | `serve` keeps every table (docs, blocks, paths, units, dictionary, filter) on the heap, within an eighth of memory per generation                                                                                                                                                                                            | —                                                     | —           | **B kept** (`serve` at 2 CPUs / 4 GiB vs E36: cold 0.784, faster on 18/18, `literal_none` 83 → 40 ms, `selective_long` 210 → 133; warm 0.984; startup +0.85 s; ~211 MiB heap, 8% of the index). A (content `MADV_RANDOM`) rejected: same bytes, 2x the IOs                                                                                                                                                                 |
+| E38 | Content blocks encoded with lz4 HC level 6 instead of lz4_flex's fast encoder (same block format, same reader). Probe: why not rewrite `-i`/`-w`/`-S` queries                                                                                                                                                                | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: warm 0.970, cold 0.964, index 2,864 → 2,580 MiB, build 304 → 295 s; outputs identical). Query rewrites not tried: `-w`, `-i`, `-S` cost 7–23 ms over `-F`, and the matcher beats Aho-Corasick                                                                                                                                                                                         |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1249,6 +1250,42 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   shards stay mapped depends on open order (parallel) and is covered by a unit test,
   not measured.
 - Parity gate ALL OK on raw and lz4 at 1 and 12 CPUs. **B kept**, bounded.
+
+### E38: content blocks in lz4 HC
+
+- Why: profiled warm (`perf`, CLI, 2 CPUs, v9 lz4 index cached;
+  [profiles](../bench/results/E38-ebs/probes/perf.txt)), broad queries spend most of
+  their time decoding content: `LZ4_decompress_safe` is 63% of `literal_common`, 61% of
+  `literal_long`, 57% of `files_mode` and `word`, 56% of `alternation` and
+  `case_insensitive`, 37% of `anchored` (39% DFA), 25% of `date_regex` (26% DFA). The
+  whole index's 5.4 GB decodes in 580 ms on 2 cores (`scan-cost`), ~4.6 GB/s a core, the
+  top of lz4's range, so the decoder is not the lever; what it is given is.
+- First, a probe of query rewrites (should `-w`, `-i`, `-S` literals take a byte search?),
+  CLI median of 7, the same candidates in each pair
+  ([timings](../bench/results/E38-ebs/probes/rewrites.txt)): `-w DCHECK` 174 ms against
+  `-F DCHECK` 159; `-i deprecated` 168 against 145; `-S webassembly` 43 against 36. A
+  rewrite could save at most those 7–23 ms, and over all content (a `scan-cost` mode, not
+  kept) `(?i)webassembly` added 160 ms to the 580 ms decode where Aho-Corasick
+  ASCII-insensitive added 300: the regex crate is already the faster matcher. An `-S
+  webassembly` that once looked 6x slower (209 against 32 ms) was its output: 19.8 MB,
+  lines up to 11 MB, written to a file. Not pursued.
+- `codec-probe` (new example: re-encode 615 MiB of blocks sampled across the index, one
+  core; [output](../bench/results/E38-ebs/probes/codec-probe.txt)): lz4_flex 232 MiB
+  stored, decode 4.37 GB/s, encode 691 MB/s; lz4 fast 232, 4.24, 641; HC 3 200 MiB, 4.81,
+  180; **HC 6 195 MiB, 4.97, 125**; HC 9 195 MiB, 5.00, 76; HC 12 194 MiB, 5.09, 27. HC
+  finds longer matches, so fewer, longer copies: smaller and faster to decode.
+- Change: the writer encodes blocks with `lz4::block::compress` at HC level 6 (the C
+  reference library, already the decoder); `lz4_flex` is dropped. The format and reader
+  are unchanged, so existing indexes read as before and only new blocks change.
+- `run-e38.sh`: both binaries build chromium + llvm-project `--content lz4` at 2 CPUs / 4
+  GiB: 304 → 295 s (more encoding, less to write through gp3's caps), 2,864 → 2,580 MiB.
+  Parity gate ALL OK on raw and lz4 at 1 and 12 CPUs. `serve-ab.sh` (now taking an index
+  per arm), 2 interleaved reps ([results](../bench/results/E38-ebs)): warm **0.970**,
+  faster on 11/18 in both reps (`files_mode` 0.915, `anchored` 0.939); `selective_long`
+  7.0 → 7.5 ms and `selective_symbol` 8.7 → 9.0 slower in both. Cold **0.964**, faster on
+  13/18 in both reps, bytes read down 6–18% on every query but `literal_none` (8.9 both): `llvm_regex` 154 → 121 ms,
+  `literal_long` 5.4 → 4.9 s, `date_regex` 2.7 → 2.5 s. Ready 2.27–2.55 → 2.23–2.28 s.
+- **Kept.**
 
 ## Ranking experiments
 
