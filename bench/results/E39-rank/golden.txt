@@ -1,0 +1,23 @@
+dumps of bin e38 (HEAD 5b30424) and e39 against a fresh v9 index of the golden corpus (136 repos):
+79/79 query dumps identical
+
+1558 labels, every one a file of its dump
+79 queries; cutoff 10
+
+system        nDCG@10      MRR  noise@10  judged@10
+unranked        0.451    0.422     0.339      1.000
+random          0.401    0.469     0.501      0.567
+noise           0.553    0.511     0.233      1.000
+bm25            0.630    0.698     0.223      1.000
+full            0.795    0.779     0.129      1.000
+full+dedup      0.795    0.782     0.090      1.000
+
+nDCG@10 by query class
+class                n   unranked     random      noise       bm25       full full+dedup
+alternation         16      0.346      0.310      0.393      0.767      0.836      0.832
+case-insensitive     8      0.210      0.061      0.339      0.431      0.693      0.696
+glob-scoped         10      0.539      0.473      0.608      0.647      0.783      0.770
+identifier          11      0.240      0.291      0.438      0.518      0.686      0.691
+known-item          17      0.641      0.678      0.739      0.731      0.927      0.917
+phrase               7      0.674      0.612      0.769      0.676      0.821      0.824
+structural          10      0.478      0.252      0.587      0.473      0.700      0.725

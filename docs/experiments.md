@@ -53,6 +53,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E36 | `serve` keeps every shard's dictionary (keys, values) on the heap with its filter                                                                                                                                                                                                                                            | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: cold 0.778, `selective_long` 522 → 232 ms, no-match 242 → 79; warm 0.994; startup on an evicted index +0.6 s; ~105 MiB heap, 4% of the index)                                                                                                                                                                                                                                         |
 | E37 | `serve` keeps every table (docs, blocks, paths, units, dictionary, filter) on the heap, within an eighth of memory per generation                                                                                                                                                                                            | —                                                     | —           | **B kept** (`serve` at 2 CPUs / 4 GiB vs E36: cold 0.784, faster on 18/18, `literal_none` 83 → 40 ms, `selective_long` 210 → 133; warm 0.984; startup +0.85 s; ~211 MiB heap, 8% of the index). A (content `MADV_RANDOM`) rejected: same bytes, 2x the IOs                                                                                                                                                                 |
 | E38 | Content blocks encoded with lz4 HC level 6 instead of lz4_flex's fast encoder (same block format, same reader). Probe: why not rewrite `-i`/`-w`/`-S` queries                                                                                                                                                                | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: warm 0.970, cold 0.964, index 2,864 → 2,580 MiB, build 304 → 295 s; outputs identical). Query rewrites not tried: `-w`, `-i`, `-S` cost 7–23 ms over `-F`, and the matcher beats Aho-Corasick                                                                                                                                                                                         |
+| E39 | `--rank` verifies the plain search's chunks on every thread (was one thread per repo), with the shape filter, and scores each file in one pass                                                                                                                                                                               | —                                                     | —           | **kept** (`--rank --top 20`, warm, 2 CPUs: geomean 0.609, `date_regex` 1,937 → 514 ms, `literal_long` 1,542 → 732; output identical on all 18 queries and the 79 golden queries' features)                                                                                                                                                                                                                                 |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1285,6 +1286,48 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   7.0 → 7.5 ms and `selective_symbol` 8.7 → 9.0 slower in both. Cold **0.964**, faster on
   13/18 in both reps, bytes read down 6–18% on every query but `literal_none` (8.9 both): `llvm_regex` 154 → 121 ms,
   `literal_long` 5.4 → 4.9 s, `date_regex` 2.7 → 2.5 s. Ready 2.27–2.55 → 2.23–2.28 s.
+- **Kept.**
+
+### E39: ranked search on every thread
+
+- Why: capped, ranked results are what an agent wants from a broad query, and on
+  chromium + llvm-project `--rank --top 20` cost up to 5x the plain search warm at 2 CPUs
+  (`literal_long` 1,542 against 310 ms, `date_regex` 1,937 against 399; the plain times
+  are from the separate [plain against ranked](../bench/results/E39-rank/plain-vs-rank-warm.txt)
+  run, whose plain search this change shares). `perf`: the
+  ranked pass ran a thread per repo (two repos, one of them most of the work, so one core
+  did nearly all of it), verified every doc of a query with no trigrams (it planned
+  without the shape filter: `date_regex` read all 697k docs instead of 56k), and walked
+  every newline of every matching file twice (22% of `literal_long`), plus a searcher
+  counting line numbers no one read, a lossy UTF-8 copy of each file's head, and six
+  `memmem` searchers built per file.
+- Change, the ranking untouched:
+  - Planning and chunking move into `plan_chunks`, shared with the plain search; ranking
+    verifies its chunks on every thread through `walk_part` and merges them in chunk order
+    (the old walk order), so corpus statistics, ties and errors come out the same.
+  - The shape filter applies: it drops only docs that cannot match, and the doc count
+    behind IDF is taken before it.
+  - Lines are counted in bulk, and the longest line measured only for files under 50
+    lines, the only place `classify` reads it.
+  - The ranked pass's searcher keeps no line numbers. Generated-file markers are searched
+    in the lowercased head bytes with searchers built once: ASCII bytes and their order
+    are the same as in the lossy string.
+- Workers stop claiming chunks after the first error or deadline, as the plain search's
+  do, and a chunk checks the deadline before its walk prefetches anything. Tests run the
+  ranking at 1–8 threads and several chunk sizes, requiring the same output and order, and
+  the first failing chunk's error, as the plain search's tests do.
+- Exactness: `rank-ab.sh` compares both builds' `--top 200` output byte for byte on all 18
+  queries-big queries (identical). `scout-rank-eval dump` of the 79 golden queries with
+  both builds gives identical features files, and the eval reproduces R1–R2
+  ([golden](../bench/results/E39-rank/golden.txt)). The frozen v1 index is format v2,
+  which scout no longer reads, so this ran on the same 136 repos indexed again in v9
+  (`scout-golden-v9`, bench/golden/README.md). Parity gate ALL OK.
+- `rank-ab.sh`, warm, 2 CPUs, 7 interleaved runs, median
+  ([results](../bench/results/E39-rank/top20-warm.txt)): geomean **0.609**, faster on 17
+  of 18 (`literal_none` 14 = 14; `selective_long` and `selective_symbol` 0.92): `date_regex`
+  1,937 → 514 ms, `crbug_regex` 397 → 173, `literal_long` 1,542 → 732, `literal_common`
+  696 → 333, `word` 581 → 310. Ranked now costs 0.95–2.4x the plain search (`plain-vs-rank.sh`), not up to 5x
+  ([plain against ranked](../bench/results/E39-rank/plain-vs-rank-warm.txt)).
 - **Kept.**
 
 ## Ranking experiments

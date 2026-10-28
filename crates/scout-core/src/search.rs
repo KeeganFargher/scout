@@ -143,15 +143,15 @@ pub struct SearchReport {
 /// past the third sat idle behind it (E16). 4 MiB splits the largest shards (~90 MiB) many
 /// ways while the per-chunk costs (a printer buffer, a channel message, a reorder entry)
 /// stay noise against verifying 4 MiB.
-const CHUNK_BYTES: u64 = 4 << 20;
+pub(crate) const CHUNK_BYTES: u64 = 4 << 20;
 
 /// One unit of verification work: a run of one shard's candidates, or a repo's changed files.
-struct Chunk {
-    repo: usize,
-    part: Part,
+pub(crate) struct Chunk {
+    pub(crate) repo: usize,
+    pub(crate) part: Part,
 }
 
-enum Part {
+pub(crate) enum Part {
     Docs { shard: usize, range: std::ops::Range<usize> },
     Dirty,
 }
@@ -196,29 +196,8 @@ fn search_chunked(
     let literal = if opts.case == CaseMode::Sensitive && !opts.word { analysis.literal } else { None };
     let matcher = build_matcher(&pattern, opts)?;
     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
-    // One thread verifies chunks in order whatever their size, so finding boundaries (a
-    // size lookup per candidate) would be pure cost; 1-CPU servers are the target.
-    let chunk_bytes = if opts.threads == 1 { u64::MAX } else { chunk_bytes };
-
-    // Phase 1, in parallel over repos: freshness overlay, candidates, and their chunks.
-    // Cheap next to verifying (postings, plus the listing in strict mode), and the chunk
-    // boundaries need every candidate's size, so it is done here rather than serially.
-    let planned = parallel_indexed(opts.threads, repos.len(), |i| {
-        let repo = repos[i];
-        let mut s = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
-        let plan = plan_repo(repo, &query, analysis.shape.as_ref(), opts, &mut s).map_err(|e| in_repo(repo, e))?;
-        let chunks = chunk_repo(repo, &plan, chunk_bytes).map_err(|e| in_repo(repo, e))?;
-        Ok((plan, s, chunks))
-    })?;
-    let mut plans = Vec::with_capacity(repos.len());
-    let mut chunks = Vec::new();
-    let mut snapshots = Vec::new();
-    for (i, (mut plan, s, parts)) in planned.into_iter().enumerate() {
-        stats.merge(&s);
-        snapshots.extend(plan.snapshot.take().map(|b| (i, b)));
-        chunks.extend(parts.into_iter().map(|part| Chunk { repo: i, part }));
-        plans.push(plan);
-    }
+    let Planned { plans, chunks, snapshots } =
+        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), chunk_bytes, &mut stats)?;
 
     // Phase 2: verify chunks on every thread; a reorder buffer prints chunk k only after
     // 0..k, so output is the same as verifying everything in order on one thread.
@@ -244,6 +223,44 @@ fn search_chunked(
     }
     stats.elapsed = started.elapsed();
     Ok(SearchReport { stats, snapshots })
+}
+
+/// Every repo's plan and its candidates cut into chunks, in verification order.
+pub(crate) struct Planned {
+    pub(crate) plans: Vec<RepoPlan>,
+    pub(crate) chunks: Vec<Chunk>,
+    pub(crate) snapshots: Vec<(usize, Vec<u8>)>,
+}
+
+/// Phase 1 of a search, in parallel over repos: freshness overlay, candidates, and their
+/// chunks. Cheap next to verifying (postings, plus the listing in strict mode), and the
+/// chunk boundaries need every candidate's size, so it is done here rather than serially.
+pub(crate) fn plan_chunks(
+    opts: &SearchOptions,
+    repos: &[&RepoHandle],
+    query: &Query,
+    shape: Option<&crate::shape::ShapeQuery>,
+    chunk_bytes: u64,
+    stats: &mut SearchStats,
+) -> Result<Planned> {
+    // One thread verifies chunks in order whatever their size, so finding boundaries (a
+    // size lookup per candidate) would be pure cost; 1-CPU servers are the target.
+    let chunk_bytes = if opts.threads == 1 { u64::MAX } else { chunk_bytes };
+    let planned = parallel_indexed(opts.threads, repos.len(), |i| {
+        let repo = repos[i];
+        let mut s = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
+        let plan = plan_repo(repo, query, shape, opts, &mut s).map_err(|e| in_repo(repo, e))?;
+        let chunks = chunk_repo(repo, &plan, chunk_bytes).map_err(|e| in_repo(repo, e))?;
+        Ok((plan, s, chunks))
+    })?;
+    let mut out = Planned { plans: Vec::with_capacity(repos.len()), chunks: Vec::new(), snapshots: Vec::new() };
+    for (i, (mut plan, s, parts)) in planned.into_iter().enumerate() {
+        stats.merge(&s);
+        out.snapshots.extend(plan.snapshot.take().map(|b| (i, b)));
+        out.chunks.extend(parts.into_iter().map(|part| Chunk { repo: i, part }));
+        out.plans.push(plan);
+    }
+    Ok(out)
 }
 
 /// Phase 2 of a search: the planned chunks and what verifying one needs.
@@ -1089,26 +1106,32 @@ where
     Ok(())
 }
 
-/// Visits every document of `repo` the search must verify, in the same order as the
-/// chunked search prints them, on the calling thread. Returns the snapshot the source wants
-/// stored. The ranked search uses it, so both verify the same documents.
-pub(crate) fn walk_repo(
+/// Visits one chunk of `repo`'s planned documents, in order and whole, on the calling
+/// thread: the chunks of [`plan_chunks`] together visit what the plain search verifies,
+/// and ranking scores whole docs. Ranking spreads its chunks over threads as the plain
+/// search does (E39).
+pub(crate) fn walk_part(
     repo: &RepoHandle,
-    query: &Query,
-    opts: &SearchOptions,
+    plan: &RepoPlan,
+    part: &Part,
     stats: &mut SearchStats,
     mut visit: impl FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
-) -> Result<Option<Vec<u8>>> {
-    let mut plan = plan_repo(repo, query, None, opts, stats)?;
-    for (si, cands) in plan.candidates.iter().enumerate() {
-        // Ranking scores whole docs.
-        visit_docs(repo, si, cands, 0..cands.docs.len(), Reading::Whole, stats, &mut |loc, rel, indexed, buf| {
-            let content = indexed.shard.content(indexed.want.doc, buf)?;
-            visit(loc, rel, Doc { path: indexed.path, content, mode: indexed.mode, first_line: 1 })
-        })?;
+) -> Result<()> {
+    match part {
+        Part::Docs { shard, range } => visit_docs(
+            repo,
+            *shard,
+            &plan.candidates[*shard],
+            range.clone(),
+            Reading::Whole,
+            stats,
+            &mut |loc, rel, indexed, buf| {
+                let content = indexed.shard.content(indexed.want.doc, buf)?;
+                visit(loc, rel, Doc { path: indexed.path, content, mode: indexed.mode, first_line: 1 })
+            },
+        ),
+        Part::Dirty => visit_dirty(repo, plan, stats, &mut visit),
     }
-    visit_dirty(repo, &plan, stats, &mut visit)?;
-    Ok(plan.snapshot.take())
 }
 
 fn search_chunk(
@@ -1524,6 +1547,61 @@ mod tests {
     }
 
     #[test]
+    fn ranking_does_not_depend_on_chunking_or_threads() {
+        // As the plain search's test below: docs of varied sizes, some without a match, so
+        // chunk boundaries land everywhere, and identical copies, so copies collapse. One
+        // thread plans a single chunk per shard whatever the size, so only the multi-thread
+        // runs vary the chunking; this catches a chunk lost or verified twice.
+        let repos: Vec<RepoHandle> = (0..3)
+            .map(|r| RepoHandle {
+                name: format!("r{r}"),
+                source: Box::new(MemSource(format!("/r{r}"))),
+                shards: (0..2)
+                    .map(|s| {
+                        let docs = (0..7)
+                            .map(|d| {
+                                let body = format!("needle {r}.{s}.{d}\n").repeat(d * 3)
+                                    + &"fn haystack() {}\n".repeat((r + s + d) % 3);
+                                (format!("s{s}/d{d}.txt"), body.into_bytes())
+                            })
+                            .collect();
+                        Box::new(MemShard(docs)) as Box<dyn Shard>
+                    })
+                    .collect(),
+                snapshot: None,
+                listing_digest: None,
+            })
+            .collect();
+        let handles: Vec<&RepoHandle> = repos.iter().collect();
+        let run = |threads: usize, chunk: u64| {
+            let opts = SearchOptions {
+                pattern: "needle|haystack".into(),
+                fixed_strings: false,
+                case: CaseMode::Sensitive,
+                word: false,
+                line_number: true,
+                output: OutputMode::Lines,
+                max_count: None,
+                threads,
+                freshness: Freshness::Off,
+                limits: Limits::default(),
+            };
+            let rank = crate::ranked::RankOptions { top: 10, weights: crate::rank::Weights::default() };
+            let mut out = Vec::new();
+            let report = crate::ranked::search_ranked_chunked(&opts, &rank, &handles, &mut out, chunk).unwrap();
+            let order: Vec<String> = report.files.iter().map(|f| f.path.clone()).collect();
+            (String::from_utf8(out).unwrap(), order)
+        };
+        let expected = run(1, u64::MAX);
+        assert!(expected.1.len() > 20, "{expected:?}");
+        for threads in [1, 2, 3, 8] {
+            for chunk in [1, 40, 1 << 10, u64::MAX] {
+                assert_eq!(run(threads, chunk), expected, "{threads} threads, {chunk}-byte chunks");
+            }
+        }
+    }
+
+    #[test]
     fn output_does_not_depend_on_chunking_or_threads() {
         // Three repos of two shards; docs of varied sizes so chunk boundaries land
         // everywhere, some without a match.
@@ -1636,6 +1714,10 @@ mod tests {
             };
             let err = search_chunked(&opts, &[&repo], &mut Vec::new(), chunk).unwrap_err();
             assert!(err.to_string().contains("fail-early"), "{threads} threads, {chunk}-byte chunks: {err}");
+            // The ranked pass claims the same chunks and stops claiming after an error.
+            let rank = crate::ranked::RankOptions { top: 10, weights: crate::rank::Weights::default() };
+            let err = crate::ranked::search_ranked_chunked(&opts, &rank, &[&repo], &mut Vec::new(), chunk).unwrap_err();
+            assert!(err.to_string().contains("fail-early"), "ranked, {threads} threads, {chunk}-byte chunks: {err}");
         }
     }
 

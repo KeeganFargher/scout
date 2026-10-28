@@ -16,7 +16,10 @@ measured on the golden set and logged in [experiments.md](experiments.md).
   (lines in line order, or the path for `-l`, or `path:count` for `-c`). `--top N`
   (default 20) bounds the files shown, so ranked output also stays small for agents.
 - **Cost.** Ranking needs every match before printing the first file, so it gives up
-  streaming. It is benchmarked like any other mode.
+  streaming. It verifies the plain search's chunks on every thread, with its candidates
+  (shape filter included), and scores each matching file in one pass (E39): on chromium +
+  llvm-project at 2 CPUs, `--top 20` costs 0.95–2.4x the plain search warm. It is
+  benchmarked like any other mode.
 - **Server.** `rank=1&top=N` on `/search`.
 
 ## What a query is made of

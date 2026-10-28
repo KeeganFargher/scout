@@ -1,0 +1,20 @@
+query identical a_ms b_ms b/a
+literal_ident yes 129 94 0.729
+literal_common yes 696 333 0.478
+literal_none yes 14 14 1.000
+literal_long yes 1542 732 0.475
+ident_regex yes 347 229 0.660
+alternation yes 897 538 0.600
+crbug_regex yes 397 173 0.436
+case_insensitive yes 464 310 0.668
+smart_case yes 136 97 0.713
+word yes 581 310 0.534
+anchored yes 783 470 0.600
+date_regex yes 1937 514 0.265
+count_mode yes 348 195 0.560
+files_mode yes 339 175 0.516
+llvm_regex yes 80 50 0.625
+rare_regex yes 182 139 0.764
+selective_long yes 37 34 0.919
+selective_symbol yes 47 43 0.915
+geomean b/a 0.609 over 18 queries

@@ -3,7 +3,7 @@
 //! only their order, and how many are shown, differ.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -11,11 +11,11 @@ use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
 use grep_searcher::{Searcher, Sink, SinkMatch};
 
-use crate::query::{PlanCase, plan};
+use crate::query::{PlanCase, analyze};
 use crate::rank::{self, Corpus, FileFeatures, HEAD_BYTES, TermHits, Weights};
 use crate::search::{
-    CaseMode, Doc, Loc, Mode, Printer, RepoHandle, SearchOptions, SearchStats, build_matcher, build_searcher,
-    check_deadline, in_repo, walk_repo,
+    CHUNK_BYTES, CaseMode, Chunk, Doc, Loc, Mode, Planned, Printer, RepoHandle, RepoPlan, SearchOptions, SearchStats,
+    build_matcher, build_searcher, check_deadline, in_repo, plan_chunks, walk_part,
 };
 use crate::{Error, Result};
 
@@ -52,8 +52,6 @@ enum OwnedLoc {
     Dirty(String),
 }
 
-type RepoFound = (Vec<Found>, SearchStats, Option<Vec<u8>>);
-
 /// # Panics
 ///
 /// Only by re-raising a worker thread's panic.
@@ -63,6 +61,18 @@ pub fn search_ranked(
     repos: &[&RepoHandle],
     out: &mut dyn Write,
 ) -> Result<RankedReport> {
+    search_ranked_chunked(opts, rank, repos, out, CHUNK_BYTES)
+}
+
+/// [`search_ranked`] with the chunk size as a parameter, so a test can prove the ranking
+/// does not depend on it.
+pub(crate) fn search_ranked_chunked(
+    opts: &SearchOptions,
+    rank: &RankOptions,
+    repos: &[&RepoHandle],
+    out: &mut dyn Write,
+    chunk_bytes: u64,
+) -> Result<RankedReport> {
     let started = Instant::now();
     if opts.threads == 0 {
         return Err(Error::Invalid("threads must be > 0".into()));
@@ -70,54 +80,26 @@ pub fn search_ranked(
     if rank.top == 0 {
         return Err(Error::Invalid("top must be > 0".into()));
     }
+    if chunk_bytes == 0 {
+        return Err(Error::Invalid("chunk_bytes must be > 0".into()));
+    }
     let pattern = if opts.fixed_strings { regex_syntax::escape(&opts.pattern) } else { opts.pattern.clone() };
     let plan_case = if opts.case == CaseMode::Sensitive { PlanCase::Sensitive } else { PlanCase::Insensitive };
-    let query = plan(&pattern, plan_case)?;
+    let analysis = analyze(&pattern, plan_case)?;
+    let query = analysis.query;
     let matcher = build_matcher(&pattern, opts)?;
     let terms = split_terms(&pattern, opts.fixed_strings)?;
     let term_opts = SearchOptions { case: resolved_case(opts.case, &pattern), ..opts.clone() };
     let term_matchers = terms.iter().map(|t| build_matcher(t, &term_opts)).collect::<Result<Vec<_>>>()?;
 
-    // Phase 1: verify and collect features, in parallel over repos like the plain search.
-    let next = AtomicUsize::new(0);
-    let workers = opts.threads.min(repos.len()).max(1);
-    let (tx, rx) = mpsc::channel::<(usize, Result<RepoFound>)>();
+    // Phase 1: plan as the plain search does, shape filter included (it drops only docs
+    // that cannot match, and `docs` is counted before it, so scores do not change), then
+    // verify and collect features chunk by chunk on every thread (E39). By repo, one
+    // large repo kept a single core busy while the others idled.
     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
-    let mut snapshots = Vec::new();
-    let mut found = Vec::new();
-    std::thread::scope(|scope| -> Result<()> {
-        for _ in 0..workers {
-            let tx = tx.clone();
-            let (next, query, matcher, term_matchers) = (&next, &query, matcher.clone(), &term_matchers);
-            scope.spawn(move || {
-                let mut searcher = build_searcher(opts);
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(repo) = repos.get(i) else { break };
-                    let r = collect_repo(i, repo, query, &matcher, term_matchers, &mut searcher, opts);
-                    if tx.send((i, r)).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        drop(tx);
-        // Consumed in repo order, so the error reported is the first repo's, not the first
-        // to arrive: a failure reads the same whatever the scheduling.
-        let mut slots: Vec<Option<Result<RepoFound>>> = (0..repos.len()).map(|_| None).collect();
-        for (i, r) in rx {
-            slots[i] = Some(r);
-        }
-        for (i, r) in slots.into_iter().enumerate() {
-            // Every repo was claimed and sent unless a worker panicked, which `scope`
-            // re-raises.
-            let (f, s, snapshot) = r.expect("every repo has a result").map_err(|e| in_repo(repos[i], e))?;
-            stats.merge(&s);
-            snapshots.extend(snapshot.map(|b| (i, b)));
-            found.extend(f);
-        }
-        Ok(())
-    })?;
+    let Planned { plans, chunks, snapshots } =
+        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), chunk_bytes, &mut stats)?;
+    let found = collect(opts, repos, &plans, &chunks, &matcher, &term_matchers, &mut stats)?;
 
     // Score and order. Ties break on path, so the order never depends on thread timing.
     let features: Vec<FileFeatures> = found.iter().map(|f| f.features.clone()).collect();
@@ -160,21 +142,93 @@ pub fn search_ranked(
     Ok(RankedReport { stats, snapshots, terms, corpus, files })
 }
 
-fn collect_repo(
-    index: usize,
+/// One chunk's matching files and its stats.
+type ChunkFound = (Vec<Found>, SearchStats);
+
+/// Every matching file's features, in chunk order (the plain search's walk order). The
+/// ranking itself does not depend on that order (ties break on the unique path, and the
+/// corpus statistics are sums); the order makes the reported error the first failing
+/// chunk's, as a one-thread search would report.
+fn collect(
+    opts: &SearchOptions,
+    repos: &[&RepoHandle],
+    plans: &[RepoPlan],
+    chunks: &[Chunk],
+    matcher: &RegexMatcher,
+    term_matchers: &[RegexMatcher],
+    stats: &mut SearchStats,
+) -> Result<Vec<Found>> {
+    let next = AtomicUsize::new(0);
+    // Set on the first error (a deadline included): no point claiming more chunks, each of
+    // which would prefetch and decode its first doc before its own check failed.
+    let stop = AtomicBool::new(false);
+    let workers = opts.threads.min(chunks.len()).max(1);
+    let (tx, rx) = mpsc::channel::<(usize, Result<ChunkFound>)>();
+    let mut slots: Vec<Option<Result<ChunkFound>>> = (0..chunks.len()).map(|_| None).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let (next, stop) = (&next, &stop);
+            // Each worker owns its matchers, as the plain search's do: a shared regex
+            // contends on its cache pool.
+            let (matcher, term_matchers) = (matcher.clone(), term_matchers.to_vec());
+            scope.spawn(move || {
+                // Without line numbers: the term sink never reads them, and counting them
+                // walks every line of every candidate (E39). Printing the top files
+                // afterwards uses the caller's options.
+                let mut searcher = build_searcher(&SearchOptions { line_number: false, ..opts.clone() });
+                while !stop.load(Ordering::Relaxed) {
+                    let k = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(chunk) = chunks.get(k) else { break };
+                    let repo = repos[chunk.repo];
+                    let r =
+                        collect_chunk(chunk, repo, &plans[chunk.repo], &matcher, &term_matchers, &mut searcher, opts)
+                            .map_err(|e| in_repo(repo, e));
+                    if r.is_err() {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    if tx.send((k, r)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for (k, r) in rx {
+            slots[k] = Some(r);
+        }
+    });
+    let mut found = Vec::new();
+    // Consumed in chunk order, so the error reported is the first chunk's, not the first
+    // to arrive: a failure reads the same whatever the scheduling.
+    for r in slots {
+        // Chunks are claimed in order and finished once claimed, and claiming stops only
+        // after an error: every chunk before the first unclaimed one has a result, and one
+        // of them is that error. A panic is re-raised by `scope` before this.
+        let (f, s) = r.expect("an error precedes every unclaimed chunk")?;
+        stats.merge(&s);
+        found.extend(f);
+    }
+    Ok(found)
+}
+
+fn collect_chunk(
+    chunk: &Chunk,
     repo: &RepoHandle,
-    query: &crate::query::Query,
+    plan: &RepoPlan,
     matcher: &RegexMatcher,
     term_matchers: &[RegexMatcher],
     searcher: &mut Searcher,
     opts: &SearchOptions,
-) -> Result<RepoFound> {
-    let mut stats = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
+) -> Result<ChunkFound> {
+    // Before the walk, which prefetches the chunk's first reads.
+    check_deadline(opts)?;
+    let mut stats = SearchStats::default();
     let mut found = Vec::new();
     // Verification runs inside the walk's callback here (no separate phase as in the plain
     // search), so `--stats` verify time is the callback's time.
     let mut verify = std::time::Duration::ZERO;
-    let snapshot = walk_repo(repo, query, opts, &mut stats, |loc, rel, doc| {
+    walk_part(repo, plan, &chunk.part, &mut stats, |loc, rel, doc| {
         check_deadline(opts)?;
         let t = std::time::Instant::now();
         let features = features(searcher, matcher, term_matchers, rel, doc);
@@ -186,11 +240,11 @@ fn collect_repo(
             Loc::Indexed { shard, doc, mode } => OwnedLoc::Indexed { shard, doc, mode },
             Loc::Dirty(rel) => OwnedLoc::Dirty(rel.to_string()),
         };
-        found.push(Found { features, repo: index, loc });
+        found.push(Found { features, repo: chunk.repo, loc });
         Ok(true)
     })?;
     stats.verify_time = verify;
-    Ok((found, stats, snapshot))
+    Ok((found, stats))
 }
 
 /// The features of `doc`, or `None` when it does not match. Matching runs through the same
@@ -221,13 +275,15 @@ fn features(
         h.path = !dirs.is_empty() && is_match(m, dirs.as_bytes())?;
     }
     let content = doc.content;
+    // A broad query ranks hundreds of thousands of files, and walking every newline was a
+    // fifth of its time (E39): count them in bulk, and measure the longest line only where
+    // `classify` reads it, a file of fewer than `BLOB_MAX_LINES` lines.
     let lines = memchr::memchr_iter(b'\n', content).count() as u64 + 1;
-    let mut longest = 0usize;
-    let mut start = 0usize;
-    for nl in memchr::memchr_iter(b'\n', content).chain(std::iter::once(content.len())) {
-        longest = longest.max(nl - start);
-        start = nl + 1;
-    }
+    let longest = if lines < rank::BLOB_MAX_LINES {
+        content.split(|&b| b == b'\n').map(<[u8]>::len).max().expect("split yields at least one slice")
+    } else {
+        0
+    };
     let head = &content[..content.len().min(HEAD_BYTES)];
     Ok(Some(FileFeatures {
         path: doc.path.to_string(),
