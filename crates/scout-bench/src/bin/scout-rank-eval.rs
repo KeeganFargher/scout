@@ -13,6 +13,9 @@
 //!   reported on the held-out project.
 //! - `crossval`: `tune` with each project held out in turn; the decision number for
 //!   whether tuned weights beat the defaults.
+//! - `cap`: whether `--rank --top N` could stop early: nDCG@10 when only the first matches
+//!   in a path-only prior order are ranked, and how many an exact early stop would verify.
+//! - `visits`: that exact early stop on any `--rank-features` dump, unlabelled (E40).
 //!
 //! Known-item targets (queries.tsv column 7) are the answer by construction: they and their
 //! identical copies are graded 3 without a label, and a target missing from its dump is an
@@ -95,6 +98,22 @@ enum Cmd {
     Crossval {
         #[arg(long, default_value = "bench/golden/labels.tsv")]
         labels: PathBuf,
+    },
+    /// Simulate a capped `--rank --top N`: rank only the first matches in a path-only prior
+    /// order, and report what that costs in nDCG@10.
+    Cap {
+        #[arg(long, default_value = "bench/golden/labels.tsv")]
+        labels: PathBuf,
+        /// The indexed repo roots, one per line: paths are classified relative to them.
+        #[arg(long)]
+        roots: PathBuf,
+    },
+    /// The exact early stop of `cap` on unlabelled dumps (any `--rank-features` file), to
+    /// measure it on corpora the golden set does not cover.
+    Visits {
+        #[arg(long)]
+        roots: PathBuf,
+        dumps: Vec<PathBuf>,
     },
 }
 
@@ -671,6 +690,311 @@ fn ascend(train: &[&Scored], log: &mut impl Write) -> anyhow::Result<(Weights, f
     Ok((best, start, best_score))
 }
 
+/// Queries with more matched files than this are the ones a cap could speed up; the rest
+/// would rank every match under any useful cap.
+const BROAD: usize = 200;
+/// The caps simulated: how many matches a capped search would score.
+const CAPS: [usize; 6] = [20, 50, 100, 200, 500, 1000];
+
+/// The noise class a search knows from the path and size alone, before decoding: the
+/// content tests (generated headers, long lines) see nothing. The size counts as known: the
+/// doc table holds it.
+fn path_noise(rel: &str, bytes: u64) -> rank::Noise {
+    rank::classify(rel, b"", bytes, u64::MAX, 0)
+}
+
+/// `path` relative to the longest root it lies under (a whole path segment, not a name
+/// prefix), `/`-separated, as `classify` takes it.
+fn relative(path: &str, roots: &[String]) -> anyhow::Result<String> {
+    let root = roots
+        .iter()
+        .filter(|r| path.strip_prefix(r.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\'])))
+        .max_by_key(|r| r.len())
+        .with_context(|| format!("{path} is under no root"))?;
+    Ok(path[root.len()..].replace('\\', "/").trim_start_matches('/').to_string())
+}
+
+/// What a search knows of a file before decoding it: its path-only noise multiplier and
+/// its per-term path and basename bonuses.
+struct Prior {
+    multiplier: f64,
+    structure: Vec<f64>,
+}
+
+fn prior(f: &FileFeatures, rel: &str, w: &Weights) -> Prior {
+    let structure =
+        f.terms.iter().map(|t| if t.basename { w.w_base } else { 0.0 } + if t.path { w.w_path } else { 0.0 }).collect();
+    Prior { multiplier: w.multiplier(path_noise(rel, f.bytes)), structure }
+}
+
+/// The priors of every file of `d`, with paths taken relative to `roots`.
+fn priors(d: &Dump, roots: &[String], w: &Weights) -> anyhow::Result<Vec<Prior>> {
+    d.files.iter().map(|f| Ok(prior(f, &relative(&f.path, roots)?, w))).collect()
+}
+
+/// An upper bound on each file's score from its prior. Content saturates below k1 + 1 and a
+/// definition adds `w_def`; neither is knowable from the path, so both count at their
+/// maximum. The path-only noise class has a subset of the real class's marks, and the class
+/// is the worst mark, so the path-only multiplier bounds the real one only while the
+/// multipliers do not rise with severity: checked here, not assumed.
+fn bounds(d: &Dump, priors: &[Prior], w: &Weights) -> anyhow::Result<Vec<f64>> {
+    let severities = [
+        rank::Noise::None,
+        rank::Noise::Tests,
+        rank::Noise::Fixtures,
+        rank::Noise::Build,
+        rank::Noise::Vendored,
+        rank::Noise::Generated,
+        rank::Noise::Lockfile,
+        rank::Noise::Minified,
+        rank::Noise::Huge,
+    ];
+    ensure!(
+        severities.windows(2).all(|p| w.multiplier(p[1]) <= w.multiplier(p[0])),
+        "noise multipliers rise with severity: a path-only multiplier would not bound the real one"
+    );
+    let docs = d.corpus.docs as f64;
+    let idf: Vec<f64> =
+        d.corpus.df.iter().map(|&df| (1.0 + (docs - df as f64 + 0.5) / (df as f64 + 0.5)).ln()).collect();
+    let ceiling = w.k1 + 1.0 + w.w_def;
+    Ok(priors
+        .iter()
+        .map(|p| p.multiplier * p.structure.iter().zip(&idf).map(|(s, i)| i * (ceiling + s)).sum::<f64>())
+        .collect())
+}
+
+/// File indices by descending `key`, then path.
+fn order_by(d: &Dump, key: &[f64]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..d.files.len()).collect();
+    idx.sort_by(|&a, &b| key[b].total_cmp(&key[a]).then_with(|| d.files[a].path.cmp(&d.files[b].path)));
+    idx
+}
+
+/// The order a capped search could verify files in, from the prior alone: path-only
+/// multiplier, then path and basename bonus, then path. On a broad query most files tie
+/// on both, so this is close to path order: the score bound, which weighs each term by
+/// its IDF, is the other prior simulated.
+fn prior_order(d: &Dump, priors: &[Prior]) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..d.files.len()).collect();
+    let key = |i: usize| (priors[i].multiplier, priors[i].structure.iter().sum::<f64>());
+    idx.sort_by(|&a, &b| {
+        let (ka, kb) = (key(a), key(b));
+        kb.0.total_cmp(&ka.0).then(kb.1.total_cmp(&ka.1)).then_with(|| d.files[a].path.cmp(&d.files[b].path))
+    });
+    idx
+}
+
+/// The first `cap` files of `by`, ranked with their own statistics (what a capped search
+/// counts) or the true ones, and copies collapsed, as indices into `d.files`.
+fn capped(d: &Dump, by: &[usize], cap: usize, own_stats: bool) -> Vec<usize> {
+    let kept = &by[..cap.min(by.len())];
+    let files: Vec<FileFeatures> = kept.iter().map(|&i| d.files[i].clone()).collect();
+    let corpus = if own_stats { Corpus::of(&files, d.corpus.df.len(), d.corpus.docs) } else { d.corpus.clone() };
+    rank::collapse_copies(&files, rank::order(&files, &corpus, &Weights::default()))
+        .into_iter()
+        .map(|k| kept[k])
+        .collect()
+}
+
+/// How many matched files (and bytes) an exact top-`CUTOFF` must verify when it visits
+/// them in descending order of their score bound, and stops once the `CUTOFF`-th distinct
+/// copy scores strictly above the next bound. Non-matching candidates cost too and are not
+/// counted, so this is a floor on the work. A score above its bound is an error: it means
+/// the roots or the weights broke the bound, and every count after it would be wrong.
+fn exact_visits(dump: &Dump, priors: &[Prior]) -> anyhow::Result<(usize, u64)> {
+    let weights = Weights::default();
+    let bounds = bounds(dump, priors, &weights)?;
+    let by_bound = order_by(dump, &bounds);
+    // The best `CUTOFF` distinct copies so far, as (score, hash). A copy's best score only
+    // rises, and one evicted is reconsidered whenever another copy of it is scored, so a
+    // list of `CUTOFF` keeps this linear in the files (the dumps of a broad chromium
+    // query hold 180k).
+    let mut top: Vec<(f64, u64)> = Vec::with_capacity(CUTOFF + 1);
+    let mut bytes = 0u64;
+    for (visited, &i) in by_bound.iter().enumerate() {
+        let file = &dump.files[i];
+        ensure!(
+            priors[i].multiplier >= weights.multiplier(file.noise),
+            "{}: path-only multiplier {} below the real one: wrong --roots?",
+            file.path,
+            priors[i].multiplier
+        );
+        let score = rank::score(file, &dump.corpus, &weights);
+        ensure!(score <= bounds[i] * (1.0 + 1e-12), "{}: score {score} above its bound {}", file.path, bounds[i]);
+        bytes += file.bytes;
+        match top.iter_mut().find(|(_, hash)| *hash == file.content_hash) {
+            Some(best) => best.0 = best.0.max(score),
+            None => top.push((score, file.content_hash)),
+        }
+        top.sort_by(|a, b| b.0.total_cmp(&a.0));
+        top.truncate(CUTOFF);
+        let Some(&next) = by_bound.get(visited + 1).map(|&j| &bounds[j]) else { return Ok((visited + 1, bytes)) };
+        if top.len() == CUTOFF && top[CUTOFF - 1].0 > next {
+            return Ok((visited + 1, bytes));
+        }
+    }
+    Ok((dump.files.len(), bytes))
+}
+
+/// The offline answer to "can `--rank --top N` stop early": per cap and verification order,
+/// nDCG@10 of ranking only the first `cap` matches, against ranking every match; the
+/// sensitivity of the ranking to the corpus statistics a capped search cannot count; and
+/// how much an exact early stop at N = `CUTOFF` would verify.
+fn cmd_cap(scored: &[Scored], roots: &[String], out: &mut impl Write) -> anyhow::Result<()> {
+    let w = Weights::default();
+    let mut rows: Vec<(String, Vec<f64>)> = Vec::new();
+    let full = |s: &Scored| {
+        metrics(&s.dump, &order(System::FullDedup, &s.query.id, &s.dump, None).expect("built-in"), &s.grades).ndcg
+    };
+    rows.push(("full+dedup (every match)".into(), scored.iter().map(full).collect()));
+    let mut prepared = Vec::new();
+    for s in scored {
+        let p = priors(&s.dump, roots, &w)?;
+        let orders =
+            [("path prior", prior_order(&s.dump, &p)), ("score bound", order_by(&s.dump, &bounds(&s.dump, &p, &w)?))];
+        prepared.push((p, orders));
+    }
+    let mut lost_targets: Vec<(String, Vec<String>)> = Vec::new();
+    for o in 0..2 {
+        let name = prepared.first().map_or("", |p| p.1[o].0);
+        for cap in CAPS {
+            for (label, own) in [("own stats", true), ("true stats", false)] {
+                let v = scored
+                    .iter()
+                    .zip(&prepared)
+                    .map(|(s, (_, orders))| metrics(&s.dump, &capped(&s.dump, &orders[o].1, cap, own), &s.grades).ndcg)
+                    .collect();
+                rows.push((format!("{name}, cap {cap}, {label}"), v));
+            }
+            // A target counts as kept when it or an identical copy is: grades give copies 3.
+            let lost = scored
+                .iter()
+                .zip(&prepared)
+                .filter_map(|(s, (_, orders))| {
+                    let target = s.query.target.as_ref()?;
+                    let hash = s.dump.files.iter().find(|f| &f.path == target)?.content_hash;
+                    let kept = &orders[o].1[..cap.min(s.dump.files.len())];
+                    (!kept.iter().any(|&i| s.dump.files[i].content_hash == hash)).then(|| s.query.id.clone())
+                })
+                .collect();
+            lost_targets.push((format!("{name}, cap {cap}"), lost));
+        }
+    }
+    rows.extend(estimated_stats(scored, &w));
+    let broad: Vec<usize> = (0..scored.len()).filter(|&i| scored[i].dump.files.len() > BROAD).collect();
+    writeln!(out, "{} queries, {} broad (more than {BROAD} matched files); nDCG@10\n", scored.len(), broad.len())?;
+    writeln!(out, "{:<40} {:>7} {:>7}  broad vs every match", "system", "all", "broad")?;
+    let base: Vec<f64> = broad.iter().map(|&i| rows[0].1[i]).collect();
+    for (name, v) in &rows {
+        let b: Vec<f64> = broad.iter().map(|&i| v[i]).collect();
+        writeln!(
+            out,
+            "{name:<40} {:>7.3} {:>7.3}  {:+.3}, {}",
+            mean(v.iter().copied()),
+            mean(b.iter().copied()),
+            mean(b.iter().copied()) - mean(base.iter().copied()),
+            show_p(permutation_p(&base, &b)),
+        )?;
+    }
+    writeln!(out, "\nknown-item targets (or a copy) outside the first `cap`")?;
+    for (name, lost) in &lost_targets {
+        writeln!(out, "{name:<24}: {} {lost:?}", lost.len())?;
+    }
+    writeln!(
+        out,
+        "\nexact early stop at N = {CUTOFF} (true stats, path-only score bounds): matched files verified, broad queries"
+    )?;
+    let (mut seen, mut total, mut noisy, mut files) = (0usize, 0usize, 0usize, 0usize);
+    for &i in &broad {
+        let (s, (priors, _)) = (&scored[i], &prepared[i]);
+        let (v, _) = exact_visits(&s.dump, priors)?;
+        let n = s.dump.files.len();
+        let path_noisy = priors.iter().filter(|p| p.multiplier < 1.0).count();
+        let by_path = top_by_path(&s.dump, priors);
+        writeln!(
+            out,
+            "{:<6} {v:>5} of {n:>5} ({:>3.0}%); path-noise files {:>3.0}%; top {CUTOFF} with a path or basename hit {by_path:>2}",
+            s.query.id,
+            100.0 * v as f64 / n as f64,
+            100.0 * path_noisy as f64 / n as f64
+        )?;
+        (seen, total, noisy, files) = (seen + v, total + n, noisy + path_noisy, files + n);
+    }
+    writeln!(
+        out,
+        "total  {seen} of {total} ({:.0}%); path-noise files {:.0}%",
+        100.0 * seen as f64 / total as f64,
+        100.0 * noisy as f64 / files as f64
+    )?;
+    Ok(())
+}
+
+/// nDCG@10 per query of ranking every match with statistics a capped search could
+/// estimate instead of count: candidates over-count df, and a mean over every candidate
+/// counts the noise files the real mean leaves out.
+fn estimated_stats(scored: &[Scored], w: &Weights) -> Vec<(String, Vec<f64>)> {
+    let mut rows = Vec::new();
+    for (label, scale_df, all_bytes) in
+        [("df x2", 2, false), ("df x5", 5, false), ("df x10", 10, false), ("avg over all files", 1, true)]
+    {
+        let v = scored
+            .iter()
+            .map(|s| {
+                let d = &s.dump;
+                let mut c = d.corpus.clone();
+                c.df = c.df.iter().map(|&x| (x * scale_df).min(c.docs)).collect();
+                if all_bytes {
+                    c.avg_bytes =
+                        (d.files.iter().map(|f| f.bytes).sum::<u64>() as f64 / d.files.len().max(1) as f64).max(1.0);
+                }
+                metrics(d, &rank::collapse_copies(&d.files, rank::order(&d.files, &c, w)), &s.grades).ndcg
+            })
+            .collect();
+        rows.push((format!("every match, {label}"), v));
+    }
+    rows
+}
+
+/// How many of the full ranking's top `CUTOFF` (copies collapsed) have a path or basename
+/// hit: whether a stop near 0% comes from the top matching by path.
+fn top_by_path(d: &Dump, priors: &[Prior]) -> usize {
+    let ranked = rank::collapse_copies(&d.files, rank::order(&d.files, &d.corpus, &Weights::default()));
+    ranked.iter().take(CUTOFF).filter(|&&i| priors[i].structure.iter().any(|&s| s > 0.0)).count()
+}
+
+/// `exact_visits` per unlabelled dump: files and bytes verified, against every match.
+fn cmd_visits(paths: &[PathBuf], roots: &[String], out: &mut impl Write) -> anyhow::Result<()> {
+    let w = Weights::default();
+    writeln!(
+        out,
+        "{:<24} {:>8} {:>8} {:>6} {:>7} {:>11} {:>8}",
+        "dump", "matched", "visited", "files", "bytes", "path-noise", "top-path"
+    )?;
+    for p in paths {
+        let bytes = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+        let d: Dump = serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", p.display()))?;
+        let name = p.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        if d.files.is_empty() {
+            writeln!(out, "{name:<24} {:>8}", 0)?;
+            continue;
+        }
+        let priors = priors(&d, roots, &w)?;
+        let (v, visited_bytes) = exact_visits(&d, &priors)?;
+        let total_bytes: u64 = d.files.iter().map(|f| f.bytes).sum();
+        let noisy = priors.iter().filter(|p| p.multiplier < 1.0).count();
+        let n = d.files.len();
+        writeln!(
+            out,
+            "{name:<24} {n:>8} {v:>8} {:>5.0}% {:>6.0}% {:>10.0}% {:>8}",
+            100.0 * v as f64 / n as f64,
+            100.0 * visited_bytes as f64 / total_bytes.max(1) as f64,
+            100.0 * noisy as f64 / n as f64,
+            top_by_path(&d, &priors)
+        )?;
+    }
+    Ok(())
+}
+
 /// Leave-one-project-out: every query is scored by weights tuned without its project, so
 /// the pooled comparison has all queries' power and none of their bias. The baseline is
 /// full+dedup: tuned weights are applied with copies collapsed, as `--rank` ships.
@@ -723,6 +1047,17 @@ fn cmd_tune(scored: &[Scored], holdout: &str, path: &Path, out: &mut impl Write)
     Ok(())
 }
 
+fn read_roots(path: &Path) -> anyhow::Result<Vec<String>> {
+    let roots: Vec<String> = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect();
+    ensure!(!roots.is_empty(), "{} has no roots", path.display());
+    Ok(roots)
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let queries = parse_queries(&args.queries)?;
@@ -745,6 +1080,12 @@ fn main() -> anyhow::Result<()> {
             let scored = load_scored(&queries, &args.dumps, &load_labels(labels)?, &mut out)?;
             cmd_tune(&scored, holdout, path, &mut out)
         }
+        Cmd::Cap { labels, roots } => {
+            let roots = read_roots(roots)?;
+            let scored = load_scored(&queries, &args.dumps, &load_labels(labels)?, &mut out)?;
+            cmd_cap(&scored, &roots, &mut out)
+        }
+        Cmd::Visits { roots, dumps } => cmd_visits(dumps, &read_roots(roots)?, &mut out),
         Cmd::Crossval { labels } => {
             let scored = load_scored(&queries, &args.dumps, &load_labels(labels)?, &mut out)?;
             cmd_crossval(&scored, &mut out)
@@ -839,6 +1180,45 @@ mod tests {
         assert!(e.contains("identical files graded"), "{e}");
 
         assert!(check_grades("q1", &d, &HashMap::new()).is_err(), "no labels");
+    }
+
+    #[test]
+    fn roots_strip_whole_segments_only() {
+        let roots = vec![r"C:\src\foo".to_string(), "/mnt/big/chromium".to_string()];
+        assert_eq!(relative(r"C:\src\foo\a\b.rs", &roots).unwrap(), "a/b.rs");
+        assert_eq!(relative("/mnt/big/chromium/base/check.h", &roots).unwrap(), "base/check.h");
+        assert!(relative(r"C:\src\foobar\x.rs", &roots).is_err(), "a name prefix is not a root");
+    }
+
+    #[test]
+    fn the_score_bound_covers_every_score_and_a_wrong_root_is_an_error() {
+        // Plain matches, a definition with many hits and a basename hit, and a test file:
+        // the bound must hold for each.
+        let hit = |matches, def, basename| TermHits { matches, word: matches, def, basename, path: false };
+        let mut files: Vec<FileFeatures> = (0..40u32)
+            .map(|i| FileFeatures {
+                terms: vec![hit(1 + i % 7, 0, false)],
+                ..file(&format!("/r/src/f{i}.rs"), u64::from(i))
+            })
+            .collect();
+        files.push(FileFeatures { terms: vec![hit(500, 3, true)], ..file("/r/src/foo.rs", 100) });
+        files.push(FileFeatures { noise: Noise::Tests, terms: vec![hit(50, 1, true)], ..file("/r/tests/foo.rs", 101) });
+        let d = dump(files);
+        let w = Weights::default();
+        let p = priors(&d, &["/r".to_string()], &w).unwrap();
+        for (f, bound) in d.files.iter().zip(bounds(&d, &p, &w).unwrap()) {
+            assert!(rank::score(f, &d.corpus, &w) <= bound, "{}", f.path);
+        }
+        let (visited, _) = exact_visits(&d, &p).unwrap();
+        assert!((CUTOFF..=d.files.len()).contains(&visited), "{visited}");
+        // A repo indexed at /r/test/app, given as /r: its files gain a `test` segment, so
+        // the path-only class claims a worse multiplier than the real one and the bound no
+        // longer holds. An error, not a wrong count.
+        let d = dump((0..12).map(|i| file(&format!("/r/test/app/f{i}.rs"), i)).collect());
+        let wrong = priors(&d, &["/r".to_string()], &w).unwrap();
+        assert!(exact_visits(&d, &wrong).is_err());
+        let right = priors(&d, &["/r/test/app".to_string()], &w).unwrap();
+        exact_visits(&d, &right).unwrap();
     }
 
     #[test]

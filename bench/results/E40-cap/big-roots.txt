@@ -1,0 +1,2 @@
+/mnt/ebs/big/chromium
+/mnt/ebs/big/llvm-project

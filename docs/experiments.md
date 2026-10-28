@@ -54,6 +54,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E37 | `serve` keeps every table (docs, blocks, paths, units, dictionary, filter) on the heap, within an eighth of memory per generation                                                                                                                                                                                            | —                                                     | —           | **B kept** (`serve` at 2 CPUs / 4 GiB vs E36: cold 0.784, faster on 18/18, `literal_none` 83 → 40 ms, `selective_long` 210 → 133; warm 0.984; startup +0.85 s; ~211 MiB heap, 8% of the index). A (content `MADV_RANDOM`) rejected: same bytes, 2x the IOs                                                                                                                                                                 |
 | E38 | Content blocks encoded with lz4 HC level 6 instead of lz4_flex's fast encoder (same block format, same reader). Probe: why not rewrite `-i`/`-w`/`-S` queries                                                                                                                                                                | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: warm 0.970, cold 0.964, index 2,864 → 2,580 MiB, build 304 → 295 s; outputs identical). Query rewrites not tried: `-w`, `-i`, `-S` cost 7–23 ms over `-F`, and the matcher beats Aho-Corasick                                                                                                                                                                                         |
 | E39 | `--rank` verifies the plain search's chunks on every thread (was one thread per repo), with the shape filter, and scores each file in one pass                                                                                                                                                                               | —                                                     | —           | **kept** (`--rank --top 20`, warm, 2 CPUs: geomean 0.609, `date_regex` 1,937 → 514 ms, `literal_long` 1,542 → 732; output identical on all 18 queries and the 79 golden queries' features)                                                                                                                                                                                                                                 |
+| E40 | Simulation, no scout change: `--rank --top N` that stops early, either after a cap of matches in a path-only order, or exactly, once the top N beat every unvisited file's path-only score bound                                                                                                                             | —                                                     | —           | **rejected** (a cap of 20–200 costs 0.24–0.34 nDCG@10 on the broad golden queries; the exact stop at N = 10 still decodes 65–96% of the matched bytes on 12 of the 16 chromium + llvm queries with matches)                                                                                                                                                                                                                |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1329,6 +1330,68 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   696 → 333, `word` 581 → 310. Ranked now costs 0.95–2.4x the plain search (`plain-vs-rank.sh`), not up to 5x
   ([plain against ranked](../bench/results/E39-rank/plain-vs-rank-warm.txt)).
 - **Kept.**
+
+### E40: can a ranked search stop early?
+
+- Why: a capped, ranked result is what an agent reads, so `--rank --top N` could skip files
+  that cannot reach the top N. Ranking needs every match today. E39 brought it to 0.95–2.4x
+  the plain search, and the plain search's verification is the floor.
+- Two ways to stop early, simulated offline before writing any search code. The
+  simulations are `scout-rank-eval cap` and `visits`, run on the features that
+  `--rank-features` dumps. Both treat a file's path and size as known before decoding
+  (the doc table holds both).
+  - Cap: score only the first M matches in an order known before decoding, then rank
+    those M with their own statistics. Two orders were tried:
+    - path-only noise class (`classify` with no content), then path and basename term
+      hits, then path;
+    - the exact stop's score bound, which weighs each term by its IDF.
+  - Exact: visit files in descending order of a path-only upper bound on the score, and
+    stop once the N-th distinct copy scores strictly above the next bound. Simulated at
+    N = 10, the nDCG cutoff; `--top 20` can only visit more.
+  - The bound counts content saturation (below k1 + 1) and a definition line (w_def) at
+    their maximum, since neither is known from a path.
+  - The path-only noise class has a subset of the real class's marks, so its multiplier
+    bounds the real one while multipliers fall with severity. The tool checks that, and
+    also checks that every score is within its bound. A wrong `--roots` is an error, not
+    a wrong count.
+- Cap, on the 79 golden queries
+  ([results](../bench/results/E40-cap/golden-cap.txt)). The 22 broad ones (more than 200
+  matched files) are the only ones a cap could speed up:
+  - Every cap from 20 to 200 loses 0.24–0.34 nDCG@10 on them (0.697 → 0.35–0.46,
+    p < 0.003).
+  - Cap 500 still loses 0.061 (n.s.), and only a cap of 1,000 matches the full ranking.
+  - The two orders give identical numbers: on these queries the IDF weighting does not
+    reorder files that tie on noise class and path hits.
+  - Cap 20 also drops a known-item target (and all its copies), q073.
+  - On queries-big, 10 of the 16 queries with matches match more than 5,000 files, and
+    `literal_long` matches 182,037. A cap that keeps quality saves nothing on them.
+- The statistics a capped search cannot count are not the problem:
+  - df ×2, ×5 or ×10 (what counting candidates instead of matches over-estimates) leaves
+    nDCG@10 unchanged.
+  - A mean size over every matched file, noise included, costs 0.018 (n.s.).
+- Exact, with the true statistics:
+  - On the 22 golden broad queries it visits 50% of the matched files in total. Five
+    queries stop at 1–20%, and in each of them all 10 top files have a path or basename
+    hit. Eight need 83–100%.
+  - On chromium + llvm-project ([results](../bench/results/E40-cap/big-visits.txt)), it
+    still decodes 65–96% of the matched bytes on 12 of the 16 queries-big queries with
+    matches (`literal_long` 79%, `literal_common` 84%, `anchored` 88%). That saves 4–35%
+    of their matched bytes.
+  - `case_insensitive`, `date_regex` and `smart_case` stop near 0%: all 10 top files
+    have a path or basename hit. `rare_regex` stops at 5% of its bytes because 91% of its
+    matches are noise by path.
+  - These are floors. The real search would also decode non-matching candidates, and in
+    bound order rather than shard order, giving up the read order E30–E35 bought on a
+    cold disk (not measured here).
+- **Rejected.**
+  - The cap, in either order, costs ranking quality at every size that would save time.
+  - The exact stop saves 4–35% of the decoding on most broad queries. It would need
+    candidate-ordered reads and an estimated df and mean size; those estimates measured
+    harmless for nDCG@10 but would change the output.
+  - What it does capture is the class whose top files all match by path, at near 0%.
+    A stop that first verifies only path-matching candidates, then falls back to the full
+    ranking when they do not settle the top N, would get that class. It is left for when
+    that class matters, and `cap` and `visits` stay in `scout-rank-eval` to measure it.
 
 ## Ranking experiments
 

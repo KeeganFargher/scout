@@ -1,0 +1,20 @@
+scout-rank-eval visits --roots big-roots.txt on --rank-features dumps of the 18 queries-big (bin e39, idx-e38-hc, chromium + llvm-project); top-path: of the full top 10, how many have a path or basename hit
+dump                      matched  visited  files   bytes  path-noise top-path
+alternation                 44213    35047    79%     72%         38%        0
+anchored                    47569    42172    89%     88%         11%        0
+case_insensitive             9108       34     0%      0%         43%       10
+count_mode                   8574     6918    81%     79%         19%        0
+crbug_regex                 15301    12440    81%     80%         19%        0
+date_regex                   5699       29     1%      0%         82%       10
+files_mode                  22339    17532    78%     83%         22%        0
+ident_regex                  4241     3813    90%     91%         10%        0
+literal_common              50302    42723    85%     84%         15%        0
+literal_ident                 729      666    91%     96%          9%        1
+literal_long               182037   142072    78%     79%         22%        0
+literal_none                    0
+llvm_regex                    535      375    70%     65%         30%        0
+rare_regex                    322       30     9%      5%         91%        0
+selective_long                  0
+selective_symbol              230      221    96%     69%          4%        0
+smart_case                   1425       18     1%      0%         70%       10
+word                        16602    12113    73%     72%         27%        0

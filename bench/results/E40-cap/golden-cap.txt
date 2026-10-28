@@ -1,0 +1,73 @@
+scout-rank-eval cap --roots bench/golden/roots.txt (local, as the golden set) on the golden dumps of bin e39 (scout-golden-v9, 136 repos)
+1558 labels, every one a file of its dump
+79 queries, 22 broad (more than 200 matched files); nDCG@10
+
+system                                       all   broad  broad vs every match
+full+dedup (every match)                   0.795   0.697  +0.000, p = 1.0000
+path prior, cap 20, own stats              0.657   0.379  -0.318, p = 0.0024
+path prior, cap 20, true stats             0.657   0.377  -0.320, p = 0.0023
+path prior, cap 50, own stats              0.684   0.358  -0.339, p = 0.0007
+path prior, cap 50, true stats             0.683   0.353  -0.344, p = 0.0004
+path prior, cap 100, own stats             0.716   0.419  -0.278, p = 0.0028
+path prior, cap 100, true stats            0.716   0.418  -0.279, p = 0.0026
+path prior, cap 200, own stats             0.729   0.461  -0.236, p = 0.0026
+path prior, cap 200, true stats            0.729   0.458  -0.239, p = 0.0020
+path prior, cap 500, own stats             0.778   0.636  -0.061, p = 0.4408
+path prior, cap 500, true stats            0.778   0.635  -0.061, p = 0.5026
+path prior, cap 1000, own stats            0.795   0.696  -0.001, p = 0.7518
+path prior, cap 1000, true stats           0.795   0.697  +0.000, p = 1.0000
+score bound, cap 20, own stats             0.657   0.379  -0.318, p = 0.0024
+score bound, cap 20, true stats            0.657   0.377  -0.320, p = 0.0023
+score bound, cap 50, own stats             0.684   0.358  -0.339, p = 0.0007
+score bound, cap 50, true stats            0.683   0.353  -0.344, p = 0.0004
+score bound, cap 100, own stats            0.716   0.419  -0.278, p = 0.0028
+score bound, cap 100, true stats           0.716   0.418  -0.279, p = 0.0026
+score bound, cap 200, own stats            0.729   0.461  -0.236, p = 0.0026
+score bound, cap 200, true stats           0.729   0.458  -0.239, p = 0.0020
+score bound, cap 500, own stats            0.778   0.636  -0.061, p = 0.4408
+score bound, cap 500, true stats           0.778   0.635  -0.061, p = 0.5026
+score bound, cap 1000, own stats           0.795   0.696  -0.001, p = 0.7518
+score bound, cap 1000, true stats          0.795   0.697  +0.000, p = 1.0000
+every match, df x2                         0.795   0.697  +0.000, p = 1.0000
+every match, df x5                         0.796   0.697  +0.000, p = 0.8796
+every match, df x10                        0.796   0.697  +0.000, p = 0.9721
+every match, avg over all files            0.786   0.678  -0.018, p = 0.1030
+
+known-item targets (or a copy) outside the first `cap`
+path prior, cap 20      : 1 ["q073"]
+path prior, cap 50      : 0 []
+path prior, cap 100     : 0 []
+path prior, cap 200     : 0 []
+path prior, cap 500     : 0 []
+path prior, cap 1000    : 0 []
+score bound, cap 20     : 1 ["q073"]
+score bound, cap 50     : 0 []
+score bound, cap 100    : 0 []
+score bound, cap 200    : 0 []
+score bound, cap 500    : 0 []
+score bound, cap 1000   : 0 []
+
+exact early stop at N = 10 (true stats, path-only score bounds): matched files verified, broad queries
+q004     546 of  1096 ( 50%); path-noise files  50%; top 10 with a path or basename hit  9
+q006     421 of   743 ( 57%); path-noise files  43%; top 10 with a path or basename hit  0
+q008      25 of  2472 (  1%); path-noise files  70%; top 10 with a path or basename hit 10
+q014     764 of   920 ( 83%); path-noise files  52%; top 10 with a path or basename hit  0
+q015      67 of   340 ( 20%); path-noise files  26%; top 10 with a path or basename hit 10
+q016     157 of   267 ( 59%); path-noise files  41%; top 10 with a path or basename hit  6
+q017      66 of   337 ( 20%); path-noise files  26%; top 10 with a path or basename hit 10
+q020     398 of   404 ( 99%); path-noise files  60%; top 10 with a path or basename hit  3
+q021     205 of   346 ( 59%); path-noise files  41%; top 10 with a path or basename hit  5
+q039      20 of  1780 (  1%); path-noise files  51%; top 10 with a path or basename hit 10
+q041      16 of  1353 (  1%); path-noise files  67%; top 10 with a path or basename hit 10
+q043     430 of   437 ( 98%); path-noise files   2%; top 10 with a path or basename hit  0
+q045     508 of  1108 ( 46%); path-noise files  54%; top 10 with a path or basename hit  0
+q048     361 of   363 ( 99%); path-noise files  91%; top 10 with a path or basename hit  0
+q049    1808 of  2021 ( 89%); path-noise files  43%; top 10 with a path or basename hit  0
+q050     340 of   340 (100%); path-noise files  84%; top 10 with a path or basename hit  0
+q052     358 of   904 ( 40%); path-noise files  60%; top 10 with a path or basename hit  0
+q053      94 of   245 ( 38%); path-noise files  67%; top 10 with a path or basename hit  0
+q054     746 of  1217 ( 61%); path-noise files  39%; top 10 with a path or basename hit  0
+q055    1000 of  1047 ( 96%); path-noise files  69%; top 10 with a path or basename hit  0
+q058     485 of   535 ( 91%); path-noise files  37%; top 10 with a path or basename hit  0
+q060    1364 of  2286 ( 60%); path-noise files  44%; top 10 with a path or basename hit  3
+total  10179 of 20561 (50%); path-noise files 52%
