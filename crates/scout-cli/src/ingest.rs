@@ -14,7 +14,7 @@ use scout_core::catalog::{Catalog, RepoEntry, now_unix};
 use scout_core::indexer::{IndexOptions, IndexReport, index_repo, new_generation};
 use scout_core::ports::{IndexBackend, RepoSource, ShardStore, WriterLock};
 use scout_core::snapshots::{PACK_NAME, SnapshotPack};
-use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+use scout_index_native::{ContentCodec, LookupHome, NativeBackend};
 use scout_index_sqlite::SqliteBackend;
 use scout_source_fs::{ChangeDetection, FsContext, FsSource};
 
@@ -127,7 +127,7 @@ pub fn index_repos(
                 }
                 Content::Raw | Content::Lz4 => resolve_content(content, 0, 0),
             };
-            native = NativeBackend::new(FilterHome::Map, codec);
+            native = NativeBackend::new(LookupHome::Map, codec);
             (&native, format!(", content {codec:?}"))
         }
     };

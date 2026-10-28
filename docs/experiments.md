@@ -50,6 +50,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E30 | Posting lists mapped `MADV_RANDOM` and each asks for its exact range (`MADV_WILLNEED`). A: the dictionary too. B: postings only                                                                                                                                                                                              | —                                                     | —           | **A rejected** (1 GiB warm 1.094, 2 GiB on v6 1.455: dictionary misses become 4 KiB reads; cold 0.80–0.87). **B kept** (v9, 1 GiB: warm 0.893, cold 0.914; 4 GiB warm 1.002, cold 0.917; outputs identical)                                                                                                                                                                                                                |
 | E31 | A repo's shards share trigram counts; a long AND counts only the 6 the shard before ranked rarest                                                                                                                                                                                                                            | —                                                     | —           | **rejected, removed** (cold 0.993 at 4 GiB, 1.013 at 1 GiB, same bytes read; `literal_none` warm 10 → 20 ms from 4 more candidates)                                                                                                                                                                                                                                                                                        |
 | E32 | Format v7: blocks carry their line offset; a large candidate is read and searched only at its candidate units (vendored grep-searcher patched to start line numbers at N)                                                                                                                                                    | —                                                     | —           | **kept** (with E31 and E30's WILLNEED, vs e29: 4 GiB warm 0.915, cold 0.956, 8,714 → 7,866 MiB read cold, broad queries slower cold; 2 GiB warm 0.954, cold 0.980; outputs identical)                                                                                                                                                                                                                                      |
+| E36 | `serve` keeps every shard's dictionary (keys, values) on the heap with its filter                                                                                                                                                                                                                                            | —                                                     | —           | **kept** (`serve` at 2 CPUs / 4 GiB: cold 0.778, `selective_long` 522 → 232 ms, no-match 242 → 79; warm 0.994; startup on an evicted index +0.6 s; ~105 MiB heap, 4% of the index)                                                                                                                                                                                                                                         |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1189,6 +1190,29 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   [accepted HTTP samples](../bench/results/E35-bounded/http-final/summary.json),
   [oracle](../bench/results/E35-bounded/oracle-final.json), and
   [incremental source evidence](../bench/results/E35-bounded/evidence/source-evidence.json).
+
+### E36: the server keeps every shard's dictionary on the heap
+
+- Why: with 4 GiB as the smallest box (2026-10-28), most of a big index lives on disk, and
+  `serve` is the path whose per-query cost matters (a CLI query also pays process start
+  and 26–50 ms of unmapping on broad queries, `phases.py`). Per section of a cold
+  selective query (`coldmap.py`, CLI, v9): `selective_long` read 107 MiB, keys 18.2 and
+  vals 34.3 of it, content 23.2; no-match 57 MiB, keys and vals 29. A lookup touches 16
+  bytes; a cold one reads the 128 KiB around them. All keys, vals, fence and filter of
+  chromium + llvm-project are ~105 MiB (`sections.py`).
+- Change: `FilterHome` becomes `LookupHome`. With `Heap` (`serve`) an opened shard copies
+  its keys and values sections to the heap along with its filter (E24) and fence (E23);
+  the CLI keeps reading them through the map.
+- `serve-ab.sh` (`serve-ebs.sh` per arm: the server in a 2 CPU / 4 GiB cgroup at gp3's
+  caps, started on an evicted index, `qbench.py` warm 3 rounds, then cold, the index
+  evicted before each request) against HEAD, 2 interleaved reps
+  ([results](../bench/results/E36-serve/ab-4G)). Cold geomean **0.778**, faster on 17/18
+  in both reps: `selective_long` 522 → 232 ms (84 → 43 MiB read), `literal_none` 242 →
+  79, `llvm_regex` 576 → 315, `selective_symbol` 643 → 360, `literal_ident` 1,239 → 886.
+  Warm 0.994 (`case_insensitive` 0.91, `smart_case` 1.09). Outputs identical. Time to
+  ready on an evicted index 0.67–0.81 → 1.34–1.38 s: the open reads the dictionaries.
+- **Kept.** The heap grows with the index, 16.75 bytes per key, ~4% of this one: an index
+  several times memory would hold a matching share of a 4 GiB box. Not yet bounded.
 
 ## Ranking experiments
 

@@ -10,7 +10,7 @@ use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
 
 use scout_core::ports::{IndexBackend, Shard};
-use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+use scout_index_native::{ContentCodec, LookupHome, NativeBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if threads == 0 || runs == 0 {
         return Err("threads and runs must be positive".into());
     }
-    let backend = NativeBackend::new(FilterHome::Map, ContentCodec::Raw);
+    let backend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
     let mut paths: Vec<PathBuf> =
         std::fs::read_dir(&args[1])?.map(|entry| entry.map(|entry| entry.path())).collect::<std::io::Result<_>>()?;
     paths.retain(|path| path.extension().is_some_and(|ext| ext == "native"));

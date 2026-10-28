@@ -24,7 +24,7 @@ use scout_core::search::{
     search_bounded,
 };
 use scout_core::snapshots::SnapshotPack;
-use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+use scout_index_native::{ContentCodec, LookupHome, NativeBackend};
 use scout_index_sqlite::SqliteBackend;
 use scout_source_fs::{ChangeDetection, FsContext, FsSource};
 use scout_store_fs::FsStore;
@@ -209,20 +209,21 @@ enum DetectionArg {
     Scan,
 }
 
-/// The native backend for a process per query: its shards probe their trigram filters in
-/// place (E24). Only for reading, where the codec plays no part: an index run builds its
+/// The native backend for a process per query: its shards probe their trigram filters and
+/// dictionaries in place (E24, E36). Only for reading, where the codec plays no part: an index run builds its
 /// own backend with the codec it picks (`ingest::Content`).
-static NATIVE: NativeBackend = NativeBackend::new(FilterHome::Map, ContentCodec::Raw);
-/// The native backend for `serve`, which keeps every shard's filter on the heap (E24).
-static NATIVE_SERVER: NativeBackend = NativeBackend::new(FilterHome::Heap, ContentCodec::Raw);
+static NATIVE: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
+/// The native backend for `serve`, which keeps every shard's filter and dictionary on the
+/// heap (E24, E36).
+static NATIVE_SERVER: NativeBackend = NativeBackend::new(LookupHome::Heap, ContentCodec::Raw);
 
-/// `filter` says where native shards keep their trigram filters: [`FilterHome::Map`] for a
-/// process per query, [`FilterHome::Heap`] for `serve`.
-fn backend_by_name(name: &str, filter: FilterHome) -> anyhow::Result<&'static dyn IndexBackend> {
+/// `lookup` says where native shards keep their filters and dictionaries: [`LookupHome::Map`]
+/// for a process per query, [`LookupHome::Heap`] for `serve`.
+fn backend_by_name(name: &str, lookup: LookupHome) -> anyhow::Result<&'static dyn IndexBackend> {
     match name {
-        "native" => Ok(match filter {
-            FilterHome::Map => &NATIVE,
-            FilterHome::Heap => &NATIVE_SERVER,
+        "native" => Ok(match lookup {
+            LookupHome::Map => &NATIVE,
+            LookupHome::Heap => &NATIVE_SERVER,
         }),
         "sqlite" => Ok(&SqliteBackend),
         other => bail!("unknown index backend {other:?} in catalog"),
@@ -452,7 +453,7 @@ fn open_repos(
     walk_threads: usize,
     with_snapshots: bool,
     ctx: &Arc<FsContext>,
-    filter: FilterHome,
+    lookup: LookupHome,
 ) -> anyhow::Result<Vec<RepoHandle>> {
     for n in only {
         if catalog.find(n).is_none() {
@@ -466,7 +467,7 @@ fn open_repos(
     }
     let open_one = |r: &RepoEntry| -> anyhow::Result<RepoHandle> {
         let idx = r.index.as_ref().context("checked above")?;
-        let backend = backend_by_name(&idx.backend, filter)?;
+        let backend = backend_by_name(&idx.backend, lookup)?;
         let shards = idx
             .shards
             .iter()
@@ -571,7 +572,7 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         threads,
         matches!(a.freshness, FreshnessArg::Strict),
         &ctx,
-        FilterHome::Map,
+        LookupHome::Map,
     )?;
     let opened = started.elapsed();
     let opts = search_options(a, threads);

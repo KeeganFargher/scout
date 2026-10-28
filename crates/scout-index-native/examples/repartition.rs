@@ -10,7 +10,7 @@ use scout_core::catalog::{Catalog, RepoEntry, RepoIndex};
 use scout_core::indexer::{UNIT_TARGET, unit_spans};
 use scout_core::ports::{FileMeta, IndexBackend, Shard, ShardStore};
 use scout_core::trigram::TrigramExtractor;
-use scout_index_native::{ContentCodec, FilterHome, NativeBackend};
+use scout_index_native::{ContentCodec, LookupHome, NativeBackend};
 use scout_store_fs::FsStore;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if count == 0 || target == 0 || dest.exists() {
         return Err("positive sizes and a new output directory are required".into());
     }
-    let backend = NativeBackend::new(FilterHome::Map, ContentCodec::Lz4);
+    let backend = NativeBackend::new(LookupHome::Map, ContentCodec::Lz4);
     let original = source.load_catalog()?;
     let mut shards = Vec::new();
     for name in original.live_shards() {

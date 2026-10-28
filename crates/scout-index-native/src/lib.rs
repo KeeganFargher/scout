@@ -37,8 +37,8 @@
 //! the planner asks it for every trigram of a query first, so a shard that lacks one is
 //! skipped without reading its dictionary or postings, which is what a cold query mostly
 //! waits on. It sits right after the fence, which every open reads, so a cold open fetches
-//! both in one read-around for a typical shard. Where an opened shard keeps it is the
-//! backend's [`FilterHome`].
+//! both in one read-around for a typical shard. Where an opened shard keeps it, and its
+//! dictionary, is the backend's [`LookupHome`].
 //!
 //! Content is cut into blocks (E29), the line-aligned ~64 KiB spans posting units use, so
 //! a large file is stored as several. With [`ContentCodec::Lz4`] a block is stored lz4
@@ -108,18 +108,23 @@ const FILTER_K: u64 = 4;
 // the two choices would correlate and the false-positive rate would rise.
 const _: () = assert!(6 * FILTER_K <= 32);
 
-/// Where an opened shard keeps its trigram filter (E24).
+/// Where an opened shard keeps the data every query looks up before it reaches content:
+/// its trigram filter (E24) and its dictionary, keys and values (E36).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterHome {
-    /// Copied to the heap at open. A long-running server probes every shard's filter on
-    /// every query; on the heap the page cache cannot drop it, so after the index's pages
-    /// are evicted (a restart, or memory pressure) a query still skips the shards it
-    /// rejects without reading them. Costs 0.75 bytes per dictionary key.
+pub enum LookupHome {
+    /// Copied to the heap at open. A long-running server probes every shard's filter and
+    /// dictionary on every query; on the heap the page cache cannot drop them, so after the
+    /// index's pages are evicted (memory pressure on an index bigger than memory) a query
+    /// still skips the shards it rejects, and finds its lists, without a read. A dictionary
+    /// lookup touches 16 bytes, but a cold one reads the 128 KiB around them: on
+    /// chromium + llvm-project keys and values were half of a selective query's cold reads
+    /// (E36). Costs 16.75 bytes per key, ~105 MiB there (4% of the index), read once at
+    /// open.
     Heap,
     /// Probed in place through the map, so a probe reads a page of the filter (one a cold
     /// open has usually just read with the fence beside it). A process per query (the CLI)
-    /// would otherwise copy every shard's filter on each start, about 4 MiB for the bench
-    /// index, more than one query's probes cost.
+    /// would otherwise copy every shard's filter and dictionary on each start, more than
+    /// one query's lookups read.
     Map,
 }
 
@@ -135,16 +140,16 @@ pub enum ContentCodec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct NativeBackend {
-    filter: FilterHome,
+    lookup: LookupHome,
     codec: ContentCodec,
 }
 
 impl NativeBackend {
-    /// Writing does not depend on `filter`, and reading not on `codec`: `filter` applies to
+    /// Writing does not depend on `lookup`, and reading not on `codec`: `lookup` applies to
     /// the shards this backend opens, `codec` to the ones it writes.
     #[must_use]
-    pub const fn new(filter: FilterHome, codec: ContentCodec) -> Self {
-        Self { filter, codec }
+    pub const fn new(lookup: LookupHome, codec: ContentCodec) -> Self {
+        Self { lookup, codec }
     }
 }
 
@@ -158,7 +163,7 @@ impl IndexBackend for NativeBackend {
     }
 
     fn open(&self, path: &Path) -> Result<Box<dyn Shard>> {
-        Ok(Box::new(NativeShard::open(path, self.filter)?))
+        Ok(Box::new(NativeShard::open(path, self.lookup)?))
     }
 }
 
@@ -437,13 +442,21 @@ pub struct NativeShard {
     /// Every FENCE-th key, copied out of the map at open (E23): every lookup reads it, and
     /// on the heap the page cache cannot drop it (~1.4 KiB per shard).
     fence: Vec<u32>,
+    /// The keys and values sections, where the [`LookupHome`] says.
+    dict: Dict,
     filter: Filter,
     /// Words in the filter, at least one.
     filter_words: usize,
     markers: Markers,
 }
 
-/// A shard's trigram filter, where its [`FilterHome`] says.
+/// A shard's dictionary: its keys then its values, as in the map.
+enum Dict {
+    Heap(Box<[u8]>),
+    Map,
+}
+
+/// A shard's trigram filter, where its [`LookupHome`] says.
 enum Filter {
     Heap(Vec<u64>),
     /// The section's offset in the map.
@@ -463,7 +476,7 @@ fn le_u64(b: &[u8], at: usize) -> u64 {
 }
 
 impl NativeShard {
-    pub fn open(path: &Path, home: FilterHome) -> Result<Self> {
+    pub fn open(path: &Path, home: LookupHome) -> Result<Self> {
         let file = File::open(path).map_err(|e| Error::io(path, e))?;
         // SAFETY: shards are immutable once published (the store replaces them by
         // rename, never in place), so the mapping cannot change underneath us. A user
@@ -503,6 +516,7 @@ impl NativeShard {
             vals_off: off(6)?,
             postings_off: off(9)?,
             fence: Vec::new(),
+            dict: Dict::Map,
             filter: Filter::Map(filter_off),
             filter_words: 0,
             markers: Markers::default(),
@@ -549,9 +563,10 @@ impl NativeShard {
         }
         shard.filter_words = filter_len / 8;
         shard.fence = (fence_off..fence_end).step_by(4).map(|at| le_u32(&shard.map, at)).collect();
-        if home == FilterHome::Heap {
+        if home == LookupHome::Heap {
             shard.filter =
                 Filter::Heap((filter_off..shard.postings_off).step_by(8).map(|at| le_u64(&shard.map, at)).collect());
+            shard.dict = Dict::Heap(shard.map[shard.keys_off..fence_off].into());
         }
         // A posting list is read once per query that needs it, and its neighbours belong to
         // other trigrams, so a cold fault's 128 KiB read-around on a cloud disk mostly reads
@@ -579,28 +594,38 @@ impl NativeShard {
         Ok(self.docs_off + doc as usize * DOC_LEN)
     }
 
+    /// The keys section then the values section, from the heap or the map.
+    fn dict(&self) -> &[u8] {
+        match &self.dict {
+            Dict::Heap(bytes) => bytes,
+            Dict::Map => &self.map[self.keys_off..self.vals_off + self.trigram_count as usize * VAL_LEN],
+        }
+    }
+
     /// `(unit_count, postings offset, end of its list)` of `tri`: the fence picks the one
     /// block that can hold it, a binary search of that block's keys finds it. Lists are
     /// written in key order, so a list ends where the next key's starts (the last one at
     /// the end of the section).
     fn dict_entry(&self, tri: Trigram) -> Option<(u32, usize, usize)> {
         let n = self.trigram_count as usize;
+        let dict = self.dict();
+        let vals = n * 4;
         // The last block whose first key is <= tri.
         let block = self.fence.partition_point(|&k| k <= tri.0).checked_sub(1)?;
         let (mut lo, mut hi) = (block * FENCE, ((block + 1) * FENCE).min(n));
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match le_u32(&self.map, self.keys_off + mid * 4).cmp(&tri.0) {
+            match le_u32(dict, mid * 4).cmp(&tri.0) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
                 std::cmp::Ordering::Equal => {
-                    let at = self.vals_off + mid * VAL_LEN;
+                    let at = vals + mid * VAL_LEN;
                     let end = if mid + 1 < n {
-                        le_u64(&self.map, at + VAL_LEN + 4) as usize
+                        le_u64(dict, at + VAL_LEN + 4) as usize
                     } else {
                         self.map.len() - self.postings_off
                     };
-                    return Some((le_u32(&self.map, at), le_u64(&self.map, at + 4) as usize, end));
+                    return Some((le_u32(dict, at), le_u64(dict, at + 4) as usize, end));
                 }
             }
         }
@@ -996,9 +1021,9 @@ mod tests {
     /// `(path, content, unit blocks)`.
     type Doc<'a> = (&'a str, &'a [u8], &'a [&'a [u8]]);
 
-    const MAPPED: NativeBackend = NativeBackend::new(FilterHome::Map, ContentCodec::Raw);
-    const HEAP: NativeBackend = NativeBackend::new(FilterHome::Heap, ContentCodec::Raw);
-    const LZ4: NativeBackend = NativeBackend::new(FilterHome::Map, ContentCodec::Lz4);
+    const MAPPED: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
+    const HEAP: NativeBackend = NativeBackend::new(LookupHome::Heap, ContentCodec::Raw);
+    const LZ4: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Lz4);
 
     fn content(s: &dyn Shard, doc: DocId) -> Vec<u8> {
         s.content(doc, &mut Vec::new()).unwrap().to_vec()
@@ -1143,15 +1168,24 @@ mod tests {
     }
 
     #[test]
-    fn heap_and_mapped_filters_answer_the_same() {
+    fn heap_and_mapped_lookups_answer_the_same() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.native");
         text_shard(&path);
         let (mapped, heap) = (MAPPED.open(&path).unwrap(), HEAP.open(&path).unwrap());
-        // Every printable-ASCII trigram: the shard's own and a few hundred thousand misses.
+        // Every printable-ASCII trigram: the shard's own and a few hundred thousand misses,
+        // through the filter and the dictionary (the shard's last key ends its list at the
+        // map's end, which the heap copy does not hold).
+        let mut found = 0;
         for t in (0x20_2020u32..0x7f_7f7f).filter(|t| t.to_le_bytes()[..3].iter().all(|b| (0x20..0x7f).contains(b))) {
-            assert_eq!(mapped.may_contain(Trigram(t)), heap.may_contain(Trigram(t)), "{t:#x}");
+            let t = Trigram(t);
+            assert_eq!(mapped.may_contain(t), heap.may_contain(t), "{t:?}");
+            let (count, list) = (mapped.count(t).unwrap(), mapped.postings(t).unwrap());
+            assert_eq!(count, heap.count(t).unwrap(), "{t:?}");
+            assert_eq!(list, heap.postings(t).unwrap(), "{t:?}");
+            found += usize::from(count > 0);
         }
+        assert!(found > 10, "the shard's own trigrams were looked up: {found}");
     }
 
     /// The filter's hash is part of the format: a reader hashing differently from the writer
@@ -1437,7 +1471,7 @@ mod tests {
         let mut w = LZ4.create(&path).unwrap();
         w.add(&FileMeta { path: "large.txt".into(), size: text.len() as u64, mtime_ns: 0 }, &text, &units).unwrap();
         w.finish().unwrap();
-        let shard = NativeShard::open(&path, FilterHome::Map).unwrap();
+        let shard = NativeShard::open(&path, LookupHome::Map).unwrap();
         let stored = shard.stored(0).unwrap();
         let second = stored.blocks.start + 1;
         let start = stored.bytes.start + shard.block(stored.blocks.start).0;
@@ -1448,7 +1482,7 @@ mod tests {
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[start..start + packed].fill(0);
         std::fs::write(&path, bytes).unwrap();
-        let shard = NativeShard::open(&path, FilterHome::Map).unwrap();
+        let shard = NativeShard::open(&path, LookupHome::Map).unwrap();
         let mut buf = Vec::new();
         for extent in [Extent::Whole, Extent::Units(&[0, 1])] {
             let mut calls = 0;

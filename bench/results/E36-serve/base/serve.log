@@ -1,0 +1,7 @@
+listening on http://127.0.0.1:18500
+indexing 1 repo(s): 1 worker(s), shard cap 204 MiB, budget 1024 MiB, backend native, content Lz4
+  small-tiny                                     1 files      0.0 MiB  1 shard(s)   0.05s
+sync: 1 reindexed, 0 removed, 0 failed, 3 repos in catalog, 0.5s
+serving generation 2
+Terminated
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=143 cgroup_peak_mib=1756 oom_kills=0 io: rbytes=7471882240 wbytes=31158272 rios=254849 wios=6 dbytes=0 dios=0
