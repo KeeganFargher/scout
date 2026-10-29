@@ -309,10 +309,6 @@ fn handle(state: &State, req: Request) {
         (Method::Get, _) => text(404, "not found\n".into()),
         _ => text(405, "only GET is supported\n".into()),
     };
-    // Every body is in memory, so send its length and never chunked transfer encoding:
-    // tiny_http chunks bodies of 32 KiB or more into 8 KiB frames, which the client then
-    // parses one by one (E51).
-    let response = response.with_chunked_threshold(usize::MAX);
     if let Err(e) = req.respond(response) {
         err_line(&format!("http: responding to {url}: {e}"));
     }

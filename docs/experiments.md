@@ -65,7 +65,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E48 | E47 waiting for idle on a condvar instead of polling every 5 ms; shards read forward, opened lazily; a new generation skips shards already read                                                                                                                                                                              | —                                                     | —           | **rejected** (at ready 1.020, one rep 1.066; steady 1.029 and 1.027, the latter with the walk finished: the fixed clauses sat inside the noise. Forward reads doubled the walk's reads, 20,285 against 11,526)                                                                                                                                                                                                             |
 | E49 | E48 reading backward again; judged against an A/A run's noise, 4 reps                                                                                                                                                                                                                                                        | —                                                     | —           | **kept** (every clause inside the A/A's noise: at ready 1.013 against ≤ 1.067, steady 0.989–1.001; 45 s after ready 0.253, the pass 12.0 → 2.3 s; 300 ms apart 0.738)                                                                                                                                                                                                                                                      |
 | E50 | `prefetch` joins the shortest gaps first, only gaps under a read's worth of bytes (41.7 KB at gp3's 125 MB/s ÷ 3000), and stops once a block's reads cost no more than its bytes (was: every gap up to 32 KiB)                                                                                                               | —                                                     | —           | **rejected** (cold 0.959, 0.952 and 0.968 per rep, `alternation` 0.877 and `literal_common` 0.860; but `llvm_regex` 1.44 and 2.03 and `smart_case` 1.21 and 1.20 slower in both reps, against no query over 10% slower in both; warm 0.999)                                                                                                                                                                                |
-| E51 | `serve` sends every body with Content-Length instead of tiny_http's chunked transfer encoding (8 KiB frames for bodies of 32 KiB or more)                                                                                                                                                                                    | —                                                     | —           | **kept** (warm 0.979, 0.977 and 0.982 per rep, `alternation` 0.925; cold 0.990; no query over 3% slower)                                                                                                                                                                                                                                                                                                                   |
+| E51 | `serve` sends every body with Content-Length instead of tiny_http's chunked transfer encoding (8 KiB frames for bodies of 32 KiB or more)                                                                                                                                                                                    | —                                                     | —           | **reverted** (warm 0.979, 0.977 and 0.982 per rep; cold 0.990; but an A/A of one binary put its warm reps at 0.954 and 1.022, so the gain is within noise)                                                                                                                                                                                                                                                                 |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1870,7 +1870,26 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
     `literal_common` 1.018, each faster in one rep of two.
   - Cold 0.990 (0.987 and 0.992 per rep): reads are unchanged, so the disk sets it.
   - Time to ready on an evicted index: 2,224 and 2,286 ms base, 2,253 and 2,271 ms E51.
-  - **Kept**: every clause passes.
+  - The rule's clauses passed, and the change was committed as kept.
+- The review after the run doubted the gain:
+  - It does not grow with the body: the four largest bodies (22–62 MB) came out 0.925,
+    0.996, 1.018 and 1.029, while bodies of 0.1–0.7 MB "gained" 4–5%.
+  - `literal_none` and `selective_long` return nothing, so their bytes on the wire are the
+    same in both arms, yet they moved 0.947 and 0.986.
+  - Not every query was within 3%: cold `selective_long` was 1.034 and slower in both
+    reps; single reps went to 1.067 warm (`literal_long`) and 1.061 cold (`date_regex`).
+  - Cold `rare_regex` 0.871, steady within each arm, is more than a 236 KB body can
+    explain: a difference between the two processes or builds, not the change.
+  - The client is Python's urllib (qbench.py), whose chunked decoder is slow, so even a
+    real gain would say more about the harness than about `serve`.
+- A/A, set after the review with its rule in `run-e51aa.sh` before the run
+  ([summary](../bench/results/E51-content-length/aa-4G/summary.txt)): E49's base binary
+  in both arms, same settings. Warm 0.987 pooled, **0.954 and 1.022** per rep; cold 0.990
+  (0.989 and 0.991). The rule kept E51 only if its warm 0.979 was below 1 − 0.046 = 0.954
+  and below the A/A's pooled 0.987. It is not.
+- **Reverted**: a 2% warm gain at 2 reps cannot be told from noise here, and the
+  mechanism did not show in the per-query data. A 2-rep A/B can only show a warm change
+  larger than ~5%.
 
 ### Probe: what `anchored`'s anchors cost
 
