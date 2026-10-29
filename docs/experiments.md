@@ -71,6 +71,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E54 | E53, plus `prefetch` queuing each block's paths after its content                                                                                                                                                                                                                                                            | —                                                     | —           | **rejected** (warm search alone 0.979 and 0.966; cold 1.085: `llvm_regex` 1.50, `selective_symbol` 1.38, `smart_case` 1.23, the broad queries 3–8% slower, in both reps; cold-io: 3–18% more reads, `literal_none` 41%)                                                                                                                                                                                                    |
 | E55 | E53's `Shard::size` after planning only (`want`, `queue_block`); `chunk_repo` keeps `meta`, whose path read faults the paths section in while planning                                                                                                                                                                       | —                                                     | —           | **rejected** (warm search alone 0.986 and 0.979 against ≤ 0.98 in both passes; cold 0.978 with identical reads, no query over 2.1% slower in both reps)                                                                                                                                                                                                                                                                    |
 | E56 | E52's read-cost estimate in parallel over every shard of every repo, not over repos                                                                                                                                                                                                                                          | —                                                     | —           | **rejected with E52** (against E52: 0.937 and 0.951 at 8 CPUs, 1.004 and 0.996 at 2, cold 0.990; against the build before E52 at 8 CPUs: 1.005 and 1.048, over 1.03 in one pass, so both are reverted)                                                                                                                                                                                                                     |
+| E57 | E52 with E56, proposed again as one change against the build before E52, its 8-CPU threshold from an A/A | —                                                     | —           | **rejected** (1 CPU: 1.022 and 1.023 against ≤ 1.01; the run stopped there, before 2 and 8 CPUs and cold) |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2092,6 +2093,27 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - Next (E57): E52 with E56, proposed again as one change, judged against the build before
   E52 at 8 CPUs with a threshold from an 8-CPU A/A taken first, and at 2 CPUs and cold as
   before.
+
+### E57: E52 with E56, again
+
+- Why: E56's pass over 1.03 against the build before E52 rested on one pass and on no
+  8-CPU A/A. So the pair was proposed again as one change, with the A/A first.
+- 8-CPU A/A of the build before E52
+  ([aa](../bench/results/E57-estimate-retest/search-ms-aa-8.txt)): pass geomeans 1.003 and
+  1.007, worst query 1.032. E56's 1.048 pass, with `literal_common` at 1.258, was well
+  outside it.
+- Rule, set after the A/A and before the run ([run-e57.sh](../bench/harness/run-e57.sh)),
+  stage by stage, stopping at the first to fail: `search-ms.sh` geomean ≤ 1.01 in both
+  passes and no query over 1.035 in both, at 1 CPU, then 2, then 8; then cold pooled ≤
+  0.97 and below 1.00 in both reps.
+- Result ([1 CPU](../bench/results/E57-estimate-retest/search-ms-1.txt)): **1.022 and
+  1.023**. Rejected at the first stage. At one thread there is nothing to spread the
+  estimate over, and it costs what E52 measured there (1.023 and 1.025).
+- The E52 line stops here: the estimate's walk over every candidate costs a broad warm
+  search ~2% at 1 CPU whatever its parallelism, and warm searches outnumber cold ones once
+  the background warm-up (E45–E49) has read the index. Not tried: skipping the estimate
+  once that warm-up has read every shard, so only searches before it, or a CLI search,
+  pay it; the CLI would still pay it warm.
 
 ### Probe: what `anchored`'s anchors cost
 

@@ -1,0 +1,2 @@
+1 CPUs: geomean 1.022 1.023
+stage 1 CPUs fails the rule
