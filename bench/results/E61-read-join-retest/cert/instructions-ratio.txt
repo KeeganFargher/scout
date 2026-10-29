@@ -1,0 +1,7 @@
+alternation 1.00004 1.00004
+crbug_regex 1.00003 1.00004
+date_regex 1.00086 1.00087
+dcheck 1.00004 1.00003
+files_mode 1.00003 1.00004
+literal_common 1.00009 1.00008
+smart_case 1.00007 1.00007

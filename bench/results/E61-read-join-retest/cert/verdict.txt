@@ -1,0 +1,3 @@
+1 instructions: pass
+2 gp3: pooled 1.000, reps [1.001, 0.999], slow in both: none: pass
+3 t-class: pooled 0.898, reps [0.895, 0.901], slow in both: none: pass

@@ -1,0 +1,3 @@
+rep 1: cold geomean 0.895
+rep 2: cold geomean 0.901
+over 10% slower in every rep: none
