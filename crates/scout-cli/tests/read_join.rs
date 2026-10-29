@@ -1,5 +1,5 @@
-//! End-to-end: `--read-mbps` and `--read-iops` set the read join the opened repos search
-//! with (E60), gp3's 32 KiB by default, and a volume with no reads is refused.
+//! End-to-end: `--read-mbps` and `--read-iops` set the read join a search runs with (E60),
+//! gp3's 32 KiB by default, and a volume with no reads is refused by the argument parser.
 
 // Helpers outside #[test] fns are not covered by clippy's allow-unwrap-in-tests; a panic
 // is exactly the failure report a test wants.
@@ -38,8 +38,13 @@ fn the_volumes_caps_set_the_read_join() {
         .args(["search", "--stats", "-F", "zebrafish"])
         .output()
         .unwrap();
-    assert!(String::from_utf8(out.stderr).unwrap().contains("read_join=16384"));
-    // A volume that serves no reads is refused before anything is opened.
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("read_join=16384"), "{err}");
+    // A volume that serves no reads is refused by the parser, before anything is opened:
+    // exit 2 alone would not say so, since any error exits 2.
     let out = scout(&index, &["search", "--read-iops", "0", "-F", "zebrafish"]);
-    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("invalid value '0' for '--read-iops"), "{err}");
 }

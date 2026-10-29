@@ -8,7 +8,11 @@
 # and 0.999, worst query 1.032.
 # Rule, set before this run, stage by stage, stopping at the first that fails, as E57:
 # search-ms.sh geomean E61/before <= 1.011 in both passes and no query over 1.035 in both,
-# at 1 CPU, then 2, then 8. E60's cold stages, unchanged code on that path, stand.
+# at 1 CPU, then 2, then 8; then serve-ab.sh on gp3's caps, the build before against E61
+# with no flags: cold pooled <= 1.01, no query over 10% slower in both reps (E60's stage 3,
+# on this binary: by E60's own reading, one binary's numbers do not certify another's).
+# Then perf stat of files_mode on both, raw, for the record. E60's t-class stage (0.902,
+# 0.903) is not rerun: its margin is ten times this one's.
 # Usage: run-e61.sh <before-bin-dir> <e61-bin-dir> <out-dir>
 set -euo pipefail
 [ "$#" = 3 ] || { echo "expected before-bin-dir e61-bin-dir out-dir" >&2; exit 2; }
@@ -28,3 +32,13 @@ for cpus in 1 2 8; do
     exit (g1 <= 1.011 && g2 <= 1.011 && bad == "") ? 0 : 1
   }' "$OUT/search-ms-$cpus.txt" | tee -a "$OUT/verdict.txt" || { echo "stage $cpus CPUs fails the rule" | tee -a "$OUT/verdict.txt"; exit 1; }
 done
+grep -v -P "^(short_unindexable|huge_output)	" "$P/../queries-big.tsv" > /tmp/q18.tsv; chmod 644 /tmp/q18.tsv
+bash "$P/serve-ab.sh" "$OUT/ab-gp3" "base=$A" "e61=$B" "$I" 4G /tmp/q18.tsv 2 1 1
+python3 "$P/serveab-reps.py" "$OUT/ab-gp3" base e61 | tee "$OUT/ab-gp3/reps.txt"
+# Raw perf stat of a warm files_mode search, 9 runs per binary, interleaved twice.
+PERF=$(ls -d /usr/lib/linux-tools/*/perf | head -1)
+for b in "$A" "$B" "$A" "$B"; do
+  echo "== $b"
+  taskset -c 0-1 "$b/scout" --index-dir "$I" search --freshness off --threads 2 -l -- "#include <vector>" > /dev/null || true
+  taskset -c 0-1 "$PERF" stat -r 9 -e instructions:u,cycles:u,task-clock     "$b/scout" --index-dir "$I" search --freshness off --threads 2 -l -- "#include <vector>" 2>&1 > /dev/null
+done > "$OUT/perf-stat.txt"

@@ -685,8 +685,7 @@ fn cmd_search(store: &FsStore, a: &SearchArgs, read_join: usize) -> anyhow::Resu
             opened.as_secs_f64() * 1e3,
             stats.elapsed.as_secs_f64() * 1e3,
             started.elapsed().as_secs_f64() * 1e3,
-            // Every repo is opened with the one join; the first's shows what reached them.
-            handles.first().map_or(read_join, |r| r.read_join),
+            read_join,
             stats.plan
         ));
     }

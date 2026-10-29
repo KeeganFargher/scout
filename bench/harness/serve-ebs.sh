@@ -13,9 +13,8 @@ set -euo pipefail
 [ "$#" = 7 ] || { echo "expected bin-dir index-dir mem queries warm-rounds cold-rounds out-dir" >&2; exit 2; }
 B=$1 I=$2 mem=$3 Q=$4 WR=$5 CR=$6 OUT=$7
 mbps=${EBS_MBPS:-125} iops=${EBS_IOPS:-3000}
-# Split on purpose: one variable carries several flags.
-# shellcheck disable=SC2206
-flags=(${SERVE_FLAGS:-})
+# One variable carries several flags: split on spaces, without glob expansion.
+read -ra flags <<< "${SERVE_FLAGS:-}"
 P=$(cd "$(dirname "$0")" && pwd)
 [ ! -e "$OUT" ] || { echo "$OUT exists" >&2; exit 2; }
 install -d -o 1000 -g 1000 "$OUT"

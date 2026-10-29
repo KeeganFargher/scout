@@ -1,5 +1,7 @@
 # perf-stat.sh: files_mode (-l "#include <vector>"), warm, 2 CPUs, perf stat -r 9 per binary,
-# interleaved; bin-head is the build before E60, bin-e60 E60 as benchmarked.
+# interleaved; bin-head is the build before E60, bin-e60 E60 as benchmarked. Only the
+# instructions and elapsed lines of its output were kept (its cycles and task-clock lines
+# were not); E61's final/instructions.txt is a raw count over every query.
 == bin-head
          859882981      instructions:u                   #    2.08  insn per cycle              ( +-  0.00% )
           0.099360 +- 0.000609 seconds time elapsed  ( +-  0.61% )
