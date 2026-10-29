@@ -37,6 +37,15 @@ struct Cli {
     /// platform data directory.
     #[arg(long, global = true)]
     index_dir: Option<PathBuf>,
+    /// The index volume's baseline read rate in MB/s: gp3's 125 by default; a t-class
+    /// instance's own EBS baseline is lower (~43 on a t3.medium). With --read-iops, how far
+    /// apart two candidates' content may lie and still be read as one request (E59, E60).
+    #[arg(long, global = true, default_value_t = 125, value_parser = clap::value_parser!(u64).range(1..))]
+    read_mbps: u64,
+    /// The index volume's baseline reads per second: gp3's 3000 by default (~2000 on a
+    /// t3.medium). See --read-mbps.
+    #[arg(long, global = true, default_value_t = 3000, value_parser = clap::value_parser!(u64).range(1..))]
+    read_iops: u64,
     #[command(subcommand)]
     command: Command,
 }
@@ -267,6 +276,11 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let store = FsStore::open(&index_dir(cli.index_dir)?)?;
+    // Only search and serve open shards to search them; the other commands take no read join.
+    let read_join = || -> anyhow::Result<usize> {
+        let bytes_per_sec = cli.read_mbps.checked_mul(1_000_000).context("--read-mbps is too large")?;
+        Ok(scout_core::ports::read_join(bytes_per_sec, cli.read_iops)?)
+    };
     match cli.command {
         Command::Add { paths, discover, max_depth } => cmd_add(&store, &paths, discover, max_depth),
         Command::Remove { names } => cmd_remove(&store, &names),
@@ -274,7 +288,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Index { names, backend, content, threads, memory_mb } => {
             cmd_index(&store, &names, backend, content, threads, memory_mb)
         }
-        Command::Search(args) => cmd_search(&store, &args),
+        Command::Search(args) => cmd_search(&store, &args, read_join()?),
         Command::Sync { config, threads, memory_mb, content } => {
             cmd_sync(&store, &config, threads, memory_mb, content.into())
         }
@@ -331,6 +345,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 content: content.into(),
                 table_bytes,
                 warm_bytes,
+                read_join: read_join()?,
             };
             serve::serve(&store, &scout_sync::config::Config::load(&config)?, &opts)?;
             Ok(ExitCode::SUCCESS)
@@ -482,9 +497,16 @@ fn cmd_index(
     Ok(ExitCode::SUCCESS)
 }
 
+/// How opened shards are read: the native backend that opens them, and how far apart
+/// their reads may lie and still be joined into one, for the volume they are on (E60).
+struct ShardReads<'a> {
+    native: &'a NativeBackend,
+    read_join: usize,
+}
+
 /// `with_snapshots`: only strict freshness reads snapshots, so other modes skip the file
-/// reads (about 2.5 MB across the bench corpus). `filter` is where native shards keep their
-/// trigram filters (see [`backend_by_name`]).
+/// reads (about 2.5 MB across the bench corpus). `reads` says how the shards are opened and
+/// read (see [`backend_by_name`]).
 fn open_repos(
     store: &FsStore,
     catalog: &Catalog,
@@ -492,7 +514,7 @@ fn open_repos(
     walk_threads: usize,
     with_snapshots: bool,
     ctx: &Arc<FsContext>,
-    native: &NativeBackend,
+    reads: &ShardReads<'_>,
 ) -> anyhow::Result<Vec<RepoHandle>> {
     for n in only {
         if catalog.find(n).is_none() {
@@ -506,7 +528,7 @@ fn open_repos(
     }
     let open_one = |r: &RepoEntry| -> anyhow::Result<RepoHandle> {
         let idx = r.index.as_ref().context("checked above")?;
-        let backend = backend_by_name(&idx.backend, native)?;
+        let backend = backend_by_name(&idx.backend, reads.native)?;
         let shards = idx
             .shards
             .iter()
@@ -521,6 +543,7 @@ fn open_repos(
             shards,
             snapshot: None,
             listing_digest: idx.listing_digest,
+            read_join: reads.read_join,
         })
     };
     // Each open is a few file operations at tens of microseconds each on Windows; across
@@ -593,7 +616,7 @@ fn write_rank_features(path: &Path, r: &scout_core::ranked::RankedReport) -> any
     std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
 }
 
-fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
+fn cmd_search(store: &FsStore, a: &SearchArgs, read_join: usize) -> anyhow::Result<ExitCode> {
     if a.max_results.is_some() && !matches!(a.freshness, FreshnessArg::Off) {
         bail!("--max-results searches the published index; use --freshness off");
     }
@@ -604,8 +627,9 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
         DetectionArg::Journal => ChangeDetection::Journal,
         DetectionArg::Scan => ChangeDetection::Scan,
     }));
+    let reads = ShardReads { native: &NATIVE, read_join };
     let repos =
-        open_repos(store, &catalog, &a.repos, threads, matches!(a.freshness, FreshnessArg::Strict), &ctx, &NATIVE)?;
+        open_repos(store, &catalog, &a.repos, threads, matches!(a.freshness, FreshnessArg::Strict), &ctx, &reads)?;
     let opened = started.elapsed();
     let opts = search_options(a, threads);
     let stdout = std::io::stdout();
@@ -644,7 +668,7 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
     persist_snapshots(store, &selected, report.snapshots)?;
     if a.stats {
         err_line(&format!(
-            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
+            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} read_join={} plan={}",
             stats.repos,
             stats.shards,
             stats.shards_filtered,
@@ -661,6 +685,8 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
             opened.as_secs_f64() * 1e3,
             stats.elapsed.as_secs_f64() * 1e3,
             started.elapsed().as_secs_f64() * 1e3,
+            // Every repo is opened with the one join; the first's shows what reached them.
+            handles.first().map_or(read_join, |r| r.read_join),
             stats.plan
         ));
     }

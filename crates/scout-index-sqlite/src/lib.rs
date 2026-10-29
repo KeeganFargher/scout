@@ -317,7 +317,7 @@ impl Shard for SqliteShard {
 
     /// SQLite reads a page when a query asks for it, with no call that queues reads ahead,
     /// and this backend is a comparison point, not what a server runs.
-    fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+    fn prefetch(&self, _: &[Want<'_>], _: usize) -> Result<()> {
         Ok(())
     }
 }

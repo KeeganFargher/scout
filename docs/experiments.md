@@ -74,6 +74,8 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E57 | E52 with E56, proposed again as one change against the build before E52, its 8-CPU threshold from an A/A                                                                                                                                                                                                                     | —                                                     | —           | **rejected** (1 CPU: 1.022 and 1.023 against ≤ 1.01; the run stopped there, before 2 and 8 CPUs and cold)                                                                                                                                                                                                                                                                                                                  |
 | E58 | Before planning a repo, ask for every posting list its shards may decode (`madvise(WILLNEED)`), so the one-page lists stop being a fault and a wait each                                                                                                                                                                     | —                                                     | —           | **rejected** on a probe ([cold-faults.sh](../bench/harness/cold-faults.sh), mean of 2 reps): the waits went, but `llvm_regex` read 20% more and took 180 → 262 ms, over 10% slower in both reps; `literal_none` 47 → 41 ms, `smart_case` 0.93, the rest within 1%                                                                                                                                                          |
 | E59 | `prefetch` joins gaps of up to 16 KiB instead of 32, measured on a t-class volume (43 MB/s, 2000 IOPS) and on gp3                                                                                                                                                                                                            | —                                                     | —           | **rejected as a constant** (t-class cold 0.906 and 0.910 per rep; gp3 cold 1.094 and 1.090, 8 queries over 10% slower in both reps): the gap is the volume's to set (E60)                                                                                                                                                                                                                                                  |
+| E60 | The read join from the volume's caps: `--read-mbps` and `--read-iops` (gp3's 125 and 3000 by default) give the largest power of two at or under its bytes per read, instead of a constant 32 KiB                                                                                                                             | —                                                     | —           | **failed stage 1** (warm `search-ms` at 2 CPUs 1.020 and 1.003 on a quiet box, `files_mode` 1.059 and 1.054, with the same instructions retired; t-class cold 0.902 and 0.903 per rep with its caps given; gp3 default 1.008 cold, the same bytes read): retested as E61                                                                                                                                                   |
+| E61 | E60 retested warm, rebuilt with its review fixes                                                                                                                                                                                                                                                                             | —                                                     | —           | **kept** (`search-ms` 0.997 and 0.994 at 1 CPU, 0.990 and 0.991 at 2, 1.002 and 0.997 at 8; E60's cold stages stand)                                                                                                                                                                                                                                                                                                       |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2197,6 +2199,63 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   one rule, the largest power of two at or under the volume's bytes per read (MB/s ÷
   IOPS): 41.7 KB gives 32 KiB on gp3, 21.5 KB gives 16 KiB on t-class. Next (E60): the
   gap from the volume's caps, set by whoever deploys the server.
+
+### E60: the read join from the volume's caps
+
+- Why: E59, each volume's best join loses ~9% cold on the other's, and both follow the
+  volume's bytes per read.
+- Change: `scout_core::ports::read_join(bytes_per_sec, iops)`, the largest power of two at
+  or under `bytes_per_sec / iops` and at least a page; `RepoHandle::read_join`, set where
+  the shards are opened and handed by the read-ahead to `Shard::prefetch(wants, join)`;
+  global flags `--read-mbps` and `--read-iops`, gp3's 125 and 3000 by default, so the
+  default is the 32 KiB every experiment since E42 measured.
+- The default is gp3 deliberately, not as a guess about the box: it reproduces what was
+  measured, and a deployment states its volume. The 4 GiB t-class box is capped below it by
+  the instance (~43 MB/s, 2000 IOPS on a t3.medium), so `serve` there should be run with
+  those values (README, "Hardware").
+- Rule, set before the run ([run-e60.sh](../bench/harness/run-e60.sh)), three stages:
+  `search-ms.sh` at 2 CPUs ≤ 1.011 in both passes; on the t-class caps, E60 told them
+  against E60 with the default, cold pooled ≤ 0.97, below 1.00 in both reps, no query
+  over 10% slower in both; on gp3, the build before E60 against E60's default, cold pooled
+  ≤ 1.01 and no query over 10% slower in both. `serve-ab.sh` now takes each arm's server
+  flags (`SERVE_FLAGS_A`, `SERVE_FLAGS_B`), so one build is compared with itself.
+- Stage 1 ([as run](../bench/results/E60-read-join/search-ms-2.txt)): 1.023 and 1.002, but `cargo clippy` and
+  `cargo test` ran on the same machine during it (`dcheck` 145 → 224 ms between passes of
+  one binary). Rerun quiet ([rerun](../bench/results/E60-read-join/search-ms-2-rerun.txt)): **1.020** and 1.003,
+  `files_mode` 1.059 and 1.054. An A/A that day ([aa](../bench/results/E60-read-join/search-ms-2-aa.txt)): 1.004
+  and 0.999, worst query 1.032, so that is outside the noise. Yet `perf stat` of a whole
+  `files_mode` search, 9 runs each, interleaved ([perf](../bench/results/E60-read-join/perf-stat.txt)): 859.88M and
+  860.02M instructions (+0.015%), 0.992 and 0.999 of the time. The work is the same; the likely difference, not shown, is
+  this binary's code layout.
+- Stage 2, t-class ([summary](../bench/results/E60-read-join/ab-tclass/summary.txt), [reps](../bench/results/E60-read-join/ab-tclass/reps.txt)):
+  cold **0.902 and 0.903** per rep, as E59's constant 16 KiB (0.906 and 0.910): `files_mode`
+  0.769, `crbug_regex` 0.783, `alternation` 0.815; no query over 10% slower in both
+  (`selective_long` 1.036 pooled).
+- Stage 3, gp3 default ([summary](../bench/results/E60-read-join/ab-gp3/summary.txt), [reps](../bench/results/E60-read-join/ab-gp3/reps.txt)):
+  cold 1.008 pooled (0.996 and 1.021 per rep), every query reading the same bytes as
+  before, none over 10% slower in both.
+- **Failed stage 1** as written, though the cold stages pass: retested as E61.
+
+### E61: E60 retested warm
+
+- Why: E60 failed its warm stage on a binary that does the same work as the one before it,
+  and E57's staged warm check (1, 2 and 8 CPUs) is the stricter test.
+- The same change, rebuilt with E60's review fixes: `--stats` prints the `read_join` the
+  opened repos carry, the join is computed only for `search` and `serve`, and an
+  end-to-end test checks the flags (`crates/scout-cli/tests/read_join.rs`).
+- Rule, set before the run ([run-e61.sh](../bench/harness/run-e61.sh)), stage by stage,
+  stopping at the first to fail: `search-ms.sh` geomean ≤ 1.011 in both passes and no
+  query over 1.035 in both, at 1 CPU, then 2, then 8. E60's cold stages stand: the change
+  since touches no code on that path.
+- Result ([verdict](../bench/results/E61-read-join-retest/verdict.txt)): **0.997 and 0.994** at 1 CPU, **0.990 and 0.991**
+  at 2, **1.002 and 0.997** at 8.
+- **Kept**: a t-class deployment that passes its caps reads ~10% faster cold, and the
+  default is what it was.
+  Only read hints change: `serve-ab.sh` checked each query's output across arms in both
+  cold stages and `search-ms.sh` at every CPU count, so the rg parity gate is not rerun
+  (as E50).
+- Next: every cold measurement so far ran at gp3's caps, and the box this targets is
+  capped by its instance. Later experiments should measure on the t-class caps too.
 
 ### Probe: what `anchored`'s anchors cost
 

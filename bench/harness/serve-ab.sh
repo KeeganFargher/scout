@@ -3,6 +3,8 @@
 # serve-ebs.sh per arm, alternating which goes first, then serveab.py pools them. An arm
 # may name its own index (`<name>=<bin-dir>@<index-dir>`) when the arms differ in what
 # they write, such as the content codec (E38); otherwise both serve <index-dir>.
+# SERVE_FLAGS_A and SERVE_FLAGS_B are each arm's extra server flags (serve-ebs.sh's
+# SERVE_FLAGS), so one build can be compared with itself under other flags (E60).
 # Usage: serve-ab.sh <out-dir> <nameA>=<bin-dir>[@<index-dir>] <nameB>=<bin-dir>[@<index-dir>] <index-dir> <mem> <queries.tsv> <reps> <warm-rounds> <cold-rounds>
 set -euo pipefail
 [ "$#" = 9 ] || { echo "expected out-dir armA armB index-dir mem queries reps warm-rounds cold-rounds" >&2; exit 2; }
@@ -17,9 +19,10 @@ one() {
     bin=${spec%@*} i=${spec##*@}
     [ -n "$i" ] || { echo "empty index in $1" >&2; exit 2; }
   fi
-  bash "$P/serve-ebs.sh" "$bin" "$i" "$mem" "$q" "$wr" "$cr" "$out/$2-${1%%=*}" > /dev/null
+  SERVE_FLAGS=$3 bash "$P/serve-ebs.sh" "$bin" "$i" "$mem" "$q" "$wr" "$cr" "$out/$2-${1%%=*}" > /dev/null
 }
+fa=${SERVE_FLAGS_A:-} fb=${SERVE_FLAGS_B:-}
 for r in $(seq "$reps"); do
-  if [ $((r % 2)) = 1 ]; then one "$a" "$r"; one "$b" "$r"; else one "$b" "$r"; one "$a" "$r"; fi
+  if [ $((r % 2)) = 1 ]; then one "$a" "$r" "$fa"; one "$b" "$r" "$fb"; else one "$b" "$r" "$fb"; one "$a" "$r" "$fa"; fi
 done
 python3 "$P/serveab.py" "$out" "${a%%=*}" "${b%%=*}" | tee "$out/summary.txt"

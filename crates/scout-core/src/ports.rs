@@ -202,10 +202,32 @@ pub trait Shard: Send + Sync {
     /// [`Shard::content`] and [`Shard::visit_content`] calls that will need it (E28).
     /// Without it a search whose index is not in the page cache waits on one read at a time
     /// per verifying thread, each a page fault; on a network volume (EBS) every one of those
-    /// pays the volume's latency. A hint: it reads nothing a later read would not, and a
-    /// backend with nothing to read ahead does nothing.
-    fn prefetch(&self, wants: &[Want<'_>]) -> Result<()>;
+    /// pays the volume's latency. A hint: it reads nothing a later read would not, but the
+    /// gaps of at most `join` bytes it reads through to join two wants into one request
+    /// ([`read_join`]); a backend with nothing to read ahead does nothing.
+    fn prefetch(&self, wants: &[Want<'_>], join: usize) -> Result<()>;
 }
+
+/// How far apart, in bytes, two wanted ranges may lie and still be read as one request
+/// ([`Shard::prefetch`]): the largest power of two at or under the volume's bytes per read,
+/// `bytes_per_sec / iops`, and at least a page, which the kernel reads whole anyway. Cold
+/// queries on a cloud volume are mostly bound by its IOPS, and a read saved is worth about
+/// that many bytes of transfer, less the gap's bytes on a query bound by bandwidth. On gp3
+/// (125 MB/s, 3000 IOPS: 41.7 KB) that is 32 KiB, which E42 measured cold at 0.73 against 4
+/// KiB and 0.78 at 16 (a sweep put 64 KiB at 0.87, 128 at 1.07). On a t-class instance's own
+/// EBS baseline (~43 MB/s, 2000: 21.5 KB) it is 16 KiB, 0.91 cold against 32 there, and
+/// 1.09 on gp3 (E59): each volume's best gap loses on the other, so it is the volume's.
+pub fn read_join(bytes_per_sec: u64, iops: u64) -> Result<usize> {
+    if iops == 0 {
+        return Err(crate::Error::Invalid("a volume's IOPS must be > 0".into()));
+    }
+    let per_read = (bytes_per_sec / iops).max(PAGE);
+    let join = 1u64 << (63 - per_read.leading_zeros());
+    usize::try_from(join).map_err(|_| crate::Error::Invalid(format!("read join {join} does not fit in memory")))
+}
+
+/// The page the kernel reads at a time: the least [`read_join`] there is.
+const PAGE: u64 = 4096;
 
 /// Docs carrying the marker pseudo-trigrams [`ALWAYS_SEARCH`] and [`READER_MODE`].
 ///
@@ -279,3 +301,19 @@ pub trait ShardStore: Send + Sync {
 
 /// Held while writing; releases the store's writer lock when dropped.
 pub type WriterLock = Box<dyn std::any::Any + Send>;
+
+#[cfg(test)]
+mod tests {
+    use super::read_join;
+
+    #[test]
+    fn read_join_is_the_largest_power_of_two_at_or_under_a_reads_worth_of_bytes() {
+        // gp3: 41.7 KB a read; a t-class instance's EBS baseline: 21.5 KB (E59).
+        assert_eq!(read_join(125_000_000, 3000).unwrap(), 32 << 10);
+        assert_eq!(read_join(43_000_000, 2000).unwrap(), 16 << 10);
+        // A power of two exactly, and never under a page.
+        assert_eq!(read_join(64 << 10, 1).unwrap(), 64 << 10);
+        assert_eq!(read_join(1_000_000, 3000).unwrap(), 4096);
+        assert!(read_join(125_000_000, 0).is_err());
+    }
+}

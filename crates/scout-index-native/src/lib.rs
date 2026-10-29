@@ -95,19 +95,6 @@ const BLOCK_LEN: usize = 12;
 const LZ4_MAX_EXPANSION: usize = 255;
 /// The page size the read advice is sized against: 4 KiB on every target scout serves.
 const PAGE: usize = 4096;
-/// The largest gap between two candidates' content that `prefetch` reads through to queue
-/// them as one range. Most cold queries on gp3 were bound by its 3000 IOPS, not its
-/// 125 MB/s: their reads averaged 11–25 KiB, and lifting the IOPS cap alone made the
-/// largest of them 2.1–3.3x faster (E42). One read saved is worth ~41 KB of transfer (125 MB/s ÷ 3000),
-/// less the bytes the gap adds to queries already bound by bandwidth. Against 4 KiB, cold
-/// geomean 0.73 at 32 KiB and 0.78 at 16 (separate A/Bs); one sweep pass put 64 KiB at
-/// 0.87 and 128 KiB at 1.07.
-///
-/// The gaps are read on top of the caller's window, which counts content bytes only: a
-/// block of n candidates queues at most (n - 1) × 32 KiB more. Measured, that was 25% more
-/// bytes over a cold pass, and the server's peak memory rose 60–120 MiB of 4 GiB, all
-/// reclaimable page cache.
-const PREFETCH_GAP: usize = 32 << 10;
 const VAL_LEN: usize = 12;
 /// Keys per fence block: 128 × 4 bytes is one short cache-friendly run (usually within one
 /// page), and the fence of a 44k-trigram shard is ~350 keys, ~1.4 KiB.
@@ -829,7 +816,7 @@ impl Shard for NativeShard {
         Ok(())
     }
 
-    fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+    fn prefetch(&self, wants: &[Want<'_>], join: usize) -> Result<()> {
         let mut ranges = Vec::with_capacity(wants.len());
         for want in wants {
             let stored = self.stored(want.doc)?;
@@ -844,7 +831,11 @@ impl Shard for NativeShard {
                 }
             }
         }
-        for r in coalesce(ranges, PREFETCH_GAP) {
+        // The gaps joined are read on top of the caller's window, which counts content bytes
+        // only: a block of n candidates queues at most (n - 1) × `join` more. At gp3's 32 KiB
+        // that was 25% more bytes over a cold pass, and the server's peak memory rose 60–120
+        // MiB of 4 GiB, all reclaimable page cache (E42).
+        for r in coalesce(ranges, join) {
             self.will_need(r)?;
         }
         Ok(())
@@ -853,7 +844,7 @@ impl Shard for NativeShard {
 
 /// `ranges`, in order, with each one that starts at most `gap` bytes after the previous
 /// run ends joined to that run. A filtered scan skips the files between candidates, and on
-/// a cloud disk one read across a short gap costs less than two reads (`PREFETCH_GAP`). A
+/// a cloud disk one read across a short gap costs less than two reads (`read_join`). A
 /// range that starts before the run ends (out of order, or overlapping) begins a new run:
 /// joining it could extend a run backwards over bytes no one asked for.
 fn coalesce(ranges: Vec<std::ops::Range<usize>>, gap: usize) -> Vec<std::ops::Range<usize>> {
@@ -1078,6 +1069,9 @@ mod tests {
     /// `(path, content, unit blocks)`.
     type Doc<'a> = (&'a str, &'a [u8], &'a [&'a [u8]]);
 
+    /// gp3's `read_join` (E42).
+    const JOIN: usize = 32 << 10;
+
     const MAPPED: NativeBackend = NativeBackend::new(LookupHome::Map, ContentCodec::Raw);
 
     fn heap(budget: u64) -> NativeBackend {
@@ -1087,7 +1081,7 @@ mod tests {
 
     #[test]
     fn prefetch_joins_ranges_across_short_gaps_only() {
-        let g = PREFETCH_GAP;
+        let g = JOIN;
         // Adjacent, a gap of exactly `g`, and one byte more.
         assert_eq!(coalesce(vec![0..10, 10..20, 20 + g..30 + g], g), vec![0..30 + g]);
         assert_eq!(coalesce(vec![0..10, 11 + g..20 + g], g), vec![0..10, 11 + g..20 + g]);
@@ -1146,10 +1140,10 @@ mod tests {
         }
         assert!(s.markers().always_search.is_empty() && s.markers().reader_mode.is_empty());
         // Adjacent and scattered docs, and none; a doc past the table fails as content does.
-        s.prefetch(&whole(&[0, 1, 2])).unwrap();
-        s.prefetch(&whole(&[0, 2])).unwrap();
-        s.prefetch(&[]).unwrap();
-        assert!(s.prefetch(&whole(&[1, 3])).is_err());
+        s.prefetch(&whole(&[0, 1, 2]), JOIN).unwrap();
+        s.prefetch(&whole(&[0, 2]), JOIN).unwrap();
+        s.prefetch(&[], JOIN).unwrap();
+        assert!(s.prefetch(&whole(&[1, 3]), JOIN).is_err());
         assert_eq!(content(&*s, 2), b"nothing");
     }
 
@@ -1354,7 +1348,7 @@ mod tests {
             let s = MAPPED.open(&path).unwrap();
             let err = s.content(0, &mut Vec::new()).err().unwrap().to_string();
             assert!(err.contains("content out of bounds"), "{content_off}: {err}");
-            assert!(s.prefetch(&whole(&[0])).is_err(), "{content_off}");
+            assert!(s.prefetch(&whole(&[0]), JOIN).is_err(), "{content_off}");
         }
     }
 
@@ -1484,7 +1478,7 @@ mod tests {
                 let doc = DocId::try_from(doc).unwrap();
                 assert_eq!(s.content(doc, &mut buf).unwrap(), *c, "{:?} doc {doc}", backend.codec);
             }
-            s.prefetch(&whole(&[0, 1, 2, 3])).unwrap();
+            s.prefetch(&whole(&[0, 1, 2, 3]), JOIN).unwrap();
             sizes.push(std::fs::metadata(&path).unwrap().len());
         }
         assert!(sizes[1] * 3 < sizes[0], "lz4 shard {} vs raw {}", sizes[1], sizes[0]);
@@ -1556,7 +1550,7 @@ mod tests {
                         .is_err()
                 );
             }
-            s.prefetch(&[Want { doc: 1, extent: Extent::Units(&asked) }, Want { doc: 0, extent: Extent::Whole }])
+            s.prefetch(&[Want { doc: 1, extent: Extent::Units(&asked) }, Want { doc: 0, extent: Extent::Whole }], JOIN)
                 .unwrap();
         }
     }

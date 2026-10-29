@@ -51,6 +51,9 @@ pub struct ServeOptions {
     /// Bytes of each new generation's shard files to read into the page cache in the
     /// background (E45); 0 reads none.
     pub warm_bytes: u64,
+    /// How far apart the shards' wanted content may lie and still be read as one request,
+    /// for the index's volume (`scout_core::ports::read_join`, E60).
+    pub read_join: usize,
 }
 
 struct Generation {
@@ -91,6 +94,7 @@ struct State {
     last_cycle: Mutex<Option<LastCycle>>,
     threads: usize,
     table_bytes: u64,
+    read_join: usize,
     max_output_bytes: usize,
     search_timeout: Duration,
     /// The searches running and when the last ended: the warm-up reads only while idle.
@@ -116,12 +120,13 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
     let token = Token::from_env(&cfg.token_env)?;
     let git = cfg.git(token.clone())?;
     // Serve what is already indexed right away; the first cycle starts immediately after.
-    let first = open_generation(store, store.load_catalog()?, 1, opts.threads, opts.table_bytes)?;
+    let first = open_generation(store, store.load_catalog()?, 1, opts.threads, opts.table_bytes, opts.read_join)?;
     let state = Arc::new(State {
         current: RwLock::new(Arc::new(first)),
         last_cycle: Mutex::new(None),
         threads: opts.threads,
         table_bytes: opts.table_bytes,
+        read_join: opts.read_join,
         max_output_bytes: opts.max_output_bytes,
         search_timeout: opts.search_timeout,
         activity: warm::Activity::default(),
@@ -212,7 +217,7 @@ fn reconcile(store: &FsStore, state: &State, next_id: &mut u64) {
     if fingerprint(&catalog) == fingerprint(&state.generation().catalog) {
         return;
     }
-    match open_generation(store, catalog, *next_id, state.threads, state.table_bytes) {
+    match open_generation(store, catalog, *next_id, state.threads, state.table_bytes, state.read_join) {
         Ok(g) => {
             *state.current.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(g);
             err_line(&format!("serving generation {next_id}"));
@@ -286,6 +291,7 @@ fn open_generation(
     id: u64,
     threads: usize,
     table_bytes: u64,
+    read_join: usize,
 ) -> anyhow::Result<Generation> {
     let indexed: Vec<String> = catalog.repos.iter().filter(|r| r.index.is_some()).map(|r| r.name.clone()).collect();
     let repos = if indexed.is_empty() {
@@ -295,7 +301,15 @@ fn open_generation(
         let ctx = Arc::new(FsContext::new(ChangeDetection::Scan));
         // Reading only: the codec is a writer's choice.
         let native = NativeBackend::new(LookupHome::Heap(Arc::new(TableBudget::new(table_bytes))), ContentCodec::Raw);
-        crate::open_repos(store, &catalog, &indexed, threads, false, &ctx, &native)?
+        crate::open_repos(
+            store,
+            &catalog,
+            &indexed,
+            threads,
+            false,
+            &ctx,
+            &crate::ShardReads { native: &native, read_join },
+        )?
     };
     Ok(Generation { id, catalog, repos })
 }

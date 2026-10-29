@@ -47,5 +47,5 @@ for mode in ("warm", "cold"):
 
 for arm in (a, b):
     # ready.txt is key=value pairs; ready_ms is the first (E59 added the volume's caps).
-    ready = [int(dict(kv.split("=") for kv in open(os.path.join(d, "ready.txt")).read().split())["ready_ms"]) for d in reps(arm)]
+    ready = [int(dict(kv.split("=", 1) for kv in open(os.path.join(d, "ready.txt")).read().split())["ready_ms"]) for d in reps(arm)]
     print(f"{arm} time to ready on an evicted index: {ready} ms")

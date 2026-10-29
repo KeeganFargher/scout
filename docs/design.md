@@ -191,8 +191,11 @@ broad queries; larger blocks are compressed only when that saves space.
    verifier asks the kernel to read its candidates' content ahead in ~4 MiB blocks
    (`MADV_WILLNEED`, queued a block before it is needed), so a cold or evicted index is
    read in large requests instead of one 128 KiB read-around per page fault (E28).
-   Candidates at most 32 KiB apart are queued as one range: on gp3 most cold queries are bound
-   by reads per second, and one read saved is worth more than the gap's bytes (E42).
+   Candidates close enough are queued as one range: on a cloud volume most cold queries are
+   bound by reads per second, and one read saved is worth more than the gap's bytes (E42).
+   How close is the volume's bytes per read, from `--read-mbps` and `--read-iops`, rounded
+   down to a power of two: 32 KiB on gp3 (the default), 16 KiB on a t-class instance's own
+   EBS baseline, where each loses ~9% cold on the other's volume (E59, E60).
    A candidate bigger than one unit (64 KiB) is read only at its candidate units: the
    blocks table stores each block's count of lines before it, so the searcher numbers
    those units' lines from where they sit in the file (E32); counts and `-m` carry across

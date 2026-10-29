@@ -58,7 +58,10 @@ fit in memory. `serve` copies shard tables to the heap up to an eighth of usable
 (`--table-mb`); the rest stay mapped. After a restart it reads the index into the page
 cache in the background while no search runs, if it fits the budget (`--warm-mb`; by
 default usable RAM less two generations of tables, three quarters of it); a larger index
-is not read. Measured with 137 repos (54k files, a 1.0 GiB / 1.07 GB index):
+is not read. On a cloud volume, `--read-mbps` and `--read-iops` (gp3's 125 and 3000 by
+default) set how far apart two files may lie and still be read in one request (E60): pass
+the lower of the volume's and the instance's EBS baseline, e.g. ~43 and 2000 on a
+t3.medium, which reads ~9% faster cold for it (E59). Measured with 137 repos (54k files, a 1.0 GiB / 1.07 GB index):
 
 - **1 CPU / 2 GiB** works: indexing 16 s at a 130 MiB peak, selective searches 2–7 ms
   served (12–24 ms as a fresh CLI process), about 29 served searches a second.

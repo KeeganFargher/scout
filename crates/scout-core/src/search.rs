@@ -81,6 +81,9 @@ pub struct RepoHandle {
     pub snapshot: Option<Vec<u8>>,
     /// `RepoIndex::listing_digest` of the opened index.
     pub listing_digest: Option<u128>,
+    /// How far apart its shards' wanted content may lie and still be read as one request,
+    /// for the volume the shards live on ([`crate::ports::read_join`], E60).
+    pub read_join: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -981,7 +984,7 @@ where
     let root = repo.source.display_root();
     let shard = repo.shards[si].as_ref();
     let wants = cands.docs[docs].iter().map(|c| want(shard, cands, c, reading)).collect::<Result<Vec<_>>>()?;
-    let mut ahead = ReadAhead::new(shard, &wants)?;
+    let mut ahead = ReadAhead::new(shard, &wants, repo.read_join)?;
     // Where compressed docs decode (E29); reused across the run.
     let mut buf = Vec::new();
     // Reuse path storage too: broad scans visit hundreds of thousands of files.
@@ -1037,8 +1040,8 @@ fn want<'a>(shard: &dyn Shard, cands: &'a ShardCandidates, c: &Candidate, readin
 /// memory pressure can evict them. Counted in content bytes (`meta.size`), the only size
 /// the port exposes: on an lz4 index (E29) a block is ~1.3 MiB of disk, so the window
 /// holds ~3x fewer bytes in flight; E29 measured it as is rather than tuned for that. A
-/// shard may also read the gaps between candidates it joins into one request (the native
-/// one, up to 32 KiB each, E42), on top of this count. A doc bigger than a block is a block
+/// shard may also read the gaps between candidates it joins into one request (up to the
+/// repo's `read_join` each, E42, E60), on top of this count. A doc bigger than a block is a block
 /// by itself and advised whole. All of it only queues page cache reads, reclaimable, not
 /// process memory.
 const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
@@ -1048,6 +1051,8 @@ const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
 struct ReadAhead<'a> {
     shard: &'a dyn Shard,
     docs: &'a [Want<'a>],
+    /// The repo's `read_join`, handed to every `prefetch`.
+    join: usize,
     /// `docs[..end]` are queued.
     end: usize,
     /// Where the block after the current one starts: reaching it queues another.
@@ -1055,8 +1060,8 @@ struct ReadAhead<'a> {
 }
 
 impl<'a> ReadAhead<'a> {
-    fn new(shard: &'a dyn Shard, docs: &'a [Want<'a>]) -> Result<Self> {
-        let mut r = Self { shard, docs, end: 0, trigger: 0 };
+    fn new(shard: &'a dyn Shard, docs: &'a [Want<'a>], join: usize) -> Result<Self> {
+        let mut r = Self { shard, docs, join, end: 0, trigger: 0 };
         r.end = r.queue_block(0)?;
         Ok(r)
     }
@@ -1086,7 +1091,7 @@ impl<'a> ReadAhead<'a> {
             };
             end += 1;
         }
-        self.shard.prefetch(&self.docs[start..end])?;
+        self.shard.prefetch(&self.docs[start..end], self.join)?;
         Ok(end)
     }
 }
@@ -1413,6 +1418,9 @@ mod tests {
     use super::*;
     use crate::ports::BlockVisitor;
 
+    /// gp3's `read_join` (E42), for every test repo and read-ahead.
+    const JOIN: usize = 32 << 10;
+
     /// An in-memory shard where every unit is a candidate for every trigram: the regex
     /// alone decides what matches, which is all the chunking test needs.
     struct MemShard(Vec<(String, Vec<u8>)>);
@@ -1459,7 +1467,7 @@ mod tests {
             visit(self.content(want.doc, buf)?, 1)?;
             Ok(())
         }
-        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>], _: usize) -> Result<()> {
             Ok(())
         }
     }
@@ -1494,6 +1502,7 @@ mod tests {
             shards: vec![Box::new(MemShard(vec![("name:colon.txt".into(), content.clone())]))],
             snapshot: None,
             listing_digest: None,
+            read_join: JOIN,
         };
         let path = display_path("/root", "name:colon.txt");
         for (pattern, fixed) in [
@@ -1572,6 +1581,7 @@ mod tests {
                     .collect(),
                 snapshot: None,
                 listing_digest: None,
+                read_join: JOIN,
             })
             .collect();
         let handles: Vec<&RepoHandle> = repos.iter().collect();
@@ -1624,6 +1634,7 @@ mod tests {
                     .collect(),
                 snapshot: None,
                 listing_digest: None,
+                read_join: JOIN,
             })
             .collect();
         let handles: Vec<&RepoHandle> = repos.iter().collect();
@@ -1700,6 +1711,7 @@ mod tests {
             shards: vec![Box::new(MemShard(docs))],
             snapshot: None,
             listing_digest: None,
+            read_join: JOIN,
         };
         for (threads, chunk) in [(1, u64::MAX), (2, 1), (4, 1), (8, 200)] {
             let opts = SearchOptions {
@@ -1775,7 +1787,7 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("candidates never reads content")
         }
-        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>], _: usize) -> Result<()> {
             unreachable!("candidates never reads content")
         }
     }
@@ -1904,7 +1916,7 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("planning never reads content")
         }
-        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>], _: usize) -> Result<()> {
             unreachable!("planning never reads content")
         }
     }
@@ -2004,7 +2016,8 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("read-ahead only queues content")
         }
-        fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+        fn prefetch(&self, wants: &[Want<'_>], join: usize) -> Result<()> {
+            assert_eq!(join, JOIN, "the read-ahead hands on the repo's join");
             self.queued.lock().unwrap().push(wants.iter().map(|w| w.doc).collect());
             Ok(())
         }
@@ -2020,7 +2033,7 @@ mod tests {
         let shard = SizedShard { sizes, queued: Mutex::new(Vec::new()) };
         let docs: Vec<DocId> = (0..23).filter(|d| d % 4 != 3).collect();
         let wants: Vec<Want<'_>> = docs.iter().map(|&doc| Want { doc, extent: Extent::Whole }).collect();
-        let mut ahead = ReadAhead::new(&shard, &wants).unwrap();
+        let mut ahead = ReadAhead::new(&shard, &wants, JOIN).unwrap();
         let queued = || shard.queued.lock().unwrap().concat();
         for at in 0..docs.len() {
             ahead.before(at).unwrap();
@@ -2035,7 +2048,7 @@ mod tests {
         assert!(calls.iter().any(|c| c.last() == Some(&10)), "the big file ends its block: {calls:?}");
         // Nothing to queue still makes one empty call, which the backend ignores.
         let none: Vec<Want<'_>> = Vec::new();
-        let mut ahead = ReadAhead::new(&shard, &none).unwrap();
+        let mut ahead = ReadAhead::new(&shard, &none, JOIN).unwrap();
         ahead.before(0).unwrap();
     }
 }
