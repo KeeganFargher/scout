@@ -6,7 +6,9 @@
 # (--stats prints read_join; the join is computed only for search and serve), so its code
 # layout differs. An A/A that day (bench/results/E60-read-join/search-ms-2-aa.txt): 1.004
 # and 0.999, worst query 1.032.
-# Rule, set before this run, stage by stage, stopping at the first that fails, as E57:
+# Rule, stage by stage, stopping at the first that fails, as E57. The warm stages were set
+# before the first build ran; the gp3 stage and the perf tail were added after that build
+# passed, for the final build, which stopped at 1 CPU, so they never ran (run-e61-cert.sh):
 # search-ms.sh geomean E61/before <= 1.011 in both passes and no query over 1.035 in both,
 # at 1 CPU, then 2, then 8; then serve-ab.sh on gp3's caps, the build before against E61
 # with no flags: cold pooled <= 1.01, no query over 10% slower in both reps (E60's stage 3,
@@ -36,7 +38,10 @@ grep -v -P "^(short_unindexable|huge_output)	" "$P/../queries-big.tsv" > /tmp/q1
 bash "$P/serve-ab.sh" "$OUT/ab-gp3" "base=$A" "e61=$B" "$I" 4G /tmp/q18.tsv 2 1 1
 python3 "$P/serveab-reps.py" "$OUT/ab-gp3" base e61 | tee "$OUT/ab-gp3/reps.txt"
 # Raw perf stat of a warm files_mode search, 9 runs per binary, interleaved twice.
-PERF=$(ls -d /usr/lib/linux-tools/*/perf | head -1)
+shopt -s nullglob
+perfs=(/usr/lib/linux-tools/*/perf)
+[ "${#perfs[@]}" -gt 0 ] || { echo "no perf under /usr/lib/linux-tools" >&2; exit 2; }
+PERF=${perfs[0]}
 for b in "$A" "$B" "$A" "$B"; do
   echo "== $b"
   taskset -c 0-1 "$b/scout" --index-dir "$I" search --freshness off --threads 2 -l -- "#include <vector>" > /dev/null || true

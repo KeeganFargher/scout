@@ -6,8 +6,8 @@
 # The volume's caps are gp3's baseline, 125 MB/s and 3000 IOPS, unless EBS_MBPS and EBS_IOPS
 # name others: a t3.medium's own EBS baseline (~43 MB/s, 2000 IOPS) is below gp3's, so a 4
 # GiB t-class box is capped by the instance (E59). They are written to ready.txt.
-# SERVE_FLAGS, if set, is appended to the server's command line (E60: --read-mbps,
-# --read-iops), split on spaces.
+# SERVE_FLAGS, if set, is appended to the server's command line, after `serve` (E60:
+# --read-mbps, --read-iops, which only `search` and `serve` take), split on spaces.
 # Usage: [EBS_MBPS=n EBS_IOPS=n] [SERVE_FLAGS=...] serve-ebs.sh <bin-dir> <index-dir> <mem> <queries.tsv> <warm-rounds> <cold-rounds> <out-dir>
 set -euo pipefail
 [ "$#" = 7 ] || { echo "expected bin-dir index-dir mem queries warm-rounds cold-rounds out-dir" >&2; exit 2; }

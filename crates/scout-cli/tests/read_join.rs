@@ -1,5 +1,6 @@
-//! End-to-end: `--read-mbps` and `--read-iops` set the read join a search runs with (E60),
-//! gp3's 32 KiB by default, and a volume with no reads is refused by the argument parser.
+//! End-to-end: `search`'s `--read-mbps` and `--read-iops` set the read join its repos are
+//! opened with (E60), gp3's 32 KiB by default; other commands refuse them, and a volume with
+//! no reads is refused by the argument parser.
 
 // Helpers outside #[test] fns are not covered by clippy's allow-unwrap-in-tests; a panic
 // is exactly the failure report a test wants.
@@ -28,19 +29,17 @@ fn the_volumes_caps_set_the_read_join() {
     std::fs::write(repo.join("x.txt"), "the zebrafish swims\n").unwrap();
     assert!(scout(&index, &["add", repo.to_str().unwrap()]).status.success());
     assert!(scout(&index, &["index"]).status.success());
-    // gp3: 41.7 KB a read; a t3.medium's EBS baseline: 21.5 KB. Global flags go either
-    // side of the subcommand.
+    // gp3: 41.7 KB a read; a t3.medium's EBS baseline: 21.5 KB.
     assert_eq!(join(&index, &[]), 32 << 10);
     assert_eq!(join(&index, &["--read-mbps", "43", "--read-iops", "2000"]), 16 << 10);
-    let out = Command::new(env!("CARGO_BIN_EXE_scout"))
-        .args(["--read-mbps", "43", "--read-iops", "2000", "--index-dir"])
-        .arg(&index)
-        .args(["search", "--stats", "-F", "zebrafish"])
-        .output()
-        .unwrap();
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert_eq!(out.status.code(), Some(0), "{err}");
-    assert!(err.contains("read_join=16384"), "{err}");
+    // Only the commands that read shards take the volume's caps: any other refuses them
+    // rather than ignoring them.
+    for args in [&["--read-mbps", "43", "index"][..], &["index", "--read-mbps", "43"]] {
+        let out = scout(&index, args);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert_eq!(out.status.code(), Some(2), "{err}");
+        assert!(err.contains("unexpected argument '--read-mbps'"), "{err}");
+    }
     // A volume that serves no reads is refused by the parser, before anything is opened:
     // exit 2 alone would not say so, since any error exits 2.
     let out = scout(&index, &["search", "--read-iops", "0", "-F", "zebrafish"]);

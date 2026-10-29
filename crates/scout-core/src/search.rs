@@ -1422,8 +1422,15 @@ mod tests {
     const JOIN: usize = 32 << 10;
 
     /// An in-memory shard where every unit is a candidate for every trigram: the regex
-    /// alone decides what matches, which is all the chunking test needs.
-    struct MemShard(Vec<(String, Vec<u8>)>);
+    /// alone decides what matches, which is all the chunking test needs. It records the join
+    /// each `prefetch` is handed, so a test can see the repo's join reach its shards.
+    struct MemShard(Vec<(String, Vec<u8>)>, std::sync::Arc<Mutex<Vec<usize>>>);
+
+    impl MemShard {
+        fn new(docs: Vec<(String, Vec<u8>)>) -> Self {
+            Self(docs, std::sync::Arc::default())
+        }
+    }
 
     static NO_MARKERS: crate::ports::Markers =
         crate::ports::Markers { always_search: Vec::new(), reader_mode: Vec::new() };
@@ -1467,7 +1474,8 @@ mod tests {
             visit(self.content(want.doc, buf)?, 1)?;
             Ok(())
         }
-        fn prefetch(&self, _: &[Want<'_>], _: usize) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>], join: usize) -> Result<()> {
+            self.1.lock().unwrap().push(join);
             Ok(())
         }
     }
@@ -1499,7 +1507,7 @@ mod tests {
         let repo = RepoHandle {
             name: "memory".into(),
             source: Box::new(MemSource("/root".into())),
-            shards: vec![Box::new(MemShard(vec![("name:colon.txt".into(), content.clone())]))],
+            shards: vec![Box::new(MemShard::new(vec![("name:colon.txt".into(), content.clone())]))],
             snapshot: None,
             listing_digest: None,
             read_join: JOIN,
@@ -1558,6 +1566,50 @@ mod tests {
     }
 
     #[test]
+    fn each_repos_read_join_reaches_its_shards_prefetches() {
+        // Two repos on volumes with different joins (gp3's and a t3.medium's, E60), searched
+        // together: every prefetch of a repo's shard is handed that repo's join.
+        let joins: Vec<std::sync::Arc<Mutex<Vec<usize>>>> = (0..2).map(|_| std::sync::Arc::default()).collect();
+        let repos: Vec<RepoHandle> = [JOIN, 16 << 10]
+            .into_iter()
+            .zip(&joins)
+            .enumerate()
+            .map(|(r, (join, seen))| RepoHandle {
+                name: format!("r{r}"),
+                source: Box::new(MemSource(format!("/r{r}"))),
+                shards: vec![Box::new(MemShard(
+                    (0..5).map(|d| (format!("d{d}.txt"), b"needle
+".to_vec())).collect(),
+                    std::sync::Arc::clone(seen),
+                ))],
+                snapshot: None,
+                listing_digest: None,
+                read_join: join,
+            })
+            .collect();
+        let opts = SearchOptions {
+            pattern: "needle".into(),
+            fixed_strings: false,
+            case: CaseMode::Sensitive,
+            word: false,
+            line_number: false,
+            output: OutputMode::FilesWithMatches,
+            max_count: None,
+            threads: 2,
+            freshness: Freshness::Off,
+            limits: Limits::default(),
+        };
+        let handles: Vec<&RepoHandle> = repos.iter().collect();
+        let report = search(&opts, &handles, &mut Vec::new()).unwrap();
+        assert_eq!(report.stats.matched_files, 10);
+        for (repo, seen) in repos.iter().zip(&joins) {
+            let seen = seen.lock().unwrap();
+            assert!(!seen.is_empty(), "{} was never prefetched", repo.name);
+            assert!(seen.iter().all(|&j| j == repo.read_join), "{}: {seen:?}", repo.name);
+        }
+    }
+
+    #[test]
     fn ranking_does_not_depend_on_chunking_or_threads() {
         // As the plain search's test below: docs of varied sizes, some without a match, so
         // chunk boundaries land everywhere, and identical copies, so copies collapse. One
@@ -1576,7 +1628,7 @@ mod tests {
                                 (format!("s{s}/d{d}.txt"), body.into_bytes())
                             })
                             .collect();
-                        Box::new(MemShard(docs)) as Box<dyn Shard>
+                        Box::new(MemShard::new(docs)) as Box<dyn Shard>
                     })
                     .collect(),
                 snapshot: None,
@@ -1629,7 +1681,7 @@ mod tests {
                                 (format!("s{s}/d{d}.txt"), body.into_bytes())
                             })
                             .collect();
-                        Box::new(MemShard(docs)) as Box<dyn Shard>
+                        Box::new(MemShard::new(docs)) as Box<dyn Shard>
                     })
                     .collect(),
                 snapshot: None,
@@ -1708,7 +1760,7 @@ mod tests {
         let repo = RepoHandle {
             name: "r".into(),
             source: Box::new(MemSource("/r".into())),
-            shards: vec![Box::new(MemShard(docs))],
+            shards: vec![Box::new(MemShard::new(docs))],
             snapshot: None,
             listing_digest: None,
             read_join: JOIN,
