@@ -6,7 +6,9 @@
 //! `--freshness off`: the working copies only change inside a cycle, which publishes the
 //! matching index before the swap (docs/design.md, "Hosted sync").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -28,7 +30,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::ingest::{Budget, Content};
 use crate::sync::{log_report, run_cycle};
-use crate::{err_line, host};
+use crate::{err_line, host, warm};
 
 pub struct ServeOptions {
     pub listen: String,
@@ -46,6 +48,9 @@ pub struct ServeOptions {
     pub content: Content,
     /// Bytes of shard tables each generation may hold on the heap (E37).
     pub table_bytes: u64,
+    /// Bytes of each new generation's shard files to read into the page cache in the
+    /// background (E45); 0 reads none.
+    pub warm_bytes: u64,
 }
 
 struct Generation {
@@ -88,6 +93,13 @@ struct State {
     table_bytes: u64,
     max_output_bytes: usize,
     search_timeout: Duration,
+    /// The searches running and when the last ended: the warm-up reads only while idle.
+    activity: warm::Activity,
+    /// The generation the last warm-up started on, and its progress.
+    warm: Mutex<Option<(u64, Arc<warm::Progress>)>>,
+    /// The shards of the last generation whose warm-up read all of it: the next walk skips
+    /// those still served.
+    warmed: Mutex<Arc<HashSet<PathBuf>>>,
 }
 
 impl State {
@@ -112,6 +124,9 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
         table_bytes: opts.table_bytes,
         max_output_bytes: opts.max_output_bytes,
         search_timeout: opts.search_timeout,
+        activity: warm::Activity::default(),
+        warm: Mutex::new(None),
+        warmed: Mutex::new(Arc::default()),
     });
 
     let server =
@@ -148,6 +163,8 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
     // replaced before the cycle's garbage collection deletes them.
     let mut next_id = 2;
     loop {
+        // The cycle and the opens around it read and write the disk: the warm-up waits.
+        let cycle = state.activity.start();
         reconcile(store, &state, &mut next_id);
         match run_cycle(store, cfg, &git, token.as_ref(), opts.budget, opts.content) {
             Ok(report) => {
@@ -177,6 +194,10 @@ pub fn serve(store: &FsStore, cfg: &Config, opts: &ServeOptions) -> anyhow::Resu
             }
         }
         reconcile(store, &state, &mut next_id);
+        drop(cycle);
+        if opts.warm_bytes > 0 {
+            start_warm(store, &state, opts.warm_bytes);
+        }
         std::thread::sleep(Duration::from_secs(cfg.interval_secs));
     }
 }
@@ -199,6 +220,59 @@ fn reconcile(store: &FsStore, state: &State, next_id: &mut u64) {
         }
         Err(e) => err_line(&format!("opening generation {next_id}: {e:#}")),
     }
+}
+
+/// Starts reading the served generation's shards into the page cache, unless a warm-up
+/// already started on it. It starts after a cycle, not at the first open: the first open
+/// and cycle read the tables and index what changed, and a warm-up then would delay the
+/// first answers; later cycles hold it off through `activity`. A walk stops when its
+/// generation is no longer served. The next generation's shards are mostly the last's, so
+/// its walk rereads them from the cache (`walk` reads only an index that fits).
+fn start_warm(store: &FsStore, state: &Arc<State>, budget: u64) {
+    let generation = state.generation();
+    let mut warm = state.warm.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if warm.as_ref().is_some_and(|(id, _)| *id == generation.id) {
+        return;
+    }
+    let files: anyhow::Result<Vec<std::path::PathBuf>> = generation
+        .catalog
+        .repos
+        .iter()
+        .filter_map(|r| r.index.as_ref())
+        .flat_map(|i| &i.shards)
+        .map(|s| Ok(store.local_path(s)?))
+        .collect();
+    let files = match files {
+        Ok(f) => f,
+        Err(e) => return err_line(&format!("warm-up of generation {}: {e:#}", generation.id)),
+    };
+    let progress = Arc::new(warm::Progress::default());
+    *warm = Some((generation.id, Arc::clone(&progress)));
+    drop(warm);
+    let warmed = Arc::clone(&state.warmed.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let (state, id) = (Arc::clone(state), generation.id);
+    std::thread::spawn(move || {
+        let idle = || state.activity.wait_idle();
+        let stop = || state.generation().id != id;
+        let result = warm::walk(&files, &warmed, budget, &progress, idle, stop);
+        if result.is_ok() {
+            // Only a walk that finished: one that stopped or failed left shards unread.
+            // Before `finish`, so a generation served after `/status` says done skips them.
+            *state.warmed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Arc::new(files.into_iter().collect());
+        }
+        progress.finish(&result);
+        match result {
+            Ok(()) => err_line(&format!(
+                "warm-up of generation {id}: read {} MiB, {} MiB read before",
+                progress.read.load(Ordering::Acquire) >> 20,
+                progress.skipped.load(Ordering::Acquire) >> 20
+            )),
+            Err(warm::Ended::Stopped) => {}
+            // Also in `/status`, as `ended`.
+            Err(e) => err_line(&format!("warm-up of generation {id}: {e}")),
+        }
+    });
 }
 
 /// Opens every indexed repo of `catalog`. Unindexed repos are left out rather than
@@ -252,6 +326,7 @@ fn text(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn search_response(state: &State, query: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let _search = state.activity.start();
     let params: Vec<(String, String)> = form_urlencoded::parse(query.as_bytes()).into_owned().collect();
     let generation = state.generation();
     let limits = Limits {
@@ -437,6 +512,20 @@ struct Status<'a> {
     generation: u64,
     repos: Vec<RepoStatus<'a>>,
     last_cycle: Option<LastCycle>,
+    /// The last warm-up's progress, once one started.
+    warm: Option<WarmStatus>,
+}
+
+#[derive(Serialize)]
+struct WarmStatus {
+    generation: u64,
+    bytes_read: u64,
+    /// Read by an earlier generation's walk, so not read again.
+    bytes_skipped: u64,
+    bytes_total: u64,
+    done: bool,
+    /// Why it ended before reading everything: over the budget, stopped, or failed.
+    ended: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -451,6 +540,15 @@ struct RepoStatus<'a> {
 fn status_response(state: &State) -> Response<std::io::Cursor<Vec<u8>>> {
     let generation = state.generation();
     let last_cycle = state.last_cycle.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let warm =
+        state.warm.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|(id, p)| WarmStatus {
+            generation: *id,
+            bytes_read: p.read.load(Ordering::Acquire),
+            bytes_skipped: p.skipped.load(Ordering::Acquire),
+            bytes_total: p.total.load(Ordering::Acquire),
+            done: p.done.load(Ordering::Acquire),
+            ended: p.ended.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+        });
     let status = Status {
         generation: generation.id,
         repos: generation
@@ -466,6 +564,7 @@ fn status_response(state: &State) -> Response<std::io::Cursor<Vec<u8>>> {
             })
             .collect(),
         last_cycle,
+        warm,
     };
     match serde_json::to_vec_pretty(&status) {
         Ok(body) => Response::from_data(body).with_header(header("Content-Type", "application/json")),

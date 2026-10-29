@@ -1,0 +1,54 @@
+## pass 0 s after ready, 2 reps
+| query | off ms | on ms | on/off | off MiB read | on MiB read | on faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 532.8 | 633.7 | 1.189 | 55 | 65 | 1/2 |
+| literal_common | 3216.7 | 3277.1 | 1.019 | 380 | 386 | 1/2 |
+| literal_none | 18.7 | 58.9 | 3.151 | 0 | 5 | 0/2 |
+| literal_long | 2355.5 | 2301.5 | 0.977 | 233 | 236 | 1/2 |
+| ident_regex | 559.5 | 596.5 | 1.066 | 52 | 58 | 0/2 |
+| alternation | 1951.7 | 1994.2 | 1.022 | 197 | 212 | 0/2 |
+| crbug_regex | 264.9 | 217.4 | 0.821 | 2 | 8 | 2/2 |
+| case_insensitive | 506.1 | 533.8 | 1.055 | 40 | 48 | 0/2 |
+| smart_case | 208.8 | 213.9 | 1.024 | 8 | 20 | 0/2 |
+| word | 424.9 | 401.4 | 0.945 | 25 | 30 | 1/2 |
+| anchored | 410.7 | 418.5 | 1.019 | 4 | 8 | 1/2 |
+| date_regex | 993.5 | 804.0 | 0.809 | 124 | 102 | 2/2 |
+| count_mode | 152.1 | 154.4 | 1.015 | 2 | 14 | 1/2 |
+| files_mode | 161.0 | 155.3 | 0.965 | 9 | 14 | 1/2 |
+| llvm_regex | 58.3 | 108.4 | 1.860 | 0 | 3 | 0/2 |
+| rare_regex | 177.9 | 180.4 | 1.014 | 7 | 14 | 1/2 |
+| selective_long | 81.9 | 109.4 | 1.335 | 0 | 6 | 0/2 |
+| selective_symbol | 60.8 | 93.8 | 1.541 | 0 | 12 | 0/2 |
+pass geomean on/off: 1.141 (per rep: 1.143, 1.132)
+pass total ms: off [12211, 12060], on [11958, 12547]
+steady warm geomean on/off (qbench p50s after the pass): 1.024
+off: ready_ms [2509, 2211], resident MiB ['1400', '1400'] of 2579, peak MiB ['1880', '1878'], oom_kills ['0', '0'], warm-up before the pass [None, None]
+on: ready_ms [2271, 2286], resident MiB ['2013', '2040'] of 2579, peak MiB ['2472', '2472'], oom_kills ['0', '0'], warm-up before the pass [{'generation': 1, 'bytes_read': 20971520, 'bytes_total': 2673487594, 'done': False}, {'generation': 1, 'bytes_read': 20971520, 'bytes_total': 2673487594, 'done': False}]
+
+## pass 45 s after ready, 2 reps
+| query | off ms | on ms | on/off | off MiB read | on MiB read | on faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 551.4 | 45.3 | 0.082 | 55 | 0 | 2/2 |
+| literal_common | 3210.7 | 221.8 | 0.069 | 380 | 0 | 2/2 |
+| literal_none | 17.3 | 8.8 | 0.507 | 0 | 0 | 2/2 |
+| literal_long | 2236.4 | 317.2 | 0.142 | 233 | 0 | 2/2 |
+| ident_regex | 584.3 | 139.5 | 0.239 | 52 | 0 | 2/2 |
+| alternation | 1939.2 | 282.7 | 0.146 | 197 | 1 | 2/2 |
+| crbug_regex | 221.9 | 87.6 | 0.395 | 2 | 0 | 2/2 |
+| case_insensitive | 508.9 | 147.4 | 0.290 | 40 | 0 | 2/2 |
+| smart_case | 253.4 | 63.8 | 0.252 | 8 | 0 | 2/2 |
+| word | 367.3 | 183.2 | 0.499 | 25 | 0 | 2/2 |
+| anchored | 441.6 | 275.9 | 0.625 | 4 | 0 | 2/2 |
+| date_regex | 980.0 | 372.2 | 0.380 | 124 | 1 | 2/2 |
+| count_mode | 141.0 | 71.3 | 0.505 | 2 | 0 | 2/2 |
+| files_mode | 150.6 | 63.9 | 0.424 | 9 | 0 | 2/2 |
+| llvm_regex | 57.4 | 22.9 | 0.400 | 0 | 0 | 2/2 |
+| rare_regex | 160.0 | 53.0 | 0.331 | 7 | 0 | 2/2 |
+| selective_long | 108.5 | 15.5 | 0.143 | 0 | 0 | 2/2 |
+| selective_symbol | 86.7 | 16.8 | 0.193 | 0 | 0 | 2/2 |
+pass geomean on/off: 0.264 (per rep: 0.267, 0.260)
+pass total ms: off [12034, 11999], on [2416, 2361]
+steady warm geomean on/off (qbench p50s after the pass): 0.999
+off: ready_ms [2219, 2228], resident MiB ['1400', '1400'] of 2579, peak MiB ['1929', '1879'], oom_kills ['0', '0'], warm-up before the pass [None, None]
+on: ready_ms [2231, 2251], resident MiB ['2579', '2579'] of 2579, peak MiB ['3055', '3109'], oom_kills ['0', '0'], warm-up before the pass [{'generation': 1, 'bytes_read': 2673487594, 'bytes_total': 2673487594, 'done': True}, {'generation': 1, 'bytes_read': 2673487594, 'bytes_total': 2673487594, 'done': True}]
+

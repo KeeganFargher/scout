@@ -12,11 +12,13 @@ P=$(cd "$(dirname "$0")" && pwd)
 install -d -o 1000 -g 1000 "$OUT"
 port=18500
 # The server starts on an evicted index, as after a restart: the time to ready is what an
-# open reads (E36 reads every shard's dictionary at open).
+# open reads (E36 reads every shard's dictionary at open). No background warm-up (E47):
+# the warm and cold rounds measure the server's own reads, as they did before it; a
+# restart with warm-up is warmup-ebs.sh's. Binaries before E47 refuse the flag.
 sync; echo 3 > /proc/sys/vm/drop_caches
 t0=$(date +%s%N)
 bash "$P/ebs-run.sh" 2 "$mem" 125 3000 "$B/scout" --index-dir "$I" serve --config /home/keegan/small/serve.toml \
-  --listen "127.0.0.1:$port" --max-output-mb 4096 --search-timeout-secs 900 > "$OUT/serve.log" 2>&1 &
+  --listen "127.0.0.1:$port" --max-output-mb 4096 --search-timeout-secs 900 --warm-mb 0 > "$OUT/serve.log" 2>&1 &
 sp=$!
 up=0
 for _ in $(seq 600); do

@@ -1,0 +1,6 @@
+0:0 pass: A/B pooled 1.013 (per rep 0.998, 1.012, 0.993, 1.028) <= 1 + A/A noise 0.067 (A/A per rep 0.971, 1.067, 0.968, 1.012, pooled 0.996): ok
+0:0 steady: A/B pooled 0.989 (per rep 0.967, 0.989, 0.999, 1.016) <= 1 + A/A noise 0.039 (A/A per rep 0.961, 0.992, 0.983, 0.973, pooled 0.979): ok
+45:0 steady: A/B pooled 1.001 (per rep 1.009, 0.988, 1.005, 1.007) <= 1 + A/A noise 0.025 (A/A per rep 0.988, 1.000, 1.025, 1.019, pooled 1.009): ok
+0:300 pass: A/B pooled 0.738 (per rep 0.689, 0.720, 0.763, 0.757) <= 1 + A/A noise 0.041 (A/A per rep 1.041, 1.015, 0.969, 0.967, pooled 0.991): ok
+0:300 steady: A/B pooled 0.992 (per rep 0.989, 0.972, 1.000, 1.014) <= 1 + A/A noise 0.025 (A/A per rep 0.994, 1.015, 1.025, 0.987, pooled 1.004): ok
+rule: ok

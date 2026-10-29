@@ -415,3 +415,88 @@ fn serve_picks_up_pushes() {
     let (status, body, _) = get(&format!("{base}/search?q=bulk&F=1&rank=1"));
     assert_eq!(status, 422, "the ranked path enforces the cap too: {}", &body[..body.len().min(200)]);
 }
+
+#[test]
+fn serve_warms_the_index_it_serves_and_reports_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = tmp.path().join("index");
+    let alpha = Remote::new(
+        tmp.path(),
+        "alpha",
+        &[(
+            "a.txt",
+            "first needle
+",
+        )],
+    );
+    let beta = Remote::new(
+        tmp.path(),
+        "beta",
+        &[(
+            "b.txt",
+            "beta needle
+",
+        )],
+    );
+    let cfg = write_config(tmp.path(), &[(&alpha.url, Some("alpha")), (&beta.url, Some("beta"))]);
+    let (_server, base, _logs) = start_server(&index, &cfg, &["--warm-mb", "64"]);
+    // The served catalog's shard bytes for the repos `pick` accepts; the directory may still
+    // hold an earlier generation's.
+    let served_bytes = |pick: &dyn Fn(&str) -> bool| -> u64 {
+        let catalog: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(index.join("catalog.json")).unwrap()).unwrap();
+        catalog["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| pick(r["name"].as_str().unwrap()))
+            .flat_map(|r| r["index"]["shards"].as_array().unwrap())
+            .map(|s| std::fs::metadata(index.join("shards").join(s.as_str().unwrap())).unwrap().len())
+            .sum()
+    };
+    // The warm-up of the generation served now has read all of it, under the budget.
+    let warmed = |b: &str| {
+        let s: serde_json::Value = serde_json::from_str(b).unwrap();
+        s["warm"]["done"] == true && s["warm"]["generation"] == s["generation"]
+    };
+    let body = wait_for(&format!("{base}/status"), warmed);
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let first = status["generation"].as_u64().unwrap();
+    assert_eq!(status["warm"]["bytes_total"], served_bytes(&|_| true), "{body}");
+    assert_eq!(status["warm"]["bytes_read"], served_bytes(&|_| true), "{body}");
+    assert_eq!(status["warm"]["bytes_skipped"], 0, "{body}");
+    assert_eq!(status["warm"]["ended"], serde_json::Value::Null, "{body}");
+    // A push to alpha serves a new generation. Its walk reads alpha's new shards and skips
+    // beta's, which the first walk read.
+    alpha.push(
+        &[(
+            "a.txt",
+            "second needle
+",
+        )],
+        &[],
+    );
+    let body = wait_for(&format!("{base}/status"), |b| {
+        warmed(b) && serde_json::from_str::<serde_json::Value>(b).unwrap()["generation"].as_u64().unwrap() > first
+    });
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let beta_bytes = served_bytes(&|name| name == "beta");
+    assert!(beta_bytes > 0);
+    assert_eq!(status["warm"]["bytes_read"], served_bytes(&|name| name == "alpha"), "{body}");
+    assert_eq!(status["warm"]["bytes_skipped"], beta_bytes, "{body}");
+    assert_eq!(status["warm"]["bytes_total"], served_bytes(&|_| true), "{body}");
+}
+
+#[test]
+fn serve_without_warm_up_reports_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = tmp.path().join("index");
+    let alpha = Remote::new(tmp.path(), "alpha", &[("a.txt", "needle\n")]);
+    let cfg = write_config(tmp.path(), &[(&alpha.url, Some("alpha"))]);
+    let (_server, base, _logs) = start_server(&index, &cfg, &["--warm-mb", "0"]);
+    let body = wait_for(&format!("{base}/status"), |b| {
+        serde_json::from_str::<serde_json::Value>(b).unwrap()["last_cycle"] != serde_json::Value::Null
+    });
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status["warm"], serde_json::Value::Null, "{body}");
+}

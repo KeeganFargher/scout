@@ -3,7 +3,8 @@
 # (e.g. "3000 max": gp3's 3000, then none), and for each query the index reclaimed from the
 # server's cgroup, then the request timed with the volume's reads (bios) and bytes from the
 # cgroup's io.stat. Equal times at both caps mean bytes or CPU bound the query; a large gap
-# means the number of reads does (E42).
+# means the number of reads does (E42). The server runs without its background warm-up
+# (E47), which would refill what each reclaim evicts; binaries before E47 refuse the flag.
 # Usage: cold-io.sh <bin-dir> <index-dir> <mem> <queries.tsv> <iops-caps> <out-file>
 set -euo pipefail
 [ "$#" = 6 ] || { echo "expected bin-dir index-dir mem queries iops-caps out-file" >&2; exit 2; }
@@ -26,7 +27,7 @@ echo "query iops_cap ms rios rmib avg_kib_per_read" > "$OUT"
 for iops in $CAPS; do
   sync; echo 3 > /proc/sys/vm/drop_caches
   bash "$P/ebs-run.sh" 2 "$mem" 125 "$iops" "$B/scout" --index-dir "$I" serve --config /home/keegan/small/serve.toml \
-    --listen "127.0.0.1:$port" --max-output-mb 4096 --search-timeout-secs 900 > /dev/null 2>&1 &
+    --listen "127.0.0.1:$port" --max-output-mb 4096 --search-timeout-secs 900 --warm-mb 0 > /dev/null 2>&1 &
   sp=$!
   up=0
   for _ in $(seq 600); do

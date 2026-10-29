@@ -7,6 +7,8 @@
 # index with one serve run first). One server at a time; reps alternate which arm goes
 # first so drift hits both equally. The output directory ~/small/ab/<label> must not exist
 # yet: coldabsum.py summarises every run in it, so an earlier run's would pool with these.
+# `--warm-mb 0`: a background warm-up (E47) would refill what the cold rounds reclaim;
+# binaries before E47 refuse the flag.
 set -euo pipefail
 label=$1 a=$2 b=$3 reps=$4 WR=$5 CR=$6; shift 6
 profiles=("$@"); [ ${#profiles[@]} -eq 0 ] && profiles=("1:2G" "4:4G")
@@ -30,7 +32,7 @@ one() { # arm=bin[@idx] profile rep
   local tag="$arm-${c}cpu-$r"
   evict "$B" "$I"
   "$P/prof.sh" "$c" "$m" "$B/scout" --index-dir "$I" serve --config "$H/serve-e21.toml" --listen "127.0.0.1:$port" \
-    --max-output-mb 4096 --search-timeout-secs 900 > "$OUT/serve-$tag.log" 2>&1 &
+    --max-output-mb 4096 --search-timeout-secs 900 --warm-mb 0 > "$OUT/serve-$tag.log" 2>&1 &
   local sp=$! up=0
   for _ in $(seq 300); do
     if curl -s "http://127.0.0.1:$port/status" | grep -q '"last_cycle": {'; then up=1; break; fi

@@ -5,6 +5,8 @@
 # the index it serves and the A/B indexes must stay untouched. Results go to
 # ~/small/results/e21, which must not exist yet: e21sum.py summarises everything in it, so an
 # earlier run's files would mix with this one's.
+# `--warm-mb 0`: a background warm-up (E47) would refill what the cold rounds reclaim;
+# binaries before E47 refuse the flag.
 set -euo pipefail
 B=$1 WR=$2 CR=$3; shift 3
 parts=("$@"); [ ${#parts[@]} -eq 0 ] && parts=(modes cliff)
@@ -41,7 +43,7 @@ port=18200
 serve_start() { # cpus mem tag -> sets SP and CG
   local c=$1 m=$2 tag=$3
   "$P/prof.sh" "$c" "$m" "$B/scout" --index-dir "$I" serve --config "$H/serve-e21.toml" --listen "127.0.0.1:$port" \
-    --max-output-mb 4096 --search-timeout-secs 900 > "$OUT/serve-$tag.log" 2>&1 &
+    --max-output-mb 4096 --search-timeout-secs 900 --warm-mb 0 > "$OUT/serve-$tag.log" 2>&1 &
   SP=$!
   local up=0
   for _ in $(seq 300); do

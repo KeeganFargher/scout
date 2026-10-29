@@ -6,6 +6,7 @@ mod ingest;
 mod repos;
 mod serve;
 mod sync;
+mod warm;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -116,6 +117,13 @@ enum Command {
         /// on Windows and Linux only; elsewhere pass this.
         #[arg(long)]
         table_mb: Option<u64>,
+        /// Largest index, in MiB, that serve reads into the page cache in the background
+        /// while idle, so queries after a restart do not each wait on the disk; a larger
+        /// one is not read at all, and 0 turns it off. Default: usable RAM less two
+        /// generations of `--table-mb` (three quarters by default), read on Windows and
+        /// Linux only; elsewhere pass this.
+        #[arg(long)]
+        warm_mb: Option<u64>,
         /// How reindexed repos store file content (as for `index`; native only).
         #[arg(long, value_enum, default_value_t = ContentArg::Auto)]
         content: ContentArg,
@@ -279,6 +287,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             search_timeout_secs,
             memory_mb,
             table_mb,
+            warm_mb,
             content,
         } => {
             let budget = ingest::Budget::for_host(threads, memory_mb)?;
@@ -289,6 +298,26 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let table_bytes = match table_mb {
                 Some(mb) => mb << 20,
                 None => host::usable_memory().context("--table-mb default (pass --table-mb)")? / 8,
+            };
+            // The page cache's share: what the tables of two generations (above) leave. An
+            // index larger than this is not read (see `warm::walk`). On a 4 GiB box, 3 GiB
+            // covers chromium + llvm-project (2.49 GiB of shards) with the server's peak
+            // memory at 3.0–3.1 GiB (E49). A sync cycle's indexing memory comes out of the page
+            // cache too while it runs, so an index near the budget loses some pages to each
+            // cycle that reindexes a large repo; queries fault them back, nothing fails.
+            let warm_bytes = if let Some(mb) = warm_mb {
+                mb.checked_mul(1 << 20).context("--warm-mb is too large")?
+            } else {
+                let usable = host::usable_memory().context("--warm-mb default (pass --warm-mb)")?;
+                let budget = usable.saturating_sub(2 * table_bytes);
+                // Fail rather than turn the warm-up off without a word.
+                anyhow::ensure!(
+                    budget > 0,
+                    "two generations of --table-mb take all {} MiB of usable memory, leaving no \
+                     --warm-mb default: pass --warm-mb (0 turns the warm-up off) or a smaller --table-mb",
+                    usable >> 20
+                );
+                budget
             };
             let opts = serve::ServeOptions {
                 listen,
@@ -301,6 +330,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 budget,
                 content: content.into(),
                 table_bytes,
+                warm_bytes,
             };
             serve::serve(&store, &scout_sync::config::Config::load(&config)?, &opts)?;
             Ok(ExitCode::SUCCESS)

@@ -1,0 +1,3 @@
+mem=2G warm={"generation": 1, "bytes_read": 0, "bytes_total": 2673487594, "done": true, "ended": "not read: the index's 2549 MiB exceed the budget"}
+warm-up of generation 1: not read: the index's 2549 MiB exceed the budget
+ebs cpus=2 mem=2G mbps=125 iops=3000 rc=143 cgroup_peak_mib=586 oom_kills=0 io: rbytes=268005376 wbytes=16781312 rios=2091 wios=3 dbytes=0 dios=0

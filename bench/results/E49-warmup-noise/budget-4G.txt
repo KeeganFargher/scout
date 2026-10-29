@@ -1,0 +1,3 @@
+mem=4G warm={"generation": 1, "bytes_read": 2673487594, "bytes_skipped": 0, "bytes_total": 2673487594, "done": true, "ended": null}
+warm-up of generation 1: read 2549 MiB, 0 MiB read before
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=143 cgroup_peak_mib=2857 oom_kills=0 io: rbytes=2704760832 wbytes=31154176 rios=11529 wios=5 dbytes=0 dios=0

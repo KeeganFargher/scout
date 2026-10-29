@@ -1,0 +1,1 @@
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=143 cgroup_peak_mib=2537 oom_kills=0 io: rbytes=2172203008 wbytes=31154176 rios=35819 wios=5 dbytes=0 dios=0

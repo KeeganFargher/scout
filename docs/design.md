@@ -110,6 +110,18 @@ Each repo becomes one or more shards. A shard holds:
   separate A/Bs). Each generation of shards may copy an eighth of memory by default
   (`--table-mb`); shards past that read their tables through the map. The CLI reads them in place through the map, so a short-lived
   process reads only what its query looks up instead of copying everything.
+- **Warm-up**: once a sync cycle has finished, `serve` reads each newly served generation's
+  shard files into the page cache in the background (E49), if the whole index fits the
+  budget: usable RAM less two generations of tables, three quarters by default
+  (`--warm-mb`; 0 turns it off). A larger index is not read at all, since reading part of
+  it would evict what queries read and each new generation would read it from disk again.
+  It reads 256 KiB at a time, each shard from its end (one read per chunk; forward, the
+  kernel split them in two), only after no search or sync cycle has run for 100 ms, and
+  skips the shards an earlier generation's walk read. A client that searches at least every
+  100 ms keeps it from reading; one that searches every few hundred ms can wait behind a
+  read (up to ~20 ms on a small query). On the 4 GiB, gp3 box a restart's 18 bench
+  queries ran in 2.3 s instead of 12.0 s when sent 45 s after ready, and those sent at ready
+  stayed within the harness's noise.
 
 Native format v9 (`SCOUTNI9`): header, content, docs, content blocks, paths, units,
 dictionary keys, values and fence, trigram filter, postings. Every section starts where the one before it

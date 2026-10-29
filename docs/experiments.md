@@ -59,6 +59,11 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E42 | `prefetch` joins candidates' content ranges across gaps of up to 32 KiB (was 4 KiB), so a cold query issues fewer, larger reads                                                                                                                                                                                              | —                                                     | —           | **kept** (serve on the EBS-like box, 2 reps: cold geomean **0.731**, `alternation` 10.0 → 5.8 s, `word` 6.6 → 3.5 s; warm 0.978; `literal_long` cold +4%)                                                                                                                                                                                                                                                                  |
 | E43 | Writer compresses every content block lz4 shrinks, small ones too (was: blocks under 4 KiB stored raw)                                                                                                                                                                                                                       | —                                                     | —           | **rejected** (fails the rule set before the run: cold geomean 0.959 against ≤ 0.95; index 2,580 → 2,305 MiB, `literal_long` cold 0.842 but warm 1.107, over 10% slower in both reps; warm geomean 1.018)                                                                                                                                                                                                                   |
 | E44 | A 64 KiB lz4 dictionary per shard, trained on its first 8 MiB, for every doc of one block at any size (format v10)                                                                                                                                                                                                           | —                                                     | —           | **rejected** (fails all three clauses of the rule set before the run: cold geomean 0.971, warm 1.066, `literal_long` and `files_mode` over 10% slower warm in both reps, `anchored` marginally; index 2,580 → 2,165 MiB)                                                                                                                                                                                                   |
+| E45 | `serve` reads the served index into the page cache in the background after the first cycle, 4 MiB at a time, pausing while a search runs                                                                                                                                                                                     | —                                                     | —           | **rejected** (restart A/B: queries sent at ready 1.141 against ≤ 1.00 in both reps, `llvm_regex` 1.86; 45 s after ready 0.264; steady warm 1.024 against ≤ 1.02)                                                                                                                                                                                                                                                           |
+| E46 | E45 reading 256 KiB at a time                                                                                                                                                                                                                                                                                                | —                                                     | —           | **rejected** (queries at ready 0.986 pooled but 1.105 in one rep, `literal_none` 3.4x in both; 45 s after ready 0.286)                                                                                                                                                                                                                                                                                                     |
+| E47 | E46, reading only after no search ran for 100 ms; on by default (`--warm-mb`)                                                                                                                                                                                                                                                | —                                                     | —           | **superseded by E49** (queries at ready 0.958; 45 s after ready 0.261; its confirmation E47b failed steady warm 1.037 in a new spaced scenario, which a rerun put at 1.006)                                                                                                                                                                                                                                                |
+| E48 | E47 waiting for idle on a condvar instead of polling every 5 ms; shards read forward, opened lazily; a new generation skips shards already read                                                                                                                                                                              | —                                                     | —           | **rejected** (at ready 1.020, one rep 1.066; steady 1.029 and 1.027, the latter with the walk finished: the fixed clauses sat inside the noise. Forward reads doubled the walk's reads, 20,285 against 11,526)                                                                                                                                                                                                             |
+| E49 | E48 reading backward again; judged against an A/A run's noise, 4 reps                                                                                                                                                                                                                                                        | —                                                     | —           | **kept** (every clause inside the A/A's noise: at ready 1.013 against ≤ 1.067, steady 0.989–1.001; 45 s after ready 0.253, the pass 12.0 → 2.3 s; 300 ms apart 0.738)                                                                                                                                                                                                                                                      |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1604,6 +1609,215 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   queries by up to 30% but made almost every warm query slower and the selective cold ones
   slower too. E43 and E44 both traded warm time for cold bytes on this box and both lost
   the trade under this rule.
+
+### E45–E47: reading the index in before the queries need it
+
+- Why: after E42–E44, a cold broad query waits on its bytes at gp3's 125 MB/s, and
+  storing them smaller cost warm time. A server that has just started (a deploy, a reboot)
+  has nothing cached, so its first queries are cold; reading the whole index in the
+  background (2.49 GiB of shards, ~21 s at 125 MB/s) would make the ones after that warm. The cold
+  protocols (`serve-ab.sh`'s cold rounds, `cold-io.sh`) evict the index before every
+  query, so they cannot see this: `warmup-ebs.sh` (new) drops the page cache, starts
+  `serve`, and runs the 18 queries once (the "pass") right at ready, or 45 s after it,
+  then qbench's warm rounds, the index's residency and the cgroup's peak memory.
+  `warmup-ab.sh` interleaves warm-up off (`--warm-mb 0`) and on (3072 MiB, more than the
+  index) of one binary, 2 reps per wait, on E43's base index (both arms the same copy).
+  Search code is unchanged, so the parity gate was not rerun.
+- Rule set before E45, kept for E46 and E47: keep if the pass at ready has geomean on/off
+  ≤ 1.00 in both reps (the warm-up must not slow the queries it shares the disk with),
+  the pass 45 s after ready ≤ 0.50, steady warm geomean ≤ 1.02, ready time within 5%,
+  no OOM kill, and ≥ 95% of the index resident after the 45 s.
+- Change: after each sync cycle `serve` starts a walk over the served generation's shard
+  files (once per generation; it stops when another is served), reading them with plain
+  `read`s into a scratch buffer: the page cache they fill is the one the map faults from,
+  so it needs no `unsafe` and no format knowledge. Each shard is read from its end
+  backward; the order does not matter, since the whole index is read. `/status` reports
+  its progress. It starts after the first cycle, not at open, so it does not compete with
+  the open and the cycle before ready.
+- The pass's "MiB read" columns count the whole cgroup's reads, the walk's included.
+- E45, 4 MiB reads, waiting only while a search runs
+  ([summary](../bench/results/E45-warmup/summary.txt)):
+  - At ready **1.141** (1.143 and 1.132 per rep): `literal_none` 3.15, `llvm_regex`
+    1.86, `selective_symbol` 1.54. A search that started during a read waited for it
+    (~32 ms at 125 MB/s).
+  - 45 s after ready **0.264**: the pass took 2.4 s against 12.0 s.
+  - Steady warm 1.024 after the pass at ready (the walk was still reading during qbench's
+    rounds: 2,013–2,040 MiB of 2,579 resident at the end), 0.999 after the 45 s one.
+  - Ready 2,211–2,509 ms off, 2,231–2,286 on; peak 1,878–1,929 MiB off, 2,472 on at ready and 3,055–3,109 after the 45 s; no
+    OOM kill; the whole index resident after the 45 s.
+  - **Rejected**: the at-ready and steady clauses fail.
+- E46, 256 KiB reads (~2 ms each), otherwise E45
+  ([summary](../bench/results/E46-warmup-256k/summary.txt)):
+  - At ready **0.986** pooled, but 0.904 and **1.105** per rep; `literal_none` 18 → 62 ms
+    (3.38) in both, `smart_case` 1.19, `word` 1.11.
+  - 45 s after ready 0.286 (2.5 s against 12.0); steady warm 0.999 and 0.995.
+  - **Rejected**: the at-ready clause fails in one rep. The walk read in the gaps between
+    back-to-back searches, and every read shares the volume's throughput cap (the
+    cgroup's io.max here, the volume's on EBS), so the next search waited for it.
+- E47, E46 reading only after no search has run for 100 ms
+  ([summary](../bench/results/E47-warmup-idle/summary.txt),
+  [reps](../bench/results/E47-warmup-idle)):
+  - At ready **0.958** (0.957 and 0.965 per rep): the walk had read 7–11 MiB before the
+    pass and stayed out of it (1,434–1,439 MiB resident at the end, against 1,400 off),
+    so this measures the server without the walk. Single queries still spread:
+    `selective_symbol` 0.565 (faster in both reps) and `rare_regex` 1.261 (slower in
+    both). The walk read nothing during the pass, so the spread is not its reads. The 18
+    queries took 12.0 s either way.
+  - 45 s after ready **0.261** (0.272 and 0.250 per rep): the pass took 2.39 and 2.29 s
+    against 11.99 and 12.15. Every query was faster in both reps: `literal_common` 3,214
+    → 210 ms, `literal_long` 2,257 → 299, `selective_long` 98 → 16.
+  - Steady warm 1.007 (after the pass at ready) and 1.003.
+  - Ready 2,223–2,262 ms off, 2,223–2,299 on. Peak memory 1,896–1,936 MiB off, 1,930–1,963 on at ready and 3,102–3,118
+    MiB on after the 45 s (of 4,096); no OOM kill; 2,579 of 2,579 MiB resident after the 45 s.
+  - **Kept**: every clause passes. The cost of the idle gate: a client that sends a query
+    at least every 100 ms keeps the walk from reading at all. The cache then holds only
+    what that client's queries read.
+- Review changes, before the confirmation run: an index over the budget is not read at
+  all (reading part of it would evict what queries read, and each new generation would
+  read it from disk again); sync cycles count as activity like searches; a failed or
+  stopped walk reports why in `/status` (`ended`).
+- Default: `--warm-mb` is three quarters of usable RAM (3 GiB on the 4 GiB box).
+  `serve-ebs.sh`, `cold-io.sh`, `serve-coldab.sh` and `run-e21.sh` pass `--warm-mb 0`,
+  so their warm and cold rounds measure what they did before; binaries before E47 refuse
+  the flag.
+- E47b, the confirmation run of the revised code
+  ([summary](../bench/results/E47b-warmup-confirm/ab/summary.txt),
+  [reps](../bench/results/E47b-warmup-confirm/ab)), `run-e47b.sh`: the same A/B with a
+  third scenario, queries 300 ms apart from ready (a client that is not a burst), whose
+  clause was set before the run: pass geomean ≤ 1.00 in both reps, the rest unchanged.
+  "The index" below is its 2,549 MiB of shards (`/status`'s `bytes_total`); residency
+  counts the whole index directory, 2,579 MiB.
+  - At ready, back to back: **0.990** (0.994 and 0.981); steady warm 1.012.
+  - 45 s after ready: **0.283** (0.276 and 0.284), the pass 12.0 → 2.4–2.5 s; steady
+    warm 0.985; the whole index resident.
+  - 300 ms apart from ready: **0.774** (0.784 and 0.755). 15 of 18 queries were faster
+    in both reps; `literal_none` 1.371 and `selective_symbol` 1.492 were slower in both,
+    `llvm_regex` 1.276 in one. Steady warm **1.037**, against ≤ 1.02: the walk had read
+    1,514 MiB when qbench's rounds began (`status-after-pass`), and the smallest queries
+    were slower in both reps (`literal_none` 1.49 → 2.12 ms median, `selective_*` 1.05).
+  - Ready within 1% in every scenario; no OOM kill; peak 3,048–3,093 MiB after 45 s.
+  - Budget ([2 GiB](../bench/results/E47b-warmup-confirm/budget-2G.txt),
+    [4 GiB](../bench/results/E47b-warmup-confirm/budget-4G.txt)), without the flag:
+    under 2 GiB the index is over the 1,536 MiB budget and nothing is read (`ended`:
+    "not read"); under 4 GiB all of it is read.
+  - **Fails one clause**: steady warm in the spaced scenario.
+- Diagnosis ([diag](../bench/results/E47b-warmup-confirm/diag-0-300)): the 0:300
+  scenario again, 2 reps, with `/status` captured after qbench's rounds too
+  (`status-after-warm.json`, added to `warmup-ebs.sh` for this). Steady warm **1.006**
+  this time, pass 0.798 (0.825 and 0.762). The walk read 50–107 MiB during qbench's
+  ~9 s, in the gaps before and between its runs, far less than the ~1 GiB it could at
+  125 MB/s. `literal_none` was still 1.106. Across the runs, `literal_none`'s steady
+  ratio follows whether the walk is alive, not how much it reads: 1.06 at 0:0, where the
+  walk had read 256 KiB; 1.106 and 1.425 at 0:300; 0.823 at 45:0, where the walk had
+  finished. Suspect: the walk woke every 5 ms (`PAUSE`) to look at the clock while
+  searches ran, 200 wake-ups a second on 2 CPUs. The clause sits near noise (1.006 and
+  1.037 in two runs of the same scenario), so neither run settles it alone.
+- E47 was not committed on its own; E45–E49 are committed together, after E49.
+
+### E48: waiting for idle without polling
+
+- Rule set before the run: every clause of E47b's rule in all three scenarios (pass at
+  ready ≤ 1.00 in both reps for 0:0 and 0:300, ≤ 0.50 at 45:0, steady warm ≤ 1.02 in
+  each, ready within 5%, no OOM kill, ≥ 95% resident after 45 s), and the budget checks
+  as in E47b. `warmupab.py` now checks each of these itself (E47b's failure printed no
+  FAIL before).
+- Change, E47b plus:
+  - The walk sleeps on a condvar until no search or cycle runs, then exactly out the
+    rest of `IDLE`; a search's start and end take an uncontended mutex. It wakes at
+    least every second (`RECHECK`) to see whether its generation is still served.
+  - Shards are read forward from the start, each opened only when its turn comes (E47
+    held every shard open for the whole walk, which can last indefinitely under steady
+    load).
+  - A new generation's walk skips the shards the last finished walk read (`/status`
+    `bytes_skipped`): a sync that changes one repo no longer copies the whole index
+    through the CPUs again.
+  - The default budget is usable memory less two generations of `--table-mb`, the same
+    3 GiB on the 4 GiB box by default.
+- Results ([summary](../bench/results/E48-warmup-condvar/ab/summary.txt),
+  [reps](../bench/results/E48-warmup-condvar/ab)), `run-e47b.sh` with the E48 binary:
+  - At ready, back to back: **1.020** (1.066 and 0.974): **fails**. The walk had read
+    nothing before the pass in either rep, and 15–58 MiB by the end of qbench's rounds.
+  - 45 s after ready: **0.271** (0.258 and 0.283); the whole index resident.
+  - 300 ms apart from ready: **0.839** (0.823 and 0.858).
+  - Steady warm 1.029 (0:0, **fails**), 1.027 (45:0, **fails**), 0.979 (0:300).
+  - Ready within 5%, no OOM kill; budget as E47b (2 GiB: not read; 4 GiB: all of it,
+    20,285 reads against E47b's 11,526: see below).
+  - **Rejected** under its rule. But the failures sit where the walk could not have
+    caused them: at 45:0 the walk had finished and its thread had exited, and steady warm
+    was still 1.027, with `literal_none` 1.359. The pass at ready, where the walk read
+    nothing during the pass in E47, E47b and E48 alike, came out 0.958, 0.990 and 1.020:
+    a spread of 6% with no walk reads at all. The rule's ≤ 1.00 and ≤ 1.02 lie inside the
+    harness's own noise at 2 reps and 3 qbench rounds, so it fails good and bad changes
+    alike, and E47's and E47b's passes of those clauses were partly luck.
+  - One real cost found: reading forward, the kernel's readahead split each 256 KiB read
+    into two 128 KiB reads (20,285 reads for the index against 11,526), twice the share of
+    the volume's IOPS. E49 reads backward again.
+
+### E49: the warm-up against the harness's measured noise
+
+- Rule set before the runs (`warmuprule.py`, `run-e49.sh`): first an A/A run, both arms
+  `--warm-mb 0`, the same three scenarios and 4 reps, measures the noise: for each
+  scenario, the largest per-rep deviation from 1 of the pass geomean (scenarios at ready)
+  and of the steady warm geomean. The A/B's pooled ratio (median over 4 reps per query,
+  then geomean) must be at most 1 + that deviation, for each. Unchanged from E47b: pass
+  45 s after ready ≤ 0.50, ready within 5%, no OOM kill, ≥ 95% resident after 45 s, and
+  the budget checks. qbench's warm rounds go from 3 to 10 in `warmup-ebs.sh`, so one
+  ~1.4 ms query swings the steady geomean less.
+- Change: E48 with shards read backward again (each chunk one 256 KiB read).
+- Results ([rule](../bench/results/E49-warmup-noise/rule.txt),
+  [A/A](../bench/results/E49-warmup-noise/aa/summary.txt),
+  [A/B](../bench/results/E49-warmup-noise/ab/summary.txt)):
+
+  | scenario          | clause | A/A per rep                | noise | A/B pooled | A/B per rep                |
+  | ----------------- | ------ | -------------------------- | ----- | ---------- | -------------------------- |
+  | 0:0, at ready     | pass   | 0.971, 1.067, 0.968, 1.012 | 0.067 | **1.013**  | 0.998, 1.012, 0.993, 1.028 |
+  | 0:0               | steady | 0.961, 0.992, 0.983, 0.973 | 0.039 | **0.989**  | 0.967, 0.989, 0.999, 1.016 |
+  | 45:0              | steady | 0.988, 1.000, 1.025, 1.019 | 0.025 | **1.001**  | 1.009, 0.988, 1.005, 1.007 |
+  | 0:300, 300 ms gap | pass   | 1.041, 1.015, 0.969, 0.967 | 0.041 | **0.738**  | 0.689, 0.720, 0.763, 0.757 |
+  | 0:300             | steady | 0.994, 1.015, 1.025, 0.987 | 0.025 | **0.992**  | 0.989, 0.972, 1.000, 1.014 |
+  - 45 s after ready: **0.253** (0.247–0.274 per rep); the 18-query pass took
+    2.30–2.43 s against 11.98–12.04 s, every query faster in all 4 reps
+    (`literal_common` 3,216 → 205 ms, `literal_ident` 531 → 49, `selective_long`
+    105 → 15); the whole index resident; peak 3,110–3,130 MiB of 4,096.
+  - 300 ms apart from ready: 16 of 18 queries faster in all 4 reps; `llvm_regex`
+    (60 → 75 ms, 0/4) and `selective_symbol` (54 → 73 ms, 2/4) were slower: a
+    small query that lands behind one of the walk's reads waits for it.
+  - Ready within 5% and no OOM kill in every scenario; budget as E47b (2 GiB: not
+    read; 4 GiB: all of it, in 11,529 reads, against E48's 20,285 forward).
+  - The A/A, both arms off, puts a rep of the pass at ready at 1.067 and steady warm
+    reps at 1.025 (45:0 and 0:300): the fixed clauses E45–E48 were held to (≤ 1.00 in
+    every rep, ≤ 1.02) sat inside the noise.
+  - **Kept**: every clause of the rule passes.
+  - The rule is lenient, and the review after the run said so: it holds a pooled ratio
+    (median of 4 reps) to the A/A's single worst rep, and a rep faster than 1 counts as
+    noise too, though a pooled ratio varies less than one rep. Pooled against pooled, the
+    A/A against the A/B: pass at ready 0.996 against **1.013**, steady 0.979 against
+    0.989 (0:0), 1.009 against 1.001 (45:0), 1.004 against 0.992 (0:300). So queries in a
+    burst at ready may be ~1–2% slower with the warm-up on, a difference these 4 reps
+    cannot tell from noise; the walk had read nothing before those passes and ~100 MiB by
+    the end of qbench's rounds. The rule was in `run-e49.sh` and `warmuprule.py` before
+    the runs; `warmupab.py` was changed after them, to drop the fixed clauses from its
+    checks, which no verdict here reads.
+
+- Cost, measured: a client that searches at least every 100 ms holds the walk off
+  entirely. One that searches every few hundred ms got its 18 queries 0.738x as long by
+  geomean, but a small query that landed behind a 256 KiB read waited 15–19 ms (medians),
+  far more than the read's ~2 ms of transfer; the throttle dispatching by time slices is
+  the likely cause ([research](research/background-warmup.md)), not measured.
+- Not measured: the target box's own disk. Every run here emulates gp3's 125 MB/s and
+  3000 IOPS, but a t-class 2 vCPU instance's EBS baseline is 43 MB/s and 2,000 IOPS
+  (research, from AWS's tables), where the walk would take ~60 s, not ~21, and every
+  cold read is ~3x slower. The next measurement runs the harness at that profile.
+- After the run, from the review: `/status` says done only after the finished walk's
+  shards are recorded for the next generation to skip; an over-budget walk reports no
+  skipped bytes; a shard missing because another generation is served ends the walk as
+  stopped, not failed; a default budget of 0 (two generations of `--table-mb` filling
+  memory) is an error instead of a warm-up silently off. None of it touches the measured
+  path, so it was not rerun.
+- Gates: clippy, tests (140 on Windows, 142 on Linux), including the walker's budget, idle wait, stop,
+  skipped shards and a missing file, the condvar wait itself, and `/status` reporting a
+  finished warm-up of two generations (the second skipping the unchanged repo's shards)
+  and one turned off.
 
 ## Ranking experiments
 
