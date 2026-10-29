@@ -65,6 +65,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E48 | E47 waiting for idle on a condvar instead of polling every 5 ms; shards read forward, opened lazily; a new generation skips shards already read                                                                                                                                                                              | —                                                     | —           | **rejected** (at ready 1.020, one rep 1.066; steady 1.029 and 1.027, the latter with the walk finished: the fixed clauses sat inside the noise. Forward reads doubled the walk's reads, 20,285 against 11,526)                                                                                                                                                                                                             |
 | E49 | E48 reading backward again; judged against an A/A run's noise, 4 reps                                                                                                                                                                                                                                                        | —                                                     | —           | **kept** (every clause inside the A/A's noise: at ready 1.013 against ≤ 1.067, steady 0.989–1.001; 45 s after ready 0.253, the pass 12.0 → 2.3 s; 300 ms apart 0.738)                                                                                                                                                                                                                                                      |
 | E50 | `prefetch` joins the shortest gaps first, only gaps under a read's worth of bytes (41.7 KB at gp3's 125 MB/s ÷ 3000), and stops once a block's reads cost no more than its bytes (was: every gap up to 32 KiB)                                                                                                               | —                                                     | —           | **rejected** (cold 0.959, 0.952 and 0.968 per rep, `alternation` 0.877 and `literal_common` 0.860; but `llvm_regex` 1.44 and 2.03 and `smart_case` 1.21 and 1.20 slower in both reps, against no query over 10% slower in both; warm 0.999)                                                                                                                                                                                |
+| E51 | `serve` sends every body with Content-Length instead of tiny_http's chunked transfer encoding (8 KiB frames for bodies of 32 KiB or more)                                                                                                                                                                                    | —                                                     | —           | **kept** (warm 0.979, 0.977 and 0.982 per rep, `alternation` 0.925; cold 0.990; no query over 3% slower)                                                                                                                                                                                                                                                                                                                   |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1852,6 +1853,24 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   more than once are 140 of 4,174 MiB in chromium (3.4%) and 17 of 2,299 in llvm-project
   (0.7%), from `git ls-tree -r -l HEAD`, an upper bound on what dedup could save. Not
   worth a format change.
+
+### E51: Content-Length response bodies
+
+- Why: tiny_http sends a body of 32 KiB or more with chunked transfer encoding in 8 KiB
+  frames, so the client parses a broad query's output frame by frame. `serve` builds every
+  body in memory first, so its length is known before the first byte goes out.
+- Rule set before the run (`run-e51.sh`): warm geomean pooled ≤ 0.99 and below 1.00 in
+  both reps; cold pooled ≤ 1.02; no query over 10% slower warm in both reps.
+- Change: `handle()` responds with `with_chunked_threshold(usize::MAX)`. Bodies are
+  unchanged (serveab.py checks each query's output hash across arms).
+- Results ([summary](../bench/results/E51-content-length/ab-4G/summary.txt)), 2 CPUs /
+  4 GiB, E43's base index, 2 reps:
+  - Warm **0.979** (0.977 and 0.982 per rep): `alternation` 0.925, `literal_none` 0.947,
+    `smart_case` 0.947, `count_mode` 0.948; slowest `literal_long` 1.029 and
+    `literal_common` 1.018, each faster in one rep of two.
+  - Cold 0.990 (0.987 and 0.992 per rep): reads are unchanged, so the disk sets it.
+  - Time to ready on an evicted index: 2,224 and 2,286 ms base, 2,253 and 2,271 ms E51.
+  - **Kept**: every clause passes.
 
 ## Ranking experiments
 

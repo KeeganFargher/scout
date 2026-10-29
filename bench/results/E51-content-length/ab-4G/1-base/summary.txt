@@ -1,0 +1,46 @@
+## warm.json: warm, 3 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 27 | 28 | 0.0 | 0 |
+| literal_common | 179 | 192 | 0.0 | 0 |
+| literal_none | 2 | 2 | 0.0 | 0 |
+| literal_long | 272 | 294 | 0.0 | 0 |
+| ident_regex | 105 | 106 | 0.0 | 0 |
+| alternation | 276 | 314 | 0.0 | 0 |
+| crbug_regex | 81 | 100 | 0.0 | 0 |
+| case_insensitive | 140 | 148 | 0.0 | 0 |
+| smart_case | 42 | 56 | 0.0 | 0 |
+| word | 140 | 143 | 0.0 | 0 |
+| anchored | 250 | 254 | 0.0 | 0 |
+| date_regex | 389 | 392 | 0.0 | 0 |
+| count_mode | 70 | 74 | 0.0 | 0 |
+| files_mode | 57 | 63 | 0.0 | 0 |
+| llvm_regex | 14 | 14 | 0.0 | 0 |
+| rare_regex | 48 | 50 | 0.0 | 0 |
+| selective_long | 8 | 8 | 0.0 | 0 |
+| selective_symbol | 9 | 9 | 0.0 | 0 |
+geomean p50 59 ms; 18 of 18 under 1 s
+
+## cold.json: cold, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 553 | 553 | 64.3 | 417 |
+| literal_common | 3598 | 3598 | 421.5 | 608 |
+| literal_none | 39 | 39 | 9.0 | 36 |
+| literal_long | 5102 | 5102 | 580.2 | 559 |
+| ident_regex | 2481 | 2481 | 296.0 | 373 |
+| alternation | 5789 | 5789 | 693.9 | 413 |
+| crbug_regex | 1960 | 1960 | 233.5 | 469 |
+| case_insensitive | 2541 | 2541 | 311.7 | 357 |
+| smart_case | 383 | 383 | 46.2 | 406 |
+| word | 3483 | 3483 | 423.0 | 175 |
+| anchored | 3372 | 3372 | 406.0 | 349 |
+| date_regex | 2158 | 2158 | 248.3 | 78 |
+| count_mode | 1855 | 1855 | 218.1 | 326 |
+| files_mode | 2151 | 2151 | 252.6 | 396 |
+| llvm_regex | 119 | 119 | 28.9 | 177 |
+| rare_regex | 1235 | 1235 | 110.2 | 291 |
+| selective_long | 132 | 132 | 24.5 | 253 |
+| selective_symbol | 240 | 240 | 32.9 | 253 |
+geomean p50 1095 ms; 6 of 18 under 1 s
+
