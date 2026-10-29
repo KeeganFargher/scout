@@ -192,10 +192,7 @@ broad queries; larger blocks are compressed only when that saves space.
    (`MADV_WILLNEED`, queued a block before it is needed), so a cold or evicted index is
    read in large requests instead of one 128 KiB read-around per page fault (E28).
    Candidates at most 32 KiB apart are queued as one range: on gp3 most cold queries are bound
-   by reads per second, and one read saved is worth more than the gap's bytes (E42). A query
-   whose estimated bytes cost 1.5x its reads (planned over every repo before any is read)
-   joins only the shortest gaps, and only while a block's reads still cost more than its
-   bytes (E50, E52).
+   by reads per second, and one read saved is worth more than the gap's bytes (E42).
    A candidate bigger than one unit (64 KiB) is read only at its candidate units: the
    blocks table stores each block's count of lines before it, so the searcher numbers
    those units' lines from where they sit in the file (E32); counts and `-m` carry across

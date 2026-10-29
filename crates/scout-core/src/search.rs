@@ -15,7 +15,7 @@ use memchr::memmem::Finder;
 use termcolor::NoColor;
 
 use crate::indexer::UNIT_TARGET;
-use crate::ports::{DocId, Extent, ReadCost, RepoSource, Shard, UnitId, Want};
+use crate::ports::{DocId, Extent, RepoSource, Shard, UnitId, Want};
 use crate::query::{PlanCase, Query, analyze};
 use crate::trigram::Trigram;
 use crate::{Error, Result};
@@ -107,8 +107,6 @@ pub struct SearchStats {
     /// (reading content, matching, printing). Shows which side of the index a query pays.
     pub postings_time: Duration,
     pub verify_time: Duration,
-    /// The query's read cost (E52): what its read-ahead read for.
-    pub read_cost: ReadCost,
     pub plan: String,
     pub elapsed: Duration,
 }
@@ -198,15 +196,14 @@ fn search_chunked(
     let literal = if opts.case == CaseMode::Sensitive && !opts.word { analysis.literal } else { None };
     let matcher = build_matcher(&pattern, opts)?;
     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
-    let reading = if analysis.whole_file { Reading::Whole } else { Reading::Units };
     let Planned { plans, chunks, snapshots } =
-        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), reading, chunk_bytes, &mut stats)?;
+        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), chunk_bytes, &mut stats)?;
 
     // Phase 2: verify chunks on every thread; a reorder buffer prints chunk k only after
     // 0..k, so output is the same as verifying everything in order on one thread.
     let phase2 = Verify {
         opts,
-        reading,
+        reading: if analysis.whole_file { Reading::Whole } else { Reading::Units },
         literal: literal.as_deref().map(Finder::new),
         repos,
         plans: &plans,
@@ -238,14 +235,11 @@ pub(crate) struct Planned {
 /// Phase 1 of a search, in parallel over repos: freshness overlay, candidates, and their
 /// chunks. Cheap next to verifying (postings, plus the listing in strict mode), and the
 /// chunk boundaries need every candidate's size, so it is done here rather than serially.
-/// Also what reading every candidate costs a cold disk, as `reading` will read them, summed
-/// over the whole query and handed to every repo's plan for its read-ahead (E52).
 pub(crate) fn plan_chunks(
     opts: &SearchOptions,
     repos: &[&RepoHandle],
     query: &Query,
     shape: Option<&crate::shape::ShapeQuery>,
-    reading: Reading,
     chunk_bytes: u64,
     stats: &mut SearchStats,
 ) -> Result<Planned> {
@@ -255,37 +249,18 @@ pub(crate) fn plan_chunks(
     let planned = parallel_indexed(opts.threads, repos.len(), |i| {
         let repo = repos[i];
         let mut s = SearchStats { shards: repo.shards.len(), ..SearchStats::default() };
-        let draft = plan_repo(repo, query, shape, opts, &mut s).map_err(|e| in_repo(repo, e))?;
-        let chunks = chunk_repo(repo, &draft, chunk_bytes).map_err(|e| in_repo(repo, e))?;
-        let cost = read_cost(repo, &draft, reading).map_err(|e| in_repo(repo, e))?;
-        Ok((draft, s, chunks, cost))
+        let plan = plan_repo(repo, query, shape, opts, &mut s).map_err(|e| in_repo(repo, e))?;
+        let chunks = chunk_repo(repo, &plan, chunk_bytes).map_err(|e| in_repo(repo, e))?;
+        Ok((plan, s, chunks))
     })?;
-    // Every repo shares one disk, so its caps bind the sum, not any one repo's share.
-    let mut query_cost = ReadCost::default();
-    for (_, _, _, cost) in &planned {
-        query_cost += *cost;
-    }
-    stats.read_cost = query_cost;
     let mut out = Planned { plans: Vec::with_capacity(repos.len()), chunks: Vec::new(), snapshots: Vec::new() };
-    for (i, (draft, s, parts, _)) in planned.into_iter().enumerate() {
+    for (i, (mut plan, s, parts)) in planned.into_iter().enumerate() {
         stats.merge(&s);
-        out.snapshots.extend(draft.snapshot.map(|b| (i, b)));
+        out.snapshots.extend(plan.snapshot.take().map(|b| (i, b)));
         out.chunks.extend(parts.into_iter().map(|part| Chunk { repo: i, part }));
-        out.plans.push(RepoPlan { candidates: draft.candidates, dirty: draft.dirty, query_cost });
+        out.plans.push(plan);
     }
     Ok(out)
-}
-
-/// What prefetching every one of `draft`'s candidates costs a cold disk, as its shards
-/// would read them.
-fn read_cost(repo: &RepoHandle, draft: &RepoDraft, reading: Reading) -> Result<ReadCost> {
-    let mut cost = ReadCost::default();
-    for (si, cands) in draft.candidates.iter().enumerate() {
-        let shard = repo.shards[si].as_ref();
-        let wants = cands.docs.iter().map(|c| want(shard, cands, c, reading)).collect::<Result<Vec<_>>>()?;
-        cost += shard.read_cost(&wants)?;
-    }
-    Ok(cost)
 }
 
 /// Phase 2 of a search: the planned chunks and what verifying one needs.
@@ -488,7 +463,7 @@ fn parallel_indexed<T: Send>(threads: usize, n: usize, f: impl Fn(usize) -> Resu
 /// stored prefix is smaller, which only makes its chunk cheaper), shard by shard, then its
 /// changed files as one more chunk.
 /// `u64::MAX` means one chunk per shard, without looking at any size.
-fn chunk_repo(repo: &RepoHandle, plan: &RepoDraft, chunk_bytes: u64) -> Result<Vec<Part>> {
+fn chunk_repo(repo: &RepoHandle, plan: &RepoPlan, chunk_bytes: u64) -> Result<Vec<Part>> {
     let mut parts = Vec::new();
     for (si, docs) in plan.candidates.iter().enumerate() {
         let docs = &docs.docs;
@@ -874,16 +849,6 @@ pub(crate) struct RepoPlan {
     candidates: Vec<ShardCandidates>,
     /// Searched from the source, after every shard.
     dirty: Vec<String>,
-    /// [`read_cost`] summed over every repo the query searches, which its read-ahead
-    /// reads for (E52).
-    query_cost: ReadCost,
-}
-
-/// A repo's plan before the query's cost is known: that sums every repo's, so it is
-/// [`plan_chunks`] that makes the [`RepoPlan`], once all of them are drafted.
-pub(crate) struct RepoDraft {
-    candidates: Vec<ShardCandidates>,
-    dirty: Vec<String>,
     /// What the source wants stored for next time.
     snapshot: Option<Vec<u8>>,
 }
@@ -929,13 +894,13 @@ pub(crate) fn plan_repo(
     shape: Option<&crate::shape::ShapeQuery>,
     opts: &SearchOptions,
     stats: &mut SearchStats,
-) -> Result<RepoDraft> {
+) -> Result<RepoPlan> {
     let overlay = match opts.freshness {
         Freshness::Strict if unchanged(repo, stats)? => None,
         Freshness::Strict => Some(overlay(repo, stats)?),
         Freshness::Off => None,
     };
-    let mut plan = RepoDraft { candidates: Vec::new(), dirty: Vec::new(), snapshot: None };
+    let mut plan = RepoPlan { candidates: Vec::new(), dirty: Vec::new(), snapshot: None };
     let t = Instant::now();
     for (si, shard) in repo.shards.iter().enumerate() {
         plan.candidates.push(plan_shard(
@@ -998,13 +963,13 @@ fn plan_shard(
     Ok(cands)
 }
 
-/// Verifies `docs`, a run of shard `si`'s candidates in `plan`, in order, reading as much
-/// of each as `reading` says. `visit` is called once per document and owns its read policy,
+/// Verifies `docs`, a run of shard `si`'s planned candidates, in order, reading as much of
+/// each as `reading` says. `visit` is called once per document and owns its read policy,
 /// so a printer can stop decoding while ranking can read the complete content.
 fn visit_docs<F>(
     repo: &RepoHandle,
-    plan: &RepoPlan,
     si: usize,
+    cands: &ShardCandidates,
     docs: std::ops::Range<usize>,
     reading: Reading,
     stats: &mut SearchStats,
@@ -1015,9 +980,8 @@ where
 {
     let root = repo.source.display_root();
     let shard = repo.shards[si].as_ref();
-    let cands = &plan.candidates[si];
     let wants = cands.docs[docs].iter().map(|c| want(shard, cands, c, reading)).collect::<Result<Vec<_>>>()?;
-    let mut ahead = ReadAhead::new(shard, &wants, plan.query_cost)?;
+    let mut ahead = ReadAhead::new(shard, &wants)?;
     // Where compressed docs decode (E29); reused across the run.
     let mut buf = Vec::new();
     // Reuse path storage too: broad scans visit hundreds of thousands of files.
@@ -1074,9 +1038,9 @@ fn want<'a>(shard: &dyn Shard, cands: &'a ShardCandidates, c: &Candidate, readin
 /// the port exposes: on an lz4 index (E29) a block is ~1.3 MiB of disk, so the window
 /// holds ~3x fewer bytes in flight; E29 measured it as is rather than tuned for that. A
 /// shard may also read the gaps between candidates it joins into one request (the native
-/// one, up to 32 KiB each, E42; for a query bound by bytes, fewer of them, each under
-/// 41.7 KB, E52), on top of this count. A doc bigger than a block is a block by itself and advised whole. All of it only
-/// queues page cache reads, reclaimable, not process memory.
+/// one, up to 32 KiB each, E42), on top of this count. A doc bigger than a block is a block
+/// by itself and advised whole. All of it only queues page cache reads, reclaimable, not
+/// process memory.
 const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
 
 /// Queues the content of a run of candidates for reading, block by block, ahead of the
@@ -1084,8 +1048,6 @@ const READ_AHEAD_BLOCK_BYTES: u64 = 4 << 20;
 struct ReadAhead<'a> {
     shard: &'a dyn Shard,
     docs: &'a [Want<'a>],
-    /// The whole query's cost, which the shard reads each block for (E52).
-    query: ReadCost,
     /// `docs[..end]` are queued.
     end: usize,
     /// Where the block after the current one starts: reaching it queues another.
@@ -1093,8 +1055,8 @@ struct ReadAhead<'a> {
 }
 
 impl<'a> ReadAhead<'a> {
-    fn new(shard: &'a dyn Shard, docs: &'a [Want<'a>], query: ReadCost) -> Result<Self> {
-        let mut r = Self { shard, docs, query, end: 0, trigger: 0 };
+    fn new(shard: &'a dyn Shard, docs: &'a [Want<'a>]) -> Result<Self> {
+        let mut r = Self { shard, docs, end: 0, trigger: 0 };
         r.end = r.queue_block(0)?;
         Ok(r)
     }
@@ -1124,7 +1086,7 @@ impl<'a> ReadAhead<'a> {
             };
             end += 1;
         }
-        self.shard.prefetch(&self.docs[start..end], self.query)?;
+        self.shard.prefetch(&self.docs[start..end])?;
         Ok(end)
     }
 }
@@ -1158,12 +1120,18 @@ pub(crate) fn walk_part(
     mut visit: impl FnMut(Loc<'_>, &str, Doc<'_>) -> Result<bool>,
 ) -> Result<()> {
     match part {
-        Part::Docs { shard, range } => {
-            visit_docs(repo, plan, *shard, range.clone(), Reading::Whole, stats, &mut |loc, rel, indexed, buf| {
+        Part::Docs { shard, range } => visit_docs(
+            repo,
+            *shard,
+            &plan.candidates[*shard],
+            range.clone(),
+            Reading::Whole,
+            stats,
+            &mut |loc, rel, indexed, buf| {
                 let content = indexed.shard.content(indexed.want.doc, buf)?;
                 visit(loc, rel, Doc { path: indexed.path, content, mode: indexed.mode, first_line: 1 })
-            })
-        }
+            },
+        ),
         Part::Dirty => visit_dirty(repo, plan, stats, &mut visit),
     }
 }
@@ -1208,11 +1176,19 @@ fn search_chunk(
     let mut printer = Printer::with_buffer(opts.output, buf);
     match part {
         Part::Docs { shard, range } => {
-            visit_docs(repo, plan, *shard, range.clone(), context.reading, &mut stats, &mut |_, _, doc, buf| {
-                let hit = printer.search_indexed(searcher, matcher, doc, buf, opts, context.literal.as_ref())?;
-                check(&mut printer)?;
-                Ok(hit)
-            })?;
+            visit_docs(
+                repo,
+                *shard,
+                &plan.candidates[*shard],
+                range.clone(),
+                context.reading,
+                &mut stats,
+                &mut |_, _, doc, buf| {
+                    let hit = printer.search_indexed(searcher, matcher, doc, buf, opts, context.literal.as_ref())?;
+                    check(&mut printer)?;
+                    Ok(hit)
+                },
+            )?;
         }
         Part::Dirty => visit_dirty(repo, plan, &mut stats, &mut |_, _, doc| {
             let hit = printer.search(searcher, matcher, doc)?;
@@ -1483,13 +1459,8 @@ mod tests {
             visit(self.content(want.doc, buf)?, 1)?;
             Ok(())
         }
-        fn prefetch(&self, _: &[Want<'_>], _: ReadCost) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
             Ok(())
-        }
-        /// A read per doc, of its content.
-        fn read_cost(&self, wants: &[Want<'_>]) -> Result<ReadCost> {
-            let bytes = wants.iter().map(|w| self.0[w.doc as usize].1.len() as u64).sum();
-            Ok(ReadCost { reads: wants.len() as u64, bytes })
         }
     }
 
@@ -1710,47 +1681,6 @@ mod tests {
     }
 
     #[test]
-    fn every_repo_reads_ahead_for_the_whole_query_cost() {
-        // Three repos of two shards, each doc a candidate: the cost sums all six shards, and
-        // every repo's plan gets the sum, since one disk serves them all.
-        let repos: Vec<RepoHandle> = (0..3)
-            .map(|r| RepoHandle {
-                name: format!("r{r}"),
-                source: Box::new(MemSource(format!("/r{r}"))),
-                shards: (0..2)
-                    .map(|s| {
-                        let docs = (0..5).map(|d| (format!("d{d}"), b"x".repeat(10 * (r + s + d + 1)))).collect();
-                        Box::new(MemShard(docs)) as Box<dyn Shard>
-                    })
-                    .collect(),
-                snapshot: None,
-                listing_digest: None,
-            })
-            .collect();
-        let handles: Vec<&RepoHandle> = repos.iter().collect();
-        let opts = SearchOptions {
-            pattern: "xxx".into(),
-            fixed_strings: true,
-            case: CaseMode::Sensitive,
-            word: false,
-            line_number: true,
-            output: OutputMode::Lines,
-            max_count: None,
-            threads: 2,
-            freshness: Freshness::Off,
-            limits: Limits::default(),
-        };
-        let query = analyze("xxx", PlanCase::Sensitive).unwrap().query;
-        let mut stats = SearchStats::default();
-        let planned = plan_chunks(&opts, &handles, &query, None, Reading::Whole, 1, &mut stats).unwrap();
-        let bytes = (0..3u64).flat_map(|r| (0..2u64).flat_map(move |s| (0..5u64).map(move |d| 10 * (r + s + d + 1))));
-        let whole = ReadCost { reads: 30, bytes: bytes.sum() };
-        assert_eq!(stats.read_cost, whole);
-        assert_eq!(planned.plans.len(), 3);
-        assert!(planned.plans.iter().all(|p| p.query_cost == whole));
-    }
-
-    #[test]
     fn the_first_failing_chunk_is_the_error_reported() {
         // Two unreadable docs far apart: whichever thread fails first, the search reports
         // the earlier one, as a one-thread search would.
@@ -1845,11 +1775,8 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("candidates never reads content")
         }
-        fn prefetch(&self, _: &[Want<'_>], _: ReadCost) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
             unreachable!("candidates never reads content")
-        }
-        fn read_cost(&self, _: &[Want<'_>]) -> Result<ReadCost> {
-            Ok(ReadCost::default())
         }
     }
 
@@ -1977,11 +1904,8 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("planning never reads content")
         }
-        fn prefetch(&self, _: &[Want<'_>], _: ReadCost) -> Result<()> {
+        fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
             unreachable!("planning never reads content")
-        }
-        fn read_cost(&self, _: &[Want<'_>]) -> Result<ReadCost> {
-            Ok(ReadCost::default())
         }
     }
 
@@ -2080,17 +2004,11 @@ mod tests {
         fn visit_content(&self, _: Want<'_>, _: &mut Vec<u8>, _: &mut BlockVisitor<'_>) -> Result<()> {
             unreachable!("read-ahead only queues content")
         }
-        fn prefetch(&self, wants: &[Want<'_>], query: ReadCost) -> Result<()> {
-            assert_eq!(query, QUERY, "every block is read for the whole query");
+        fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
             self.queued.lock().unwrap().push(wants.iter().map(|w| w.doc).collect());
             Ok(())
         }
-        fn read_cost(&self, _: &[Want<'_>]) -> Result<ReadCost> {
-            unreachable!("read-ahead is handed the query's cost")
-        }
     }
-
-    const QUERY: ReadCost = ReadCost { reads: 7, bytes: 11 };
 
     #[test]
     fn read_ahead_queues_every_doc_once_before_it_is_verified_and_stays_bounded() {
@@ -2102,7 +2020,7 @@ mod tests {
         let shard = SizedShard { sizes, queued: Mutex::new(Vec::new()) };
         let docs: Vec<DocId> = (0..23).filter(|d| d % 4 != 3).collect();
         let wants: Vec<Want<'_>> = docs.iter().map(|&doc| Want { doc, extent: Extent::Whole }).collect();
-        let mut ahead = ReadAhead::new(&shard, &wants, QUERY).unwrap();
+        let mut ahead = ReadAhead::new(&shard, &wants).unwrap();
         let queued = || shard.queued.lock().unwrap().concat();
         for at in 0..docs.len() {
             ahead.before(at).unwrap();
@@ -2117,7 +2035,7 @@ mod tests {
         assert!(calls.iter().any(|c| c.last() == Some(&10)), "the big file ends its block: {calls:?}");
         // Nothing to queue still makes one empty call, which the backend ignores.
         let none: Vec<Want<'_>> = Vec::new();
-        let mut ahead = ReadAhead::new(&shard, &none, QUERY).unwrap();
+        let mut ahead = ReadAhead::new(&shard, &none).unwrap();
         ahead.before(0).unwrap();
     }
 }

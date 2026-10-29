@@ -1,3 +1,6 @@
+# Each query's read-cost estimate from E52's kept build (bin-e52c), `--stats` cost_reads
+# and cost_bytes: query, reads, MiB, bytes / (reads x 41.7 KB), side of the 1.5x line.
+# Made by a scratch script that bench/harness/estimate.sh now replaces (same columns).
 literal_ident    936     48.6MiB  1.31 e42
 literal_common   3029    397.4MiB  3.30 BAL
 literal_none     45      0.1MiB  0.08 e42

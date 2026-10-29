@@ -14,8 +14,8 @@ use grep_searcher::{Searcher, Sink, SinkMatch};
 use crate::query::{PlanCase, analyze};
 use crate::rank::{self, Corpus, FileFeatures, HEAD_BYTES, TermHits, Weights};
 use crate::search::{
-    CHUNK_BYTES, CaseMode, Chunk, Doc, Loc, Mode, Planned, Printer, Reading, RepoHandle, RepoPlan, SearchOptions,
-    SearchStats, build_matcher, build_searcher, check_deadline, in_repo, plan_chunks, walk_part,
+    CHUNK_BYTES, CaseMode, Chunk, Doc, Loc, Mode, Planned, Printer, RepoHandle, RepoPlan, SearchOptions, SearchStats,
+    build_matcher, build_searcher, check_deadline, in_repo, plan_chunks, walk_part,
 };
 use crate::{Error, Result};
 
@@ -98,7 +98,7 @@ pub(crate) fn search_ranked_chunked(
     // large repo kept a single core busy while the others idled.
     let mut stats = SearchStats { repos: repos.len(), plan: format!("{query:?}"), ..SearchStats::default() };
     let Planned { plans, chunks, snapshots } =
-        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), Reading::Whole, chunk_bytes, &mut stats)?;
+        plan_chunks(opts, repos, &query, analysis.shape.as_ref(), chunk_bytes, &mut stats)?;
     let found = collect(opts, repos, &plans, &chunks, &matcher, &term_matchers, &mut stats)?;
 
     // Score and order. Ties break on path, so the order never depends on thread timing.

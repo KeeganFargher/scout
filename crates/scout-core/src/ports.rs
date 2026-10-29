@@ -204,30 +204,7 @@ pub trait Shard: Send + Sync {
     /// per verifying thread, each a page fault; on a network volume (EBS) every one of those
     /// pays the volume's latency. A hint: it reads nothing a later read would not, and a
     /// backend with nothing to read ahead does nothing.
-    ///
-    /// `query` is [`Shard::read_cost`] summed over every shard the search reads: a disk's
-    /// caps bind the whole query, so how a backend reads one block depends on whether the
-    /// query's reads or its bytes run out first (E52).
-    fn prefetch(&self, wants: &[Want<'_>], query: ReadCost) -> Result<()>;
-
-    /// What [`Shard::prefetch`] of `wants` would read from a cold disk, before any of it
-    /// is read: a search sums it over every shard while it plans (E52). A backend with
-    /// nothing to read ahead returns the default.
-    fn read_cost(&self, wants: &[Want<'_>]) -> Result<ReadCost>;
-}
-
-/// Reads from disk and their bytes, as a backend would issue them (E52).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ReadCost {
-    pub reads: u64,
-    pub bytes: u64,
-}
-
-impl std::ops::AddAssign for ReadCost {
-    fn add_assign(&mut self, other: Self) {
-        self.reads += other.reads;
-        self.bytes += other.bytes;
-    }
+    fn prefetch(&self, wants: &[Want<'_>]) -> Result<()>;
 }
 
 /// Docs carrying the marker pseudo-trigrams [`ALWAYS_SEARCH`] and [`READER_MODE`].

@@ -644,7 +644,7 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
     persist_snapshots(store, &selected, report.snapshots)?;
     if a.stats {
         err_line(&format!(
-            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} cost_reads={} cost_bytes={} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
+            "scout-stats repos={} shards={} shards_filtered={} docs={} candidates={} matched_files={} dirty_files={} full_scans={} unchanged_repos={} list_ms={:.2} map_ms={:.2} postings_ms={:.2} verify_ms={:.2} open_ms={:.2} search_ms={:.2} total_ms={:.2} plan={}",
             stats.repos,
             stats.shards,
             stats.shards_filtered,
@@ -658,8 +658,6 @@ fn cmd_search(store: &FsStore, a: &SearchArgs) -> anyhow::Result<ExitCode> {
             stats.map_time.as_secs_f64() * 1e3,
             stats.postings_time.as_secs_f64() * 1e3,
             stats.verify_time.as_secs_f64() * 1e3,
-            stats.read_cost.reads,
-            stats.read_cost.bytes,
             opened.as_secs_f64() * 1e3,
             stats.elapsed.as_secs_f64() * 1e3,
             started.elapsed().as_secs_f64() * 1e3,

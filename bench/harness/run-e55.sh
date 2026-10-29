@@ -1,6 +1,7 @@
 #!/bin/bash
 # E55 (root): E53's `Shard::size` after planning only: `chunk_repo` keeps `meta`, whose
-# path read faults the paths section in while planning (E54). Base is E52. search-ms.sh for warm, serve-ab.sh at 2 CPUs / 4 GiB (2 reps, 1 warm round, 1 cold
+# path read faults the paths section in while planning (E54). Base is E52. search-ms.sh
+# for warm, serve-ab.sh at 2 CPUs / 4 GiB (2 reps, 1 warm round, 1 cold
 # round, the big suite) for cold, then cold-io.sh at gp3's IOPS cap for each binary.
 # Rule, set before the run: search-ms geomean E55/E52 <= 0.98 in both passes and no query
 # over 1.045 in both (E53's A/A); cold pooled <= 1.01 (E51's cold A/A: 0.989, 0.991) and
