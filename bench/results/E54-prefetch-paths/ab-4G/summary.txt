@@ -1,0 +1,48 @@
+## warm, 2 reps
+| query | base ms | paths ms | paths/base | base MiB read | paths MiB read | paths faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 27.3 | 26.8 | 0.979 | 0.0 | 0.0 | 2/2 |
+| literal_common | 184.4 | 176.0 | 0.954 | 0.0 | 0.0 | 2/2 |
+| literal_none | 1.4 | 1.5 | 1.069 | 0.0 | 0.0 | 0/2 |
+| literal_long | 306.6 | 298.2 | 0.972 | 0.0 | 0.0 | 2/2 |
+| ident_regex | 116.4 | 105.8 | 0.909 | 0.0 | 0.0 | 2/2 |
+| alternation | 290.5 | 281.8 | 0.970 | 0.0 | 0.0 | 1/2 |
+| crbug_regex | 83.9 | 79.2 | 0.944 | 0.0 | 0.0 | 2/2 |
+| case_insensitive | 139.3 | 136.3 | 0.979 | 0.0 | 0.0 | 2/2 |
+| smart_case | 36.7 | 36.7 | 1.001 | 0.0 | 0.0 | 1/2 |
+| word | 145.6 | 140.5 | 0.965 | 0.0 | 0.0 | 2/2 |
+| anchored | 260.6 | 255.0 | 0.978 | 0.0 | 0.0 | 2/2 |
+| date_regex | 394.5 | 391.1 | 0.991 | 0.0 | 0.0 | 1/2 |
+| count_mode | 67.5 | 67.9 | 1.006 | 0.0 | 0.0 | 1/2 |
+| files_mode | 60.0 | 60.3 | 1.006 | 0.0 | 0.0 | 0/2 |
+| llvm_regex | 13.6 | 13.5 | 0.990 | 0.0 | 0.0 | 1/2 |
+| rare_regex | 44.2 | 43.0 | 0.973 | 0.0 | 0.0 | 2/2 |
+| selective_long | 7.2 | 7.3 | 1.012 | 0.0 | 0.0 | 0/2 |
+| selective_symbol | 9.1 | 9.4 | 1.023 | 0.0 | 0.0 | 0/2 |
+geomean paths/base: 0.984
+
+## cold, 2 reps
+| query | base ms | paths ms | paths/base | base MiB read | paths MiB read | paths faster in reps |
+|---|---:|---:|---:|---:|---:|---:|
+| literal_ident | 552.0 | 568.3 | 1.029 | 64.3 | 69.5 | 0/2 |
+| literal_common | 3091.1 | 3190.9 | 1.032 | 358.5 | 373.3 | 0/2 |
+| literal_none | 37.6 | 37.9 | 1.008 | 9.0 | 9.3 | 0/2 |
+| literal_long | 4896.2 | 5082.8 | 1.038 | 555.2 | 571.9 | 0/2 |
+| ident_regex | 2475.9 | 2661.9 | 1.075 | 296.0 | 313.9 | 0/2 |
+| alternation | 5082.4 | 5396.5 | 1.062 | 608.2 | 641.1 | 0/2 |
+| crbug_regex | 1961.8 | 2071.3 | 1.056 | 233.5 | 249.0 | 0/2 |
+| case_insensitive | 2587.9 | 2741.3 | 1.059 | 311.7 | 334.0 | 0/2 |
+| smart_case | 384.0 | 473.5 | 1.233 | 46.2 | 49.9 | 0/2 |
+| word | 3074.7 | 3277.1 | 1.066 | 372.5 | 398.1 | 0/2 |
+| anchored | 3098.0 | 3178.4 | 1.026 | 372.6 | 384.9 | 0/2 |
+| date_regex | 2162.9 | 2285.6 | 1.057 | 250.0 | 277.5 | 0/2 |
+| count_mode | 1850.0 | 1953.6 | 1.056 | 218.1 | 233.1 | 0/2 |
+| files_mode | 2140.1 | 2247.4 | 1.050 | 252.6 | 266.7 | 0/2 |
+| llvm_regex | 117.8 | 177.1 | 1.504 | 28.9 | 30.2 | 0/2 |
+| rare_regex | 1234.6 | 1165.2 | 0.944 | 110.3 | 124.4 | 2/2 |
+| selective_long | 130.0 | 129.0 | 0.992 | 24.4 | 24.8 | 2/2 |
+| selective_symbol | 168.8 | 232.4 | 1.377 | 32.2 | 32.9 | 0/2 |
+geomean paths/base: 1.085
+
+base time to ready on an evicted index: [3157, 2239] ms
+paths time to ready on an evicted index: [2243, 2232] ms
