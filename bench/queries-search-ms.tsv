@@ -1,0 +1,9 @@
+# name<TAB>flags<TAB>pattern. Broad warm queries for search-ms.sh: thousands to tens of
+# thousands of candidates, where per-candidate planning work shows (E53).
+crbug_regex		TODO\(crbug\.com/\d+\)
+files_mode	-l	#include <vector>
+literal_common	-F	std::unique_ptr
+dcheck	-w	DCHECK
+smart_case	-S	webassembly
+alternation		TODO|FIXME|HACK
+date_regex		\d{4}-\d{2}-\d{2}

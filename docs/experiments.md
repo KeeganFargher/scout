@@ -67,6 +67,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E50 | `prefetch` joins the shortest gaps first, only gaps under a read's worth of bytes (41.7 KB at gp3's 125 MB/s ÷ 3000), and stops once a block's reads cost no more than its bytes (was: every gap up to 32 KiB)                                                                                                               | —                                                     | —           | **rejected** (cold 0.959, 0.952 and 0.968 per rep, `alternation` 0.877 and `literal_common` 0.860; but `llvm_regex` 1.44 and 2.03 and `smart_case` 1.21 and 1.20 slower in both reps, against no query over 10% slower in both; warm 0.999)                                                                                                                                                                                |
 | E51 | `serve` sends every body with Content-Length instead of tiny_http's chunked transfer encoding (8 KiB frames for bodies of 32 KiB or more)                                                                                                                                                                                    | —                                                     | —           | **reverted** (warm 0.979, 0.977 and 0.982 per rep; cold 0.990; but an A/A of one binary put its warm reps at 0.954 and 1.022, so the gain is within noise)                                                                                                                                                                                                                                                                 |
 | E52 | `prefetch` joins by E50's balance for a query whose content bytes cost 1.5x its reads (estimated for the whole query while planning), by E42's 32 KiB gaps otherwise                                                                                                                                                         | —                                                     | —           | **kept** (cold 0.949, 0.947 and 0.950 per rep; held out: `small_vector` 0.775, `const_auto_ref` 0.901; no query over 5% slower cold; warm 1.022, the estimate costs 4–7% of a broad warm search, E53's target)                                                                                                                                                                                                             |
+| E53 | Planning and read-ahead look a candidate's size up with a new `Shard::size`, not `meta`, which checked the path's UTF-8 on every lookup                                                                                                                                                                                      | —                                                     | —           | **rejected** (warm search alone 0.965 and 0.957, `crbug_regex` and `files_mode` ~6% faster; but cold 1.068, `llvm_regex` 1.38 and `selective_long` 1.37 slower in both reps: path pages were first read during verification, behind its read-ahead)                                                                                                                                                                        |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1948,6 +1949,43 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   would have lost its 0.886.
 - Not tuned for: the t-class profile (43 MB/s, 2000 IOPS), where a read is worth ~21.5 KB
   and both constants move together.
+
+### E53: a size lookup without the path
+
+- Why: E52's estimate made broad warm searches 4–7% slower, and a profile of
+  `std::unique_ptr` put most of a candidate's planning cost in `meta`: its path's UTF-8
+  check (`from_utf8`, 2.4% of the whole search) and the lookup (2.1%). Planning
+  (`chunk_repo`, `want`, twice with E52's estimate) and read-ahead (`queue_block`) call it
+  for the size alone.
+- Change: `Shard::size(doc)`, the doc row's length without the path, used in those three
+  places. `visit_docs` still reads the path to print it.
+- Harness: [search-ms.sh](../bench/harness/search-ms.sh), the search alone
+  (`--stats`' `search_ms`, `--freshness off`, 2 CPUs, index cached), median of 9, two
+  interleaved passes, over [queries-search-ms.tsv](../bench/queries-search-ms.tsv). A
+  2-rep `serve-ab.sh` cannot see a change of a few percent warm (E51's A/A: ±5% a rep).
+- The first run failed a rule set before this harness's noise was known (E53 faster on
+  every query in both passes): `alternation` 1.035 in one pass, geomeans 0.975 and 0.979
+  ([first run](../bench/results/E53-size-lookup/search-ms-first.txt)). An A/A of one
+  binary ([aa](../bench/results/E53-size-lookup/search-ms-aa.txt)) then moved a query up
+  to 1.044 in a pass and a pass's geomean up to 1.011. The rule for the second run, set
+  after the A/A ([run-e53.sh](../bench/harness/run-e53.sh)): geomean ≤ 0.98 in both
+  passes; no query over 1.045 in both; cold pooled ≤ 1.02 and no query over 10% slower
+  cold in both reps (`serve-ab.sh`, 2 reps, the big suite).
+- Results ([search-ms](../bench/results/E53-size-lookup/search-ms.txt),
+  [serve-ab](../bench/results/E53-size-lookup/ab-4G/summary.txt)):
+  - Warm, search alone: **0.965 and 0.957**; `crbug_regex` 0.952 and 0.944, `files_mode`
+    0.942 and 0.937, `dcheck` 0.965 and 0.931; worst `smart_case` 1.007. `serve-ab.sh`
+    warm 0.980.
+  - Cold **1.068**: `llvm_regex` 1.382, `selective_long` 1.371, `selective_symbol`
+    1.250, `smart_case` 1.135, `literal_none` 1.133, all small; the broad queries within
+    ±1%.
+  - **Rejected** on cold.
+- Why cold lost, a hypothesis not yet measured: the paths section keeps the kernel's
+  128 KiB read-around. Before, `meta` in planning faulted path pages in while the disk was
+  idle; with `size`, the first touch of a candidate's path is in `visit_docs`, during
+  verification, where each fault waits behind the read-ahead's queued content on the
+  throttled volume (E49 saw small reads wait 15–19 ms there). Small queries are bound by
+  that latency. E54 tests it: E53 with the read-ahead also queuing each block's paths.
 
 ### Probe: what `anchored`'s anchors cost
 
