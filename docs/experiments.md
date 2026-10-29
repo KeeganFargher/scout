@@ -64,6 +64,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E47 | E46, reading only after no search ran for 100 ms; on by default (`--warm-mb`)                                                                                                                                                                                                                                                | —                                                     | —           | **superseded by E49** (queries at ready 0.958; 45 s after ready 0.261; its confirmation E47b failed steady warm 1.037 in a new spaced scenario, which a rerun put at 1.006)                                                                                                                                                                                                                                                |
 | E48 | E47 waiting for idle on a condvar instead of polling every 5 ms; shards read forward, opened lazily; a new generation skips shards already read                                                                                                                                                                              | —                                                     | —           | **rejected** (at ready 1.020, one rep 1.066; steady 1.029 and 1.027, the latter with the walk finished: the fixed clauses sat inside the noise. Forward reads doubled the walk's reads, 20,285 against 11,526)                                                                                                                                                                                                             |
 | E49 | E48 reading backward again; judged against an A/A run's noise, 4 reps                                                                                                                                                                                                                                                        | —                                                     | —           | **kept** (every clause inside the A/A's noise: at ready 1.013 against ≤ 1.067, steady 0.989–1.001; 45 s after ready 0.253, the pass 12.0 → 2.3 s; 300 ms apart 0.738)                                                                                                                                                                                                                                                      |
+| E50 | `prefetch` joins the shortest gaps first, only gaps under a read's worth of bytes (41.7 KB at gp3's 125 MB/s ÷ 3000), and stops once a block's reads cost no more than its bytes (was: every gap up to 32 KiB)                                                                                                               | —                                                     | —           | **rejected** (cold 0.959, 0.952 and 0.968 per rep, `alternation` 0.877 and `literal_common` 0.860; but `llvm_regex` 1.44 and 2.03 and `smart_case` 1.21 and 1.20 slower in both reps, against no query over 10% slower in both; warm 0.999)                                                                                                                                                                                |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1818,6 +1819,39 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   skipped shards and a missing file, the condvar wait itself, and `/status` reporting a
   finished warm-up of two generations (the second skipping the unchanged repo's shards)
   and one turned off.
+
+### E50: joining prefetch gaps only while reads bind
+
+- Why: the cold-path research ([cold-path-ideas.md](research/cold-path-ideas.md), idea 2)
+  fit every row of E42's gap sweep to t ≈ max(MiB ÷ 119, reads ÷ 3000): joining two ranges
+  across a gap saves a read and adds the gap's bytes, which pays only while the reads bind.
+  E42's fixed 32 KiB joined gaps for queries already bound by bytes (`alternation` read
+  490 → 685 MiB). Modelled: cold geomean ~0.965.
+- Rule set before the run (`run-e50.sh`): cold geomean pooled ≤ 0.98 and below 1.00 in
+  both reps; warm pooled ≤ 1.03; no query over 10% slower cold in both reps.
+- Change: `coalesce` joins adjacent ranges, then the gaps under `BYTES_PER_READ`
+  (125 MB/s ÷ 3000 = 41.7 KB) shortest first, stopping once the block's runs × that ≤
+  its bytes. Format unchanged; both arms served E43's base index.
+- Results ([summary](../bench/results/E50-prefetch-balance/ab-4G/summary.txt),
+  [cold-io base](../bench/results/E50-prefetch-balance/cold-io-base.txt),
+  [cold-io E50](../bench/results/E50-prefetch-balance/cold-io-bal.txt)):
+  - Cold **0.959** (0.952 and 0.968 per rep): `selective_symbol` 0.693, `literal_common`
+    0.860 (421 → 359 MiB), `alternation` 0.877 (694 → 608 MiB), `word` 0.882, `anchored`
+    0.911. In cold-io the big queries' reads came out at 41–44 KiB each, the balance point.
+  - Slower in both reps: `llvm_regex` 145 → 243 ms (1.44 and 2.03 per rep), `smart_case`
+    384 → 462 (1.21 and 1.20), `literal_ident` 1.016.
+  - Warm 0.999.
+  - **Rejected**: two queries over 10% slower in both reps.
+- Why the small ones lost: the balance is kept per prefetch block, but the caps bind per
+  query. `llvm_regex` as a whole is bound by reads (cold-io: 585 reads ÷ 3000 = 195 ms
+  against 20 MiB ÷ 119 MB/s = 168 ms, measured 185). Its byte-heavy blocks stopped
+  joining, so the query made 694 reads (231 ms by the model; measured 246). Joining by
+  the query's own balance needs the query's running reads and bytes inside `prefetch`, a
+  change to the shard port; not tried yet.
+- Probe for the research's idea 3 (store identical files once per shard): blobs that occur
+  more than once are 140 of 4,174 MiB in chromium (3.4%) and 17 of 2,299 in llvm-project
+  (0.7%), from `git ls-tree -r -l HEAD`, an upper bound on what dedup could save. Not
+  worth a format change.
 
 ## Ranking experiments
 
