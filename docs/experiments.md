@@ -58,6 +58,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E41 | `--rank` per-file work: features moved instead of cloned, one hit buffer per chunk, line count stopped once `classify` is settled, head lowercased on the stack; variant A also classified paths without allocating                                                                                                          | —                                                     | —           | **rejected** (output identical; A: geomean 0.988 / 0.993 at 9 / 21 runs but +6% instructions on `literal_long`; B: −1–2% instructions, cycles within ±2% noise on all 5 broad queries)                                                                                                                                                                                                                                     |
 | E42 | `prefetch` joins candidates' content ranges across gaps of up to 32 KiB (was 4 KiB), so a cold query issues fewer, larger reads                                                                                                                                                                                              | —                                                     | —           | **kept** (serve on the EBS-like box, 2 reps: cold geomean **0.731**, `alternation` 10.0 → 5.8 s, `word` 6.6 → 3.5 s; warm 0.978; `literal_long` cold +4%)                                                                                                                                                                                                                                                                  |
 | E43 | Writer compresses every content block lz4 shrinks, small ones too (was: blocks under 4 KiB stored raw)                                                                                                                                                                                                                       | —                                                     | —           | **rejected** (fails the rule set before the run: cold geomean 0.959 against ≤ 0.95; index 2,580 → 2,305 MiB, `literal_long` cold 0.842 but warm 1.107, over 10% slower in both reps; warm geomean 1.018)                                                                                                                                                                                                                   |
+| E44 | A 64 KiB lz4 dictionary per shard, trained on its first 8 MiB, for every doc of one block at any size (format v10)                                                                                                                                                                                                           | —                                                     | —           | **rejected** (fails all three clauses of the rule set before the run: cold geomean 0.971, warm 1.066, `literal_long` and `files_mode` over 10% slower warm in both reps, `anchored` marginally; index 2,580 → 2,165 MiB)                                                                                                                                                                                                   |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1551,6 +1552,58 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - **Rejected**: two of the rule's three clauses fail. Cold 0.959 misses 0.95 (by one noisy
   query), and `literal_long` is more than 10% slower warm in both reps: the warm cost
   lands on the same queries as the cold win.
+
+### E44: a dictionary per shard
+
+- Why: E43's `dict-probe` arm `hc6+small+shard8m+alone` (a shard's dictionary for its
+  single-block docs, which hold 52.1% of the raw content) stored 148.2 MiB against 195.3
+  (E42) and 166.1 (E43), decode 4.31 against 4.98 GB/s. That arm also compressed the small
+  blocks of multi-block docs, as E43 did; what was built here left those raw, so it
+  should store somewhat more than the probe.
+- Rule set before the run (E43's): keep if cold geomean ≤ 0.95, warm geomean ≤ 1.05 and
+  no warm query more than 10% slower in both reps, all from the interleaved
+  `serve-ab.sh` reps.
+- Change (format v10, reverted): the writer held back a shard's first 8 MiB of content,
+  trained a 64 KiB dictionary on its blocks with zstd's trainer (no dictionary under 1 MiB
+  or 100 blocks sampled: the trainer refuses a single giant line), and stored it after the
+  content. Every doc of one block was lz4 HC 6 against it, at any size, kept when smaller;
+  docs of several blocks were encoded as before. The reader decoded such a doc into a
+  per-thread scratch holding the shard's dictionary right before the output (lz4's prefix
+  path), copied in only when the thread last read another shard, then copied the doc out.
+  `lzzzz` and `zstd` became runtime dependencies.
+- `run-e44.sh`: the base arm served E43's base index, written by `bin-e42` (the E42
+  writer, which E43 left unchanged; which commit built each binary is not recorded by the
+  script). That index had already been served by E43's runs, and serving syncs a tiny repo
+  into it (serve-ebs.sh), so the base arm started with that repo in it and the new index
+  did not. The new build indexed chromium + llvm-project `--content lz4` at 2 CPUs / 4 GiB
+  in 306.8 s, against 299.6 s for the base in E43 (separate sessions, not interleaved)
+  ([index](../bench/results/E44-dict/index.txt)), 51 shards, 2,580 → 2,165 MiB (−16.1%,
+  postings included). Parity ALL OK on all four profiles
+  ([parity](../bench/results/E44-dict/parity.txt)). `serve-ab.sh`, 2 interleaved reps
+  ([summary](../bench/results/E44-dict/ab-summary.txt),
+  [reps](../bench/results/E44-dict/ab-4G)):
+  - Cold **0.971**. The broad queries were faster: `anchored` 0.697, `literal_long` 5,091
+    → 3,694 ms (0.726), `literal_common` 0.783, `rare_regex` 0.806, `word` 0.857. The
+    selective ones were slower in both reps: `llvm_regex` 116 → 242 ms (2.09),
+    `literal_none` 1.30, `smart_case` 1.23, `selective_symbol` 1.06, `selective_long`
+    1.05, `literal_ident` 1.02. Several of them read more (`literal_none` 9.0 → 12.8 MiB,
+    `smart_case` 46.2 → 60.0, `llvm_regex` 28.9 → 34.9), but so did `rare_regex` (110.2
+    → 120.2), which was faster. Why they lost was not measured.
+  - Warm **1.066**. Every query but `literal_none`, `smart_case` and `date_regex` was
+    slower in both reps. Per rep (p50s from warm.json): `literal_long` 1.110 and 1.184,
+    `files_mode` 1.105 and 1.174, `anchored` 1.100 and 1.109 (over 10% in rep 1 by
+    0.03%, so marginal). Where the time went was not profiled; the change put every
+    single-block doc, borrowed from the map before when raw, through a decode and a copy.
+  - Ready time unchanged (2.23–2.36 s both).
+  - `cold-io.sh` at 3000 IOPS, one pass per index, base then dict, not interleaved
+    ([base](../bench/results/E44-dict/cold-io-base.txt),
+    [dict](../bench/results/E44-dict/cold-io-dict.txt)): geomean 0.920. Not what the rule
+    reads, and the one pass is ordered.
+- **Rejected**: all three clauses fail (the per-query one on `literal_long` and
+  `files_mode` clearly, `anchored` marginally). A 16% smaller index cut the broad cold
+  queries by up to 30% but made almost every warm query slower and the selective cold ones
+  slower too. E43 and E44 both traded warm time for cold bytes on this box and both lost
+  the trade under this rule.
 
 ## Ranking experiments
 

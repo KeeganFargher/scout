@@ -1,0 +1,2 @@
+base: size=2580 MiB (built for E43)
+dict: done in 306.8s size=2165 MiB
