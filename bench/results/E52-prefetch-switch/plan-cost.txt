@@ -1,0 +1,9 @@
+# Warm search_ms (scout search --freshness off --threads 2 --stats -l, index in the page
+# cache, taskset 2 CPUs): median of 9, two interleaved passes per binary. E51r = before
+# E52, E52 = the binary the A/B ran.
+query                      candidates  E51r          E52
+TODO\(crbug\.com/\d+\)     15573       69.2, 71.2    72.8, 72.7
+#include <vector>          22456       62.3, 62.7    66.7, 66.7
+std::unique_ptr            50646       111.5, 115.2  117.7, 119.8
+webassembly                1603        22.9, 22.9    23.7, 23.6
+DCHECK                     31758       118.5, 125.6  126.9, 125.5

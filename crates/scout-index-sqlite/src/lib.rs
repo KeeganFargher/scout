@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags, params};
 use scout_core::ports::{
-    BlockVisitor, DocId, DocMeta, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+    BlockVisitor, DocId, DocMeta, FileMeta, IndexBackend, Markers, ReadCost, Shard, ShardWriter, UnitId, Want,
 };
 use scout_core::shape::ShapeMask;
 use scout_core::trigram::Trigram;
@@ -317,8 +317,12 @@ impl Shard for SqliteShard {
 
     /// SQLite reads a page when a query asks for it, with no call that queues reads ahead,
     /// and this backend is a comparison point, not what a server runs.
-    fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+    fn prefetch(&self, _: &[Want<'_>], _: ReadCost) -> Result<()> {
         Ok(())
+    }
+
+    fn read_cost(&self, _: &[Want<'_>]) -> Result<ReadCost> {
+        Ok(ReadCost::default())
     }
 }
 

@@ -1,0 +1,10 @@
+# name<TAB>flags<TAB>pattern. Held out from E52's tuning: chosen and classified (bound by
+# reads or by bytes, from a probe build's content-read estimate) before E52's code existed,
+# so they test its 1.5x margin on queries it was not fitted to.
+small_vector	-F	SmallVector<
+license_apache	-F	Apache License
+const_auto_ref	-F	const auto&
+llvm_debug		LLVM_DEBUG\(dbgs\(\)
+web_contents_obs	-F	WebContentsObserver
+singleton_ci	-i	singleton
+trace_event	-w	TRACE_EVENT0

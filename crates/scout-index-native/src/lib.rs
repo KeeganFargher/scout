@@ -77,7 +77,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use scout_core::indexer::{UNIT_TARGET, unit_spans};
 use scout_core::ports::{
-    BlockVisitor, DocId, DocMeta, Extent, FileMeta, IndexBackend, Markers, Shard, ShardWriter, UnitId, Want,
+    BlockVisitor, DocId, DocMeta, Extent, FileMeta, IndexBackend, Markers, ReadCost, Shard, ShardWriter, UnitId, Want,
 };
 use scout_core::shape::ShapeMask;
 use scout_core::trigram::Trigram;
@@ -107,7 +107,14 @@ const PAGE: usize = 4096;
 /// block of n candidates queues at most (n - 1) × 32 KiB more. Measured, that was 25% more
 /// bytes over a cold pass, and the server's peak memory rose 60–120 MiB of 4 GiB, all
 /// reclaimable page cache.
+///
+/// A query bound by its bytes joins by `balance` instead (E52).
 const PREFETCH_GAP: usize = 32 << 10;
+/// What one read costs a cold query, in bytes of transfer: gp3's 125 MB/s ÷ its 3000 IOPS.
+/// A broad cold query takes about max(MiB ÷ 119, reads ÷ 3000): every row of E42's gap
+/// sweep did, to within a few percent. Tuned to gp3's ratio, like `PREFETCH_GAP`; a t-class
+/// instance's EBS baseline (43 MB/s, 2000 IOPS) would make it ~21.5 KB.
+const BYTES_PER_READ: u64 = 125_000_000 / 3000;
 const VAL_LEN: usize = 12;
 /// Keys per fence block: 128 × 4 bytes is one short cache-friendly run (usually within one
 /// page), and the fence of a 44k-trigram shard is ~350 keys, ~1.4 KiB.
@@ -829,7 +836,42 @@ impl Shard for NativeShard {
         Ok(())
     }
 
-    fn prefetch(&self, wants: &[Want<'_>]) -> Result<()> {
+    fn prefetch(&self, wants: &[Want<'_>], query: ReadCost) -> Result<()> {
+        let ranges = self.content_ranges(wants)?;
+        let runs = if bound_by_bytes(query) {
+            balance(ranges, BYTES_PER_READ as usize)
+        } else {
+            coalesce(ranges, PREFETCH_GAP)
+        };
+        for r in runs {
+            self.will_need(r)?;
+        }
+        Ok(())
+    }
+
+    /// The reads `prefetch` would issue without knowing the query: E42's joins.
+    fn read_cost(&self, wants: &[Want<'_>]) -> Result<ReadCost> {
+        let runs = coalesce(self.content_ranges(wants)?, PREFETCH_GAP);
+        Ok(ReadCost { reads: runs.len() as u64, bytes: runs.iter().map(|r| r.len() as u64).sum() })
+    }
+}
+
+/// Whether a cold `query` runs out of bytes before reads, so joining gaps pays only while
+/// a block's reads still cost more than its bytes (`balance`). The estimate counts content
+/// reads only: measured cold, the queries probed read 1.1–1.7x as many (index pages), up
+/// to 3.1x where the kernel splits long ranges (`literal_long`, bound by bytes either way),
+/// and 1.5–1.7x on the small ones whose time E50's balance raised (`llvm_regex`,
+/// `smart_case`, `literal_ident`). Those paid ~0.9 ms per extra read (`llvm_regex`), not
+/// the model's 0.33: few reads in flight, so latency, not a cap, binds them. So bytes must
+/// cost 1.5x the reads to count, a margin chosen with E50's 18 queries in view and checked
+/// on 7 held out (E52).
+fn bound_by_bytes(query: ReadCost) -> bool {
+    2 * query.bytes >= 3 * query.reads * BYTES_PER_READ
+}
+
+impl NativeShard {
+    /// The stored bytes `wants` reads, a range per doc or per run of unit blocks.
+    fn content_ranges(&self, wants: &[Want<'_>]) -> Result<Vec<std::ops::Range<usize>>> {
         let mut ranges = Vec::with_capacity(wants.len());
         for want in wants {
             let stored = self.stored(want.doc)?;
@@ -844,11 +886,52 @@ impl Shard for NativeShard {
                 }
             }
         }
-        for r in coalesce(ranges, PREFETCH_GAP) {
-            self.will_need(r)?;
-        }
-        Ok(())
+        Ok(ranges)
     }
+}
+
+/// `ranges`, in order, with adjacent ones joined, then the shortest gaps between runs
+/// joined while the runs' reads cost more than their bytes (`per_read` bytes a read). Only
+/// gaps shorter than a read are joined: past that, the gap's bytes cost more than the read
+/// it saves. The balance is kept per call, one read-ahead block (~4 MiB); it is used only
+/// for a query bound by its bytes (`bound_by_bytes`), where E42's 32 KiB joins added bytes
+/// to a query already short of them (`alternation` read 490 → 685 MiB). Out of order or
+/// overlapping ranges are handled as `coalesce` does.
+fn balance(ranges: Vec<std::ops::Range<usize>>, per_read: usize) -> Vec<std::ops::Range<usize>> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for next in ranges {
+        match runs.last_mut() {
+            Some(r) if next.start == r.end => r.end = next.end,
+            _ => runs.push(next),
+        }
+    }
+    // (gap, index of the run it follows), shortest first.
+    let mut gaps: Vec<(usize, usize)> = runs
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[1].start > w[0].end && w[1].start - w[0].end < per_read)
+        .map(|(i, w)| (w[1].start - w[0].end, i))
+        .collect();
+    gaps.sort_unstable();
+    let mut bytes: usize = runs.iter().map(std::ops::Range::len).sum();
+    let mut reads = runs.len();
+    let mut join = vec![false; runs.len()];
+    for (gap, i) in gaps {
+        if reads * per_read <= bytes {
+            break;
+        }
+        join[i] = true;
+        reads -= 1;
+        bytes += gap;
+    }
+    let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(reads);
+    for (i, r) in runs.into_iter().enumerate() {
+        match out.last_mut() {
+            Some(last) if i > 0 && join[i - 1] => last.end = r.end,
+            _ => out.push(r),
+        }
+    }
+    out
 }
 
 /// `ranges`, in order, with each one that starts at most `gap` bytes after the previous
@@ -1096,9 +1179,43 @@ mod tests {
         assert_eq!(coalesce(Vec::new(), g), Vec::<std::ops::Range<usize>>::new());
     }
 
+    #[test]
+    fn balance_joins_short_gaps_while_reads_cost_more_than_bytes() {
+        let r = 1000;
+        // Adjacent ranges are always one read.
+        assert_eq!(balance(vec![0..10, 10..20], r), vec![0..20]);
+        // Three small reads (3 × 1000 > 30 bytes): both gaps joined, the shorter first.
+        assert_eq!(balance(vec![0..10, 110..120, 170..180], r), vec![0..180]);
+        // A gap of a whole read or more is never joined: its bytes cost more than the read.
+        assert_eq!(balance(vec![0..10, 1010..1020], r), vec![0..10, 1010..1020]);
+        assert_eq!(balance(vec![0..10, 1009..1020], r), vec![0..1020]);
+        // Bound by bytes already: 2 reads × 1000 ≤ 5000 bytes, so nothing is joined.
+        assert_eq!(balance(vec![0..2500, 2600..5100], r), vec![0..2500, 2600..5100]);
+        // Joins stop once the balance is reached: three runs of 900 bytes cost 3000 against
+        // 2700; joining the 50-byte gap makes it 2000 against 2750, so the 400-byte one stays.
+        assert_eq!(balance(vec![0..900, 950..1850, 2250..3150], r), vec![0..1850, 2250..3150]);
+        // Out of order or overlapping starts a run that is never joined backwards.
+        assert_eq!(balance(vec![100..200, 50..60, 55..70], r), vec![100..200, 50..60, 55..70]);
+        assert_eq!(balance(Vec::new(), r), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn a_query_is_bound_by_bytes_only_past_the_margin() {
+        let r = BYTES_PER_READ;
+        // 1.5 reads' worth of bytes a read is the line, inclusive.
+        assert!(bound_by_bytes(ReadCost { reads: 2, bytes: 3 * r }));
+        assert!(!bound_by_bytes(ReadCost { reads: 2, bytes: 3 * r - 1 }));
+        // Bytes that only match the reads' cost are not enough (E50's small losers).
+        assert!(!bound_by_bytes(ReadCost { reads: 100, bytes: 100 * r }));
+        assert!(bound_by_bytes(ReadCost { reads: 0, bytes: 1 }));
+    }
+
     fn content(s: &dyn Shard, doc: DocId) -> Vec<u8> {
         s.content(doc, &mut Vec::new()).unwrap().to_vec()
     }
+
+    /// A query bound by its reads, which E42's joins serve.
+    const BY_READS: ReadCost = ReadCost { reads: 1, bytes: 0 };
 
     fn whole(docs: &[DocId]) -> Vec<Want<'static>> {
         docs.iter().map(|&doc| Want { doc, extent: Extent::Whole }).collect()
@@ -1145,11 +1262,19 @@ mod tests {
             }
         }
         assert!(s.markers().always_search.is_empty() && s.markers().reader_mode.is_empty());
-        // Adjacent and scattered docs, and none; a doc past the table fails as content does.
-        s.prefetch(&whole(&[0, 1, 2])).unwrap();
-        s.prefetch(&whole(&[0, 2])).unwrap();
-        s.prefetch(&[]).unwrap();
-        assert!(s.prefetch(&whole(&[1, 3])).is_err());
+        // Adjacent and scattered docs, and none, for a query bound by reads and one bound by
+        // bytes; a doc past the table fails as content does.
+        for query in [BY_READS, ReadCost { reads: 0, bytes: 1 }] {
+            s.prefetch(&whole(&[0, 1, 2]), query).unwrap();
+            s.prefetch(&whole(&[0, 2]), query).unwrap();
+            s.prefetch(&[], query).unwrap();
+            assert!(s.prefetch(&whole(&[1, 3]), query).is_err());
+        }
+        // Three docs stored back to back, as is, are one read of all their content.
+        let stored: u64 = docs.iter().map(|(_, c, _)| c.len() as u64).sum();
+        assert_eq!(s.read_cost(&whole(&[0, 1, 2])).unwrap(), ReadCost { reads: 1, bytes: stored });
+        assert_eq!(s.read_cost(&[]).unwrap(), ReadCost::default());
+        assert!(s.read_cost(&whole(&[1, 3])).is_err());
         assert_eq!(content(&*s, 2), b"nothing");
     }
 
@@ -1354,7 +1479,8 @@ mod tests {
             let s = MAPPED.open(&path).unwrap();
             let err = s.content(0, &mut Vec::new()).err().unwrap().to_string();
             assert!(err.contains("content out of bounds"), "{content_off}: {err}");
-            assert!(s.prefetch(&whole(&[0])).is_err(), "{content_off}");
+            assert!(s.prefetch(&whole(&[0]), BY_READS).is_err(), "{content_off}");
+            assert!(s.read_cost(&whole(&[0])).is_err(), "{content_off}");
         }
     }
 
@@ -1484,7 +1610,7 @@ mod tests {
                 let doc = DocId::try_from(doc).unwrap();
                 assert_eq!(s.content(doc, &mut buf).unwrap(), *c, "{:?} doc {doc}", backend.codec);
             }
-            s.prefetch(&whole(&[0, 1, 2, 3])).unwrap();
+            s.prefetch(&whole(&[0, 1, 2, 3]), BY_READS).unwrap();
             sizes.push(std::fs::metadata(&path).unwrap().len());
         }
         assert!(sizes[1] * 3 < sizes[0], "lz4 shard {} vs raw {}", sizes[1], sizes[0]);
@@ -1556,8 +1682,11 @@ mod tests {
                         .is_err()
                 );
             }
-            s.prefetch(&[Want { doc: 1, extent: Extent::Units(&asked) }, Want { doc: 0, extent: Extent::Whole }])
-                .unwrap();
+            let wants = [Want { doc: 1, extent: Extent::Units(&asked) }, Want { doc: 0, extent: Extent::Whole }];
+            s.prefetch(&wants, BY_READS).unwrap();
+            // The asked units' blocks are fewer bytes than the whole doc.
+            let cost = s.read_cost(&wants).unwrap();
+            assert!(cost.bytes < s.read_cost(&whole(&[0, 1])).unwrap().bytes, "{cost:?}");
         }
     }
 

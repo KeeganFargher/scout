@@ -1,0 +1,60 @@
+## warm.json: warm, 3 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 28 | 28 | 0.0 | 0 |
+| literal_common | 198 | 201 | 0.0 | 0 |
+| literal_none | 2 | 2 | 0.0 | 0 |
+| literal_long | 291 | 306 | 0.0 | 0 |
+| ident_regex | 105 | 107 | 0.0 | 0 |
+| alternation | 290 | 309 | 0.0 | 0 |
+| crbug_regex | 80 | 82 | 0.0 | 0 |
+| case_insensitive | 143 | 149 | 0.0 | 0 |
+| smart_case | 40 | 52 | 0.0 | 0 |
+| word | 137 | 143 | 0.0 | 0 |
+| anchored | 257 | 286 | 0.0 | 0 |
+| date_regex | 403 | 424 | 0.0 | 0 |
+| count_mode | 64 | 70 | 0.0 | 0 |
+| files_mode | 56 | 57 | 0.0 | 0 |
+| llvm_regex | 14 | 16 | 0.0 | 0 |
+| rare_regex | 43 | 43 | 0.0 | 0 |
+| selective_long | 7 | 8 | 0.0 | 0 |
+| selective_symbol | 9 | 9 | 0.0 | 0 |
+| small_vector | 46 | 48 | 0.0 | 0 |
+| license_apache | 120 | 132 | 0.0 | 0 |
+| const_auto_ref | 87 | 94 | 0.0 | 0 |
+| llvm_debug | 11 | 11 | 0.0 | 0 |
+| web_contents_obs | 21 | 22 | 0.0 | 0 |
+| singleton_ci | 95 | 98 | 0.0 | 0 |
+| trace_event | 13 | 14 | 0.0 | 0 |
+geomean p50 53 ms; 25 of 25 under 1 s
+
+## cold.json: cold, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 556 | 556 | 64.3 | 417 |
+| literal_common | 3597 | 3597 | 421.4 | 607 |
+| literal_none | 40 | 40 | 9.0 | 36 |
+| literal_long | 5279 | 5279 | 580.2 | 562 |
+| ident_regex | 2464 | 2464 | 296.0 | 373 |
+| alternation | 5777 | 5777 | 693.9 | 413 |
+| crbug_regex | 1908 | 1908 | 233.5 | 469 |
+| case_insensitive | 2662 | 2662 | 311.7 | 357 |
+| smart_case | 386 | 386 | 46.2 | 406 |
+| word | 3523 | 3523 | 422.9 | 173 |
+| anchored | 3315 | 3315 | 405.7 | 353 |
+| date_regex | 1994 | 1994 | 248.5 | 80 |
+| count_mode | 1853 | 1853 | 218.1 | 326 |
+| files_mode | 2075 | 2075 | 252.6 | 396 |
+| llvm_regex | 171 | 171 | 28.9 | 176 |
+| rare_regex | 1087 | 1087 | 110.2 | 291 |
+| selective_long | 155 | 155 | 24.5 | 253 |
+| selective_symbol | 238 | 238 | 32.9 | 253 |
+| small_vector | 862 | 862 | 107.7 | 381 |
+| license_apache | 2766 | 2766 | 307.9 | 321 |
+| const_auto_ref | 2175 | 2175 | 269.3 | 174 |
+| llvm_debug | 157 | 157 | 27.8 | 195 |
+| web_contents_obs | 486 | 486 | 50.0 | 352 |
+| singleton_ci | 1849 | 1849 | 208.1 | 328 |
+| trace_event | 347 | 347 | 27.7 | 245 |
+geomean p50 1024 ms; 10 of 25 under 1 s
+

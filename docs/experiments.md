@@ -66,6 +66,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E49 | E48 reading backward again; judged against an A/A run's noise, 4 reps                                                                                                                                                                                                                                                        | —                                                     | —           | **kept** (every clause inside the A/A's noise: at ready 1.013 against ≤ 1.067, steady 0.989–1.001; 45 s after ready 0.253, the pass 12.0 → 2.3 s; 300 ms apart 0.738)                                                                                                                                                                                                                                                      |
 | E50 | `prefetch` joins the shortest gaps first, only gaps under a read's worth of bytes (41.7 KB at gp3's 125 MB/s ÷ 3000), and stops once a block's reads cost no more than its bytes (was: every gap up to 32 KiB)                                                                                                               | —                                                     | —           | **rejected** (cold 0.959, 0.952 and 0.968 per rep, `alternation` 0.877 and `literal_common` 0.860; but `llvm_regex` 1.44 and 2.03 and `smart_case` 1.21 and 1.20 slower in both reps, against no query over 10% slower in both; warm 0.999)                                                                                                                                                                                |
 | E51 | `serve` sends every body with Content-Length instead of tiny_http's chunked transfer encoding (8 KiB frames for bodies of 32 KiB or more)                                                                                                                                                                                    | —                                                     | —           | **reverted** (warm 0.979, 0.977 and 0.982 per rep; cold 0.990; but an A/A of one binary put its warm reps at 0.954 and 1.022, so the gain is within noise)                                                                                                                                                                                                                                                                 |
+| E52 | `prefetch` joins by E50's balance for a query whose content bytes cost 1.5x its reads (estimated for the whole query while planning), by E42's 32 KiB gaps otherwise                                                                                                                                                         | —                                                     | —           | **kept** (cold 0.949, 0.947 and 0.950 per rep; held out: `small_vector` 0.775, `const_auto_ref` 0.901; no query over 5% slower cold; warm 1.022, the estimate costs 4–7% of a broad warm search, E53's target)                                                                                                                                                                                                             |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -1890,6 +1891,63 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - **Reverted**: a 2% warm gain at 2 reps cannot be told from noise here, and the
   mechanism did not show in the per-query data. A 2-rep A/B can only show a warm change
   larger than ~5%.
+
+### E52: E50's balance, only for queries bound by bytes
+
+- Why: E50's per-block balance made the cold queries bound by bytes 12–14% faster and
+  two small ones 20–68% slower (`smart_case`, `llvm_regex`). In E50's cold-io data, they lost reads in a
+  regime the throughput model does not describe: `llvm_regex` paid ~0.9 ms per extra read,
+  against 0.33 at 3000 IOPS. Choosing per query, not per block, could keep the wins.
+- Probe first (a throwaway build counting `prefetch`'s coalesced reads and bytes): a
+  content-only estimate undercounts the cold reads cold-io measured, 1.1–1.3x on the big
+  queries, up to 3.1x where the kernel splits long ranges (`literal_long`), and 1.5–1.7x
+  on E50's three losers. A plain reads-vs-bytes switch would have put all three on the
+  balance side. With bytes required to cost 1.5x the reads, they fall on E42's side, and
+  E50's per-query ratios predicted cold ~0.945.
+- The 1.5 was chosen with those 18 queries in view, so 7 more, in
+  [queries-big-heldout.tsv](../bench/queries-big-heldout.tsv), were picked and classified
+  by the probe before the code: `small_vector`, `license_apache` and `const_auto_ref`
+  (1.60, the closest) on the balance side; `llvm_debug` (17 MiB, 1.41),
+  `web_contents_obs`, `singleton_ci` and `trace_event` on E42's.
+- Change: a new port method, `Shard::read_cost`, estimates what `prefetch` of some wants
+  would read (E42's joins). `plan_chunks` sums it over every candidate of every repo, as
+  verification will read them; one disk serves them all. Every repo's plan carries the
+  sum, which `prefetch` now takes: the native shard joins by `balance` when
+  `2 × bytes ≥ 3 × reads × 41.7 KB`, else by `coalesce` at 32 KiB. A plan is made only
+  once the sum is known (`RepoDraft`), so no read-ahead sees a partial one. `--stats`
+  prints the sum (`cost_reads`, `cost_bytes`).
+- Rule set before the run (`run-e52.sh`): cold pooled ≤ 0.97 and below 1.00 in both reps
+  (E51's cold A/A: 0.989 and 0.991); warm pooled ≤ 1.03; no query, suite or held out, over
+  10% slower cold in both reps.
+- Results ([summary](../bench/results/E52-prefetch-switch/ab-4G/summary.txt), cold-io for
+  [base](../bench/results/E52-prefetch-switch/cold-io-base.txt) and
+  [E52](../bench/results/E52-prefetch-switch/cold-io-q.txt), each query's
+  [estimate](../bench/results/E52-prefetch-switch/estimate.txt)), 2 CPUs / 4 GiB, 25
+  queries:
+  - Cold **0.949** (0.947 and 0.950 per rep). Balance side: `selective_symbol` 0.748,
+    `alternation` 0.877, `word` 0.882, `literal_common` 0.886 (421 → 359 MiB),
+    `anchored` 0.922, `literal_long` 0.952. E42's side, as before within ±1%:
+    `llvm_regex` 0.993, `smart_case` 0.992, `count_mode` 0.998, `rare_regex` 0.998.
+  - Held out: balance side `small_vector` **0.775**, `const_auto_ref` 0.901,
+    `license_apache` 0.959; E42's side `llvm_debug` 1.005, `web_contents_obs` 1.000,
+    `trace_event` 0.997, `singleton_ci` 0.954. The margin held on queries it was not
+    fitted to.
+  - Slowest cold: `date_regex` 1.047, slower in both reps. The build estimates per shard,
+    not per read-ahead block as the probe did, which moves it from 1.45 to 1.58, onto the
+    balance side; E50 had it at 0.958 there. Within the rule's 10%.
+  - Warm **1.022** (1.029 and 1.011 per rep), passing its clause but with 10 of 25
+    queries slower in both reps. Measured directly, the search alone with the index
+    cached ([plan-cost](../bench/results/E52-prefetch-switch/plan-cost.txt)): +4.4 ms on
+    `#include <vector>` (22k candidates, +7%), +5 ms on `std::unique_ptr` (51k, +4%),
+    +2–3 ms on `TODO\(crbug…` (16k), ~+0.8 ms on a 1.6k-candidate query. A profile puts
+    the cost in `meta` (its path's UTF-8 check), `stored` and `want`, per candidate.
+  - **Kept**: every clause passes. The warm cost is what E53 goes after.
+- Tried after the run and rejected: estimating from a sample of each shard's candidates
+  (four runs of 32 neighbours). `literal_common`'s sampled ratio came out 1.39 against
+  3.30 whole: its bytes sit in a few large files that runs of neighbours miss, so it
+  would have lost its 0.886.
+- Not tuned for: the t-class profile (43 MB/s, 2000 IOPS), where a read is worth ~21.5 KB
+  and both constants move together.
 
 ### Probe: what `anchored`'s anchors cost
 
