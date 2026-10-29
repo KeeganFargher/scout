@@ -73,6 +73,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E56 | E52's read-cost estimate in parallel over every shard of every repo, not over repos                                                                                                                                                                                                                                          | —                                                     | —           | **rejected with E52** (against E52: 0.937 and 0.951 at 8 CPUs, 1.004 and 0.996 at 2, cold 0.990; against the build before E52 at 8 CPUs: 1.005 and 1.048, over 1.03 in one pass, so both are reverted)                                                                                                                                                                                                                     |
 | E57 | E52 with E56, proposed again as one change against the build before E52, its 8-CPU threshold from an A/A                                                                                                                                                                                                                     | —                                                     | —           | **rejected** (1 CPU: 1.022 and 1.023 against ≤ 1.01; the run stopped there, before 2 and 8 CPUs and cold)                                                                                                                                                                                                                                                                                                                  |
 | E58 | Before planning a repo, ask for every posting list its shards may decode (`madvise(WILLNEED)`), so the one-page lists stop being a fault and a wait each                                                                                                                                                                     | —                                                     | —           | **rejected** on a probe ([cold-faults.sh](../bench/harness/cold-faults.sh), mean of 2 reps): the waits went, but `llvm_regex` read 20% more and took 180 → 262 ms, over 10% slower in both reps; `literal_none` 47 → 41 ms, `smart_case` 0.93, the rest within 1%                                                                                                                                                          |
+| E59 | `prefetch` joins gaps of up to 16 KiB instead of 32, measured on a t-class volume (43 MB/s, 2000 IOPS) and on gp3                                                                                                                                                                                                            | —                                                     | —           | **rejected as a constant** (t-class cold 0.906 and 0.910 per rep; gp3 cold 1.094 and 1.090, 8 queries over 10% slower in both reps): the gap is the volume's to set (E60)                                                                                                                                                                                                                                                  |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2171,6 +2172,31 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
 - The volume adds no latency per read (dm-delay is 0: its 4 ms ticks are too coarse), so
   on gp3, at ~0.5–1 ms a read, waits cost more than they do here. This probe cannot say
   by how much.
+
+### E59: a shorter read join on a t-class volume
+
+- Why: a 4 GiB t-class box (t3.medium) is capped by the instance's own EBS baseline,
+  ~43 MB/s and 2000 IOPS, below gp3's 125 MB/s and 3000. A read saved there is worth
+  ~21.5 KB of transfer, half the ~41.7 KB that set `PREFETCH_GAP` at 32 KiB (E42).
+  `serve-ebs.sh` now takes the caps as `EBS_MBPS` and `EBS_IOPS` (gp3's by default).
+- Rule, set before the run ([run-e59.sh](../bench/harness/run-e59.sh)): `serve-ab.sh` at
+  2 CPUs / 4 GiB on the t-class caps, cold pooled ≤ 0.97, below 1.00 in both reps, no
+  query over 10% slower in both; if it passes, the same pair on gp3: within 1.01 pooled
+  keeps 16 KiB outright, over it makes the gap the volume's to set.
+- t-class ([summary](../bench/results/E59-tclass-gap/ab-tclass/summary.txt)): cold **0.908** pooled, 0.906 and 0.910
+  per rep ([serveab-reps.py](../bench/harness/serveab-reps.py)), no query over 10% slower
+  in both (`literal_none` 1.037 and 1.113, 37 → 40 ms). The broad queries gain most:
+  `files_mode` 0.769, `crbug_regex` 0.770, `alternation` 0.816, `ident_regex` 0.832,
+  reading 5–21% fewer bytes. Warm 1.003.
+- gp3 ([summary](../bench/results/E59-tclass-gap/ab-gp3/summary.txt)): cold **1.093** pooled, 1.094 and 1.090 per
+  rep, eight queries over 10% slower in both (`llvm_regex` 1.684, `crbug_regex` 1.380,
+  `count_mode` 1.376, `rare_regex` 1.339), with the same fewer bytes: where IOPS binds,
+  the extra reads cost more than the bytes saved. `literal_common` 0.864,
+  `selective_symbol` 0.746 and `alternation` 0.913 still gain.
+- **Rejected as a constant**: each volume's best gap loses ~9% on the other. Both match
+  one rule, the largest power of two at or under the volume's bytes per read (MB/s ÷
+  IOPS): 41.7 KB gives 32 KiB on gp3, 21.5 KB gives 16 KiB on t-class. Next (E60): the
+  gap from the volume's caps, set by whoever deploys the server.
 
 ### Probe: what `anchored`'s anchors cost
 

@@ -46,5 +46,6 @@ for mode in ("warm", "cold"):
     print(f"geomean {b}/{a}: {math.exp(sum(logs) / len(logs)):.3f}\n")
 
 for arm in (a, b):
-    ready = [int(open(os.path.join(d, "ready.txt")).read().split("=")[1]) for d in reps(arm)]
+    # ready.txt is key=value pairs; ready_ms is the first (E59 added the volume's caps).
+    ready = [int(dict(kv.split("=") for kv in open(os.path.join(d, "ready.txt")).read().split())["ready_ms"]) for d in reps(arm)]
     print(f"{arm} time to ready on an evicted index: {ready} ms")
