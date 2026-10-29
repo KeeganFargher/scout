@@ -2074,7 +2074,7 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   allowed.
 - Change: the estimate runs per shard, `parallel_indexed` over every shard of every repo,
   after the repos are drafted.
-- Rule set before the run (`run-e56.sh`): against E52, geomean ≤ 0.97 in both passes at 8
+- Rule set before the run ([run-e56.sh](../bench/harness/run-e56.sh)): against E52, geomean ≤ 0.97 in both passes at 8
   CPUs and ≤ 1.011 (E53's A/A) in both at 2; cold pooled ≤ 1.01 and no query over 10%
   slower cold in both reps. And for E52 itself: if E56 is still over 1.03 against the
   build before E52 at 8 CPUs in either pass, E52 regresses scale-up and is reverted with
@@ -2104,8 +2104,9 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   outside it.
 - Rule, set after the A/A and before the run ([run-e57.sh](../bench/harness/run-e57.sh)),
   stage by stage, stopping at the first to fail: `search-ms.sh` geomean ≤ 1.01 in both
-  passes and no query over 1.035 in both, at 1 CPU, then 2, then 8; then cold pooled ≤
-  0.97 and below 1.00 in both reps.
+  passes and no query over 1.035 in both, at 1 CPU, then 2, then 8; then `serve-ab.sh` at
+  2 CPUs / 4 GiB: cold pooled ≤ 0.97, below 1.00 in both reps, and no query over 10% slower
+  cold in both reps.
 - Result ([1 CPU](../bench/results/E57-estimate-retest/search-ms-1.txt)): **1.022 and
   1.023**. Rejected at the first stage. At one thread there is nothing to spread the
   estimate over, and it costs what E52 measured there (1.023 and 1.025).

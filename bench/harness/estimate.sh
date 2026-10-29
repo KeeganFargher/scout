@@ -2,6 +2,8 @@
 # Each query's read-cost estimate (E52), as `scout search --stats` prints it: reads, MiB,
 # the ratio bytes / (reads × 41.7 KB, gp3's bytes per read) and its side of the 1.5x line
 # (BAL: E50's balance, e42: 32 KiB joins). No timing, so the cache state does not matter.
+# Needs a build with E52's estimate (c935a55 to a6a4cf1): E52 was reverted (E56), so a
+# later build prints no cost and this exits on the first query.
 # Usage: estimate.sh <bin-dir> <index-dir> <queries.tsv>...
 set -euo pipefail
 [ "$#" -ge 3 ] || { echo "expected bin-dir index-dir queries.tsv..." >&2; exit 2; }
