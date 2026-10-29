@@ -1,0 +1,5 @@
+llvm_regex		dyn_cast<\w+Inst>
+selective_symbol	-F	getAsCXXRecordDecl
+smart_case	-S	webassembly
+literal_none	-F	zqxjvbnm_nothing_here
+anchored		^#include "base/\w+\.h"$

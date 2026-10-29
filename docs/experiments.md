@@ -72,6 +72,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E55 | E53's `Shard::size` after planning only (`want`, `queue_block`); `chunk_repo` keeps `meta`, whose path read faults the paths section in while planning                                                                                                                                                                       | —                                                     | —           | **rejected** (warm search alone 0.986 and 0.979 against ≤ 0.98 in both passes; cold 0.978 with identical reads, no query over 2.1% slower in both reps)                                                                                                                                                                                                                                                                    |
 | E56 | E52's read-cost estimate in parallel over every shard of every repo, not over repos                                                                                                                                                                                                                                          | —                                                     | —           | **rejected with E52** (against E52: 0.937 and 0.951 at 8 CPUs, 1.004 and 0.996 at 2, cold 0.990; against the build before E52 at 8 CPUs: 1.005 and 1.048, over 1.03 in one pass, so both are reverted)                                                                                                                                                                                                                     |
 | E57 | E52 with E56, proposed again as one change against the build before E52, its 8-CPU threshold from an A/A                                                                                                                                                                                                                     | —                                                     | —           | **rejected** (1 CPU: 1.022 and 1.023 against ≤ 1.01; the run stopped there, before 2 and 8 CPUs and cold)                                                                                                                                                                                                                                                                                                                  |
+| E58 | Before planning a repo, ask for every posting list its shards may decode (`madvise(WILLNEED)`), so the one-page lists stop being a fault and a wait each                                                                                                                                                                     | —                                                     | —           | **rejected** on a probe ([cold-faults.sh](../bench/harness/cold-faults.sh)): the waits went, but reads rose 13–118% (`llvm_regex` 586 → 707, 177 → 262 ms) and cold `serve` already reads near 3000 per second; no query faster but `literal_none` (49 → 40 ms)                                                                                                                                                            |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2115,6 +2116,44 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   the background warm-up (E45–E49) has read the index. Not tried: skipping the estimate
   once that warm-up has read every shard, so only searches before it, or a CLI search,
   pay it; the CLI would still pay it warm.
+
+### E58: posting lists asked for ahead of planning
+
+- Why: whether small cold queries wait on one read at a time, which more reads in flight
+  would fix, or on the volume's 3000 IOPS, which only fewer reads would. Probe first,
+  rule set before it: build a change only if reads per second are well under 3000
+  (~1500) with a queue depth near the thread count.
+- The CLI first (cold, 2 CPUs, `drop_caches`, scratch probes not kept): `llvm_regex`,
+  `smart_case`, `selective_symbol` read 1,200–1,700 times a second, queue depth ~1, the
+  volume busy 30–55% of the time, and the same times with no IOPS cap. 70% of
+  `llvm_regex`'s reads were page faults, 339 of 1,370 in `dict_entry`: the CLI probes its
+  tables through the map (`LookupHome::Map`), so a cold lookup waits on the dictionary.
+- `serve`, which copies the tables to the heap at open (E36), measured by the new
+  [cold-faults.sh](../bench/harness/cold-faults.sh) on the five queries of
+  [queries-cold-faults.tsv](../bench/queries-cold-faults.tsv)
+  ([base](../bench/results/E58-postings-prefetch/base/cold.txt),
+  [where reads were issued](../bench/results/E58-postings-prefetch/base/issued.txt)):
+  `llvm_regex` reads 3,300 times a second, `smart_case` 3,100, at the cap;
+  `selective_symbol` 1,800–2,100 and `literal_none` 1,400–1,600, under it. A third to a
+  half of each query's reads are faults in `postings`: a list a page or shorter is not
+  asked for ahead (`postings` asks only for longer ones, E30), and planning decodes a
+  shard's lists one at a time and a repo's shards one after another.
+- Change: before a repo's shards are planned, a new port call, `prefetch_postings`, asks
+  for every list planning may decode in all of them. An AND's further lists depend on the
+  candidates left (E22), so the walk is run ahead with the rarest list's count standing in
+  for them: a superset of the lists decoded.
+- Result ([e58](../bench/results/E58-postings-prefetch/e58/cold.txt)): the faults in
+  `postings` are gone, but the superset reads 13–118% more: `llvm_regex` 586 → 707 reads
+  and 177 → 262 ms, `selective_symbol` 514 → 616 and 247–284 → 249 ms, `literal_none` 78
+  → 170 and 49–57 → 40 ms, `smart_case` 1,178 → 1,136 and the same time, `anchored` 1%
+  slower. A first version that asked only for the lists certain to be decoded (an AND's
+  rarest) left 217 of `selective_symbol`'s 248 faults and was no faster.
+- **Rejected** without the full harness: where cold `serve` reads near 3000 a second the
+  cap binds and extra reads cost their share of it, and where it does not, the one query
+  that won is 9 ms. On this harness the lever left for small cold queries is fewer reads.
+  The volume has no added latency per read (dm-delay is 0: its 4 ms ticks are too
+  coarse), so on gp3, at ~0.5–1 ms a read, waits cost more than they do here. This probe
+  cannot say by how much.
 
 ### Probe: what `anchored`'s anchors cost
 

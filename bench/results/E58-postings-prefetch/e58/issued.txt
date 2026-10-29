@@ -1,0 +1,18 @@
+== anchored
+   1518 do_madvise	
+    257 filemap_fault	
+     75 filemap_fault	scout_core::search::Printer::search_indexed::_$u7b$$u7b$closure$u7d$$u7d$
+     28 filemap_fault	scout_core::search::Verify::verify
+     12 other	
+== literal_none
+    168 do_madvise	
+      4 filemap_fault	
+== llvm_regex
+    676 do_madvise	
+     14 filemap_fault	
+== selective_symbol
+    503 do_madvise	
+     35 filemap_fault	
+== smart_case
+    923 do_madvise	
+     33 filemap_fault	
