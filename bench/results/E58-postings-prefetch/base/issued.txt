@@ -1,23 +1,23 @@
 == anchored
-   1515 do_madvise	
-    255 filemap_fault	
+   1519 do_madvise	
+    253 filemap_fault	
     242 filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
-     83 filemap_fault	scout_core::search::Printer::search_indexed::_$u7b$$u7b$closure$u7d$$u7d$
-     24 filemap_fault	scout_core::search::Verify::verify
+     78 filemap_fault	scout_core::search::Printer::search_indexed::_$u7b$$u7b$closure$u7d$$u7d$
+     30 filemap_fault	scout_core::search::Verify::verify
      12 other	
 == literal_none
      45 do_madvise	
      33 filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
       4 filemap_fault	
 == llvm_regex
-    400 do_madvise	
+    401 do_madvise	
     171 filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
      12 filemap_fault	
 == selective_symbol
     248 filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
-    217 do_madvise	
+    216 do_madvise	
      35 filemap_fault	
 == smart_case
-    711 do_madvise	
+    709 do_madvise	
     399 filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
      33 filemap_fault	

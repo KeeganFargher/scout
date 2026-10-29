@@ -1,0 +1,258 @@
+diff --git a/crates/scout-core/src/ports.rs b/crates/scout-core/src/ports.rs
+index f1aff0e..a961368 100644
+--- a/crates/scout-core/src/ports.rs
++++ b/crates/scout-core/src/ports.rs
+@@ -205,6 +205,14 @@ pub trait Shard: Send + Sync {
+     /// pays the volume's latency. A hint: it reads nothing a later read would not, and a
+     /// backend with nothing to read ahead does nothing.
+     fn prefetch(&self, wants: &[Want<'_>]) -> Result<()>;
++
++    /// Starts reading the posting lists of `tris` in the background, ahead of the
++    /// [`Shard::postings`] calls that will decode them (E58). Planning decodes a shard's
++    /// lists one at a time and a repo's shards one after another, so cold, each list a page
++    /// or shorter is a fault and a wait of its own; asked for together, a repo's lists are
++    /// in flight at once. A hint, like [`Shard::prefetch`]: a trigram the shard lacks is
++    /// skipped.
++    fn prefetch_postings(&self, tris: &[Trigram]) -> Result<()>;
+ }
+ 
+ /// Docs carrying the marker pseudo-trigrams [`ALWAYS_SEARCH`] and [`READER_MODE`].
+diff --git a/crates/scout-core/src/search.rs b/crates/scout-core/src/search.rs
+index cff3fcf..3e80a53 100644
+--- a/crates/scout-core/src/search.rs
++++ b/crates/scout-core/src/search.rs
+@@ -902,6 +902,16 @@ pub(crate) fn plan_repo(
+     };
+     let mut plan = RepoPlan { candidates: Vec::new(), dirty: Vec::new(), snapshot: None };
+     let t = Instant::now();
++    // Every shard's lists that planning may decode are asked for before the first is (E58):
++    // the loop below decodes them one at a time, so cold, each would otherwise be a wait.
++    let mut tris = Vec::new();
++    for shard in &repo.shards {
++        if may_match(shard.as_ref(), query) {
++            tris.clear();
++            lists_to_decode(shard.as_ref(), query, &mut tris)?;
++            shard.prefetch_postings(&tris)?;
++        }
++    }
+     for (si, shard) in repo.shards.iter().enumerate() {
+         plan.candidates.push(plan_shard(
+             shard.as_ref(),
+@@ -1268,6 +1278,52 @@ fn shard_units(shard: &dyn Shard, query: &Query) -> Result<(Option<Vec<UnitId>>,
+     Ok((candidates(shard, query)?, false))
+ }
+ 
++/// Appends the trigrams whose lists [`candidates`] may decode for `query` on `shard`, for
++/// [`Shard::prefetch_postings`] (E58): every list it decodes, and a few it may not. An
++/// AND's walk (E22) decodes a further list only while the decoding stays under the price
++/// of verifying the candidates left, which are known only as lists are decoded; but they
++/// never outnumber the rarest list, so with its count in their place the same walk stops
++/// at or after the real one. A list it takes that the real walk does not, because the
++/// candidates shrank first, or because an earlier part emptied the AND, is read for
++/// nothing; a list it leaves out the real walk never decodes.
++fn lists_to_decode(shard: &dyn Shard, query: &Query, out: &mut Vec<Trigram>) -> Result<()> {
++    match query {
++        Query::All => {}
++        Query::Tri(t) => out.push(*t),
++        Query::And(parts) => {
++            let mut tris = Vec::new();
++            for p in parts {
++                match p {
++                    Query::Tri(t) => tris.push(*t),
++                    _ => lists_to_decode(shard, p, out)?,
++                }
++            }
++            let Some(counted) = count_trigrams(shard, &tris)? else {
++                return Ok(());
++            };
++            let Some(&(rarest, _)) = counted.first() else {
++                return Ok(());
++            };
++            let budget = u64::from(rarest) * VERIFY_COST_POSTINGS;
++            let mut spent = 0u64;
++            for (i, &(n, t)) in counted.iter().enumerate() {
++                let cost = u64::from(n) + LIST_COST_POSTINGS;
++                if i > 0 && spent + cost > budget {
++                    break;
++                }
++                spent += cost;
++                out.push(t);
++            }
++        }
++        Query::Or(parts) => {
++            for p in parts.iter().filter(|p| may_match(shard, p)) {
++                lists_to_decode(shard, p, out)?;
++            }
++        }
++    }
++    Ok(())
++}
++
+ /// Evaluates `query` against a shard's units, once its filter has let `query` through
+ /// ([`shard_units`]). `None` means "every unit".
+ fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
+@@ -1462,6 +1518,9 @@ mod tests {
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+             Ok(())
+         }
++        fn prefetch_postings(&self, _: &[Trigram]) -> Result<()> {
++            Ok(())
++        }
+     }
+ 
+     /// Freshness off never lists or reads the source; only its display root is used.
+@@ -1778,6 +1837,9 @@ mod tests {
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+             unreachable!("candidates never reads content")
+         }
++        fn prefetch_postings(&self, _: &[Trigram]) -> Result<()> {
++            Ok(())
++        }
+     }
+ 
+     #[test]
+@@ -1804,6 +1866,46 @@ mod tests {
+         assert_eq!(shard.reads(), (vec![t(b"abc"), t(b"zzz")], vec![]));
+     }
+ 
++    #[test]
++    fn lists_to_decode_hold_every_list_the_plan_decodes() {
++        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
++        let tri = |b: &[u8; 3]| Query::Tri(t(b));
++        let huge = 3 * VERIFY_COST_POSTINGS as u32;
++        let lists = HashMap::from([
++            (t(b"abc"), (0..huge).collect::<Vec<_>>()),
++            (t(b"bcd"), vec![3, 5, 7, 9]),
++            (t(b"def"), vec![5, 9, 11]),
++            (t(b"ghi"), vec![7]),
++        ]);
++        let shard = ListShard::new(lists, vec![t(b"zzz")]);
++        let cases = [
++            (tri(b"abc"), vec![t(b"abc")]),
++            // Rarest first; abc costs more than verifying def's 3 units, so it is left out.
++            (Query::And(vec![tri(b"abc"), tri(b"bcd"), tri(b"def")]), vec![t(b"def"), t(b"bcd")]),
++            // xyz is rejected by the filter, so its branch reads nothing; under bcd's 4
++            // units abc fits the budget.
++            (
++                Query::Or(vec![tri(b"ghi"), tri(b"xyz"), Query::And(vec![tri(b"abc"), tri(b"bcd")])]),
++                vec![t(b"ghi"), t(b"bcd"), t(b"abc")],
++            ),
++            // ghi leaves one candidate, so the real walk stops before bcd, which the
++            // bound still takes: read for nothing, never left out.
++            (Query::And(vec![tri(b"ghi"), tri(b"bcd")]), vec![t(b"ghi"), t(b"bcd")]),
++            // zzz passes the filter but counts 0: the AND reads no list.
++            (Query::And(vec![tri(b"abc"), tri(b"zzz")]), vec![]),
++            (Query::All, vec![]),
++        ];
++        for (q, want) in cases {
++            let mut got = Vec::new();
++            lists_to_decode(&shard, &q, &mut got).unwrap();
++            assert_eq!(got, want, "{q:?}");
++            shard.reads();
++            candidates(&shard, &q).unwrap();
++            let decoded = shard.reads().1;
++            assert!(decoded.iter().all(|t| got.contains(t)), "{q:?}: {decoded:?} not all in {got:?}");
++        }
++    }
++
+     #[test]
+     fn a_trigram_the_filter_rejects_empties_its_and_before_any_read() {
+         let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+@@ -1907,6 +2009,9 @@ mod tests {
+         fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+             unreachable!("planning never reads content")
+         }
++        fn prefetch_postings(&self, _: &[Trigram]) -> Result<()> {
++            Ok(())
++        }
+     }
+ 
+     #[test]
+@@ -2008,6 +2113,9 @@ mod tests {
+             self.queued.lock().unwrap().push(wants.iter().map(|w| w.doc).collect());
+             Ok(())
+         }
++        fn prefetch_postings(&self, _: &[Trigram]) -> Result<()> {
++            Ok(())
++        }
+     }
+ 
+     #[test]
+diff --git a/crates/scout-index-native/src/lib.rs b/crates/scout-index-native/src/lib.rs
+index 051fd41..fa92599 100644
+--- a/crates/scout-index-native/src/lib.rs
++++ b/crates/scout-index-native/src/lib.rs
+@@ -660,6 +660,17 @@ impl NativeShard {
+         self.tables().get(range.start.checked_sub(self.docs_off)?..range.end.checked_sub(self.docs_off)?)
+     }
+ 
++    /// The map range of a posting list at `off..end` of the postings section (from
++    /// [`Self::dict_entry`]), checked against the map: a corrupt entry fails here.
++    fn list_range(&self, off: usize, end: usize) -> Result<std::ops::Range<usize>> {
++        self.postings_off
++            .checked_add(off)
++            .zip(self.postings_off.checked_add(end))
++            .filter(|(start, end)| start <= end && *end <= self.map.len())
++            .map(|(start, end)| start..end)
++            .ok_or_else(|| self.corrupt("postings out of bounds"))
++    }
++
+     /// `(unit_count, postings offset, end of its list)` of `tri`: the fence picks the one
+     /// block that can hold it, a binary search of that block's keys finds it. Lists are
+     /// written in key order, so a list ends where the next key's starts (the last one at
+@@ -717,13 +728,7 @@ impl Shard for NativeShard {
+         let Some((count, off, end)) = self.dict_entry(tri) else {
+             return Ok(Vec::new());
+         };
+-        let range = self
+-            .postings_off
+-            .checked_add(off)
+-            .zip(self.postings_off.checked_add(end))
+-            .filter(|(start, end)| start <= end && *end <= self.map.len())
+-            .ok_or_else(|| self.corrupt("postings out of bounds"))?;
+-        let range = range.0..range.1;
++        let range = self.list_range(off, end)?;
+         // The postings section reads without read-around (see `open`), so a list longer
+         // than a page is asked for whole: one request for its pages instead of a fault, and
+         // a wait, per page (E30).
+@@ -755,6 +760,15 @@ impl Shard for NativeShard {
+         Ok(self.dict_entry(tri).map_or(0, |(count, _, _)| count))
+     }
+ 
++    fn prefetch_postings(&self, tris: &[Trigram]) -> Result<()> {
++        for &tri in tris {
++            if let Some((_, off, end)) = self.dict_entry(tri) {
++                self.will_need(self.list_range(off, end)?)?;
++            }
++        }
++        Ok(())
++    }
++
+     fn may_contain(&self, tri: Trigram) -> bool {
+         let (word, bits) = filter_slot(tri.0, self.filter_words);
+         self.t64(self.filter_off + word * 8) & bits == bits
+@@ -1134,6 +1148,8 @@ mod tests {
+         assert_eq!(s.postings(Trigram::from_bytes(b'w', b'o', b'r')).unwrap(), vec![2]);
+         assert_eq!(s.postings(Trigram::from_bytes(b'n', b'o', b't')).unwrap(), vec![3]);
+         assert!(s.postings(Trigram::from_bytes(b'z', b'z', b'z')).unwrap().is_empty());
++        // Held and absent trigrams alike: an absent one is skipped.
++        s.prefetch_postings(&[Trigram::from_bytes(b'h', b'e', b'l'), Trigram::from_bytes(b'z', b'z', b'z')]).unwrap();
+         assert_eq!([0, 1, 2, 3].map(|u| s.unit_doc(u).unwrap()), [0, 1, 1, 2]);
+         assert!(s.unit_doc(4).is_err());
+         // `count` is what the planner orders by, so it must agree with the decoded list; and
+diff --git a/crates/scout-index-sqlite/src/lib.rs b/crates/scout-index-sqlite/src/lib.rs
+index e387ab4..9e47127 100644
+--- a/crates/scout-index-sqlite/src/lib.rs
++++ b/crates/scout-index-sqlite/src/lib.rs
+@@ -320,6 +320,11 @@ impl Shard for SqliteShard {
+     fn prefetch(&self, _: &[Want<'_>]) -> Result<()> {
+         Ok(())
+     }
++
++    /// As [`Self::prefetch`]: nothing queues SQLite's reads ahead.
++    fn prefetch_postings(&self, _: &[Trigram]) -> Result<()> {
++        Ok(())
++    }
+ }
+ 
+ #[cfg(test)]

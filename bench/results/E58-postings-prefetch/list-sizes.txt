@@ -1,0 +1,12 @@
+# list-sizes.py /mnt/ebs/idx-e43-base: every posting list of the index by size.
+shards 52, tables 210 MiB, postings 758 MiB, lists 6528662
+<=      8: lists    3509069 ( 53.7% cum), bytes      12.4 MiB (cum      12.4)
+<=     16: lists     905940 ( 67.6% cum), bytes      10.3 MiB (cum      22.6)
+<=     32: lists     669372 ( 77.9% cum), bytes      14.8 MiB (cum      37.4)
+<=     64: lists     468408 ( 85.1% cum), bytes      20.3 MiB (cum      57.7)
+<=    128: lists     313911 ( 89.9% cum), bytes      27.4 MiB (cum      85.0)
+<=    256: lists     225743 ( 93.3% cum), bytes      39.1 MiB (cum     124.1)
+<=    512: lists     163574 ( 95.8% cum), bytes      56.4 MiB (cum     180.5)
+<=   1024: lists     114193 ( 97.6% cum), bytes      79.3 MiB (cum     259.8)
+<=   4096: lists     123086 ( 99.5% cum), bytes     232.6 MiB (cum     492.4)
+<=    inf: lists      35366 (100.0% cum), bytes     265.9 MiB (cum     758.3)

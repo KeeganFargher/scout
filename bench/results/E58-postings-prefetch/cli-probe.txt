@@ -1,0 +1,31 @@
+# cli-probe.sh at HEAD before E58 (bin-head), 2026-10-29: cold CLI search (drop_caches),
+# 2 CPUs / 4 GiB, io.max at 125 MB/s and 3000 or no IOPS cap. Volume-wide /sys/block stats.
+# query iops wall_ms search_ms reads r/s aqu util
+llvm_regex 3000 887 582.46 1363 1537 1.43 0.42
+llvm_regex 3000 889 578.47 1366 1537 1.28 0.46
+smart_case 3000 1377 1066.27 2334 1695 1.17 0.48
+smart_case 3000 1385 1070.58 2334 1685 1.05 0.48
+literal_none 3000 519 195.98 632 1218 0.68 0.55
+literal_none 3000 546 228.03 632 1158 0.70 0.64
+selective_symbol 3000 894 581.38 1269 1419 0.93 0.48
+selective_symbol 3000 897 575.61 1269 1415 0.94 0.48
+selective_long 3000 910 589.36 1242 1365 0.75 0.51
+selective_long 3000 903 596.04 1242 1375 0.81 0.54
+anchored 3000 4428 4115.34 3760 849 1.26 0.37
+anchored 3000 4427 4111.15 3750 847 1.27 0.37
+alternation 3000 7215 6887.68 10642 1475 4.07 0.29
+alternation 3000 7214 6878.59 10641 1475 4.13 0.29
+llvm_regex max 887 578.57 1366 1540 1.34 0.44
+llvm_regex max 887 576.67 1366 1540 1.33 0.43
+smart_case max 1375 1059.21 2333 1697 1.17 0.48
+smart_case max 1378 1066.26 2335 1694 1.31 0.46
+literal_none max 514 209.09 632 1230 0.61 0.54
+literal_none max 516 222.53 632 1225 0.67 0.52
+selective_symbol max 1027 582.63 1269 1236 0.72 0.41
+selective_symbol max 890 582.09 1269 1426 1.00 0.46
+selective_long max 901 603.51 1242 1378 0.73 0.53
+selective_long max 902 604.71 1242 1377 0.77 0.53
+anchored max 4421 4114.08 3749 848 1.26 0.36
+anchored max 4429 4095.24 3751 847 1.28 0.35
+alternation max 7208 6890.38 10641 1476 4.17 0.30
+alternation max 7211 6895.07 10641 1476 4.17 0.29

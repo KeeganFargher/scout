@@ -1,0 +1,16 @@
+# E58's first version: prefetch_postings asked only for the lists certain to be decoded (an
+# AND's rarest), not the bounded walk. Cold serve (probe of cold-faults.sh's kind, before it
+# was a harness script), reads issued under a fault in postings, perf on rep 1:
+selective_symbol 217 (base 248)
+smart_case 350 (base 399)
+# query ms reads r/s aqu util, both reps
+llvm_regex 234 587 2509 3.26 0.43
+llvm_regex 240 586 2442 5.53 4.62
+selective_symbol 246 514 2089 2.89 0.60
+selective_symbol 244 516 2115 2.18 0.41
+smart_case 416 1178 2832 2.26 0.42
+smart_case 371 1178 3175 3.29 0.54
+literal_none 43 78 1814 0.93 0.19
+literal_none 89 78 876 0.90 10.79
+anchored 3394 2414 711 1.83 0.39
+anchored 3631 2422 667 1.55 0.39

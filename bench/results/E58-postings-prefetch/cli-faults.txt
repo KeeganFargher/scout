@@ -1,0 +1,12 @@
+# cli-faults.sh then cli-faults-summary.sh's first version (event, kernel entry, first scout
+# frame) on a cold CLI llvm_regex, bin-head, 2 CPUs, no io.max. 1370 block_rq_issue samples.
+    415 block:block_rq_issue:	filemap_fault	<scout_index_native::NativeShard as scout_core::ports::Shard>::postings
+    404 block:block_rq_issue:	do_madvise
+    339 block:block_rq_issue:	filemap_fault	scout_index_native::NativeShard::dict_entry
+    123 block:block_rq_issue:	filemap_fault
+     52 block:block_rq_issue:	filemap_fault	scout_index_native::NativeShard::open
+     30 block:block_rq_issue:	filemap_fault	scout_index_native::NativeShard::stored
+      4 block:block_rq_issue:	__x64_sys_mkdir	scout_store_fs::FsStore::open
+      1 block:block_rq_issue:	ksys_read	<scout_store_fs::FsStore
+      1 block:block_rq_issue:	ksys_read
+      1 block:block_rq_issue:	__x64_sys_openat	scout_index_native::NativeShard::open

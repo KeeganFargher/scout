@@ -1,0 +1,22 @@
+# decoded-lists.sh: the posting lists each query of queries-big.tsv decodes (CLI, freshness
+# off, 2 threads), from a throwaway build of HEAD before E58 with one line added to
+# NativeShard::postings before decoding: eprintln!("LIST {} {}", range.len(), count);
+# Lists per size band in bytes (<=8, 9-64, 65-512, 513-4096, over), and MiB of the two largest.
+literal_ident      lists   512  <=8    19  <=64    30  <=512    98  <=4K   203 (  0.4 MiB)  >4K  162 (   1.0 MiB)
+literal_common     lists   567  <=8    13  <=64    39  <=512    71  <=4K   325 (  0.7 MiB)  >4K  119 (   0.6 MiB)
+literal_none       lists    89  <=8    28  <=64    27  <=512    23  <=4K    10 (  0.0 MiB)  >4K    1 (   0.0 MiB)
+literal_long       lists  1603  <=8    18  <=64    40  <=512    40  <=4K   204 (  0.5 MiB)  >4K 1301 (  11.8 MiB)
+ident_regex        lists   574  <=8    11  <=64    16  <=512    58  <=4K   234 (  0.5 MiB)  >4K  255 (   2.0 MiB)
+alternation        lists   410  <=8    21  <=64    53  <=512   148  <=4K   164 (  0.3 MiB)  >4K   24 (   0.2 MiB)
+crbug_regex        lists   481  <=8    19  <=64    27  <=512    74  <=4K   290 (  0.5 MiB)  >4K   71 (   0.7 MiB)
+case_insensitive   lists   461  <=8    11  <=64    21  <=512    52  <=4K   218 (  0.4 MiB)  >4K  159 (   1.1 MiB)
+smart_case         lists   446  <=8    14  <=64    32  <=512   122  <=4K   208 (  0.3 MiB)  >4K   70 (   0.5 MiB)
+word               lists   236  <=8    15  <=64    18  <=512    36  <=4K    85 (  0.2 MiB)  >4K   82 (   0.5 MiB)
+anchored           lists   533  <=8    14  <=64    29  <=512    60  <=4K   125 (  0.3 MiB)  >4K  305 (   2.1 MiB)
+date_regex         lists    56  <=8    11  <=64    12  <=512    22  <=4K    10 (  0.0 MiB)  >4K    1 (   0.0 MiB)
+count_mode         lists   384  <=8    15  <=64    22  <=512    55  <=4K   182 (  0.4 MiB)  >4K  110 (   0.7 MiB)
+files_mode         lists   604  <=8    16  <=64    25  <=512    61  <=4K   235 (  0.5 MiB)  >4K  267 (   1.9 MiB)
+llvm_regex         lists   228  <=8    25  <=64    29  <=512    57  <=4K    99 (  0.2 MiB)  >4K   18 (   0.1 MiB)
+rare_regex         lists   337  <=8    11  <=64    22  <=512    52  <=4K   175 (  0.3 MiB)  >4K   77 (   0.6 MiB)
+selective_long     lists   281  <=8    24  <=64    73  <=512   121  <=4K    62 (  0.1 MiB)  >4K    1 (   0.0 MiB)
+selective_symbol   lists   269  <=8    38  <=64    51  <=512    72  <=4K    92 (  0.2 MiB)  >4K   16 (   0.1 MiB)
