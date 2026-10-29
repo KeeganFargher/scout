@@ -1872,6 +1872,17 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   - Time to ready on an evicted index: 2,224 and 2,286 ms base, 2,253 and 2,271 ms E51.
   - **Kept**: every clause passes.
 
+### Probe: what `anchored`'s anchors cost
+
+- Question: does `^` or `$` in `anchored` (`^#include "base/\w+\.h"$`) push the regex
+  engine off its literal fast path, so the query pays for the anchors?
+- Probe: `scout search` on E43's base index, page cache warm, all CPUs, 5 runs each:
+  - both anchors: 1,174–1,224 ms (80,240 lines)
+  - no `^`: 1,113–1,153 ms
+  - no `$`: 1,170–1,205 ms
+  - neither: 1,133–1,237 ms (80,323 lines)
+- No: the anchors cost at most ~5%, within run-to-run spread. No experiment follows.
+
 ## Ranking experiments
 
 Golden set: `bench/golden/`, kept out of the public repository because its labels are
