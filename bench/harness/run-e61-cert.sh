@@ -30,9 +30,12 @@ grep -v -e '^#' -e '^$' "$P/../queries-search-ms.tsv" | while IFS= read -r line;
   name=${line%%$'\t'*} rest=${line#*$'\t'}
   flags=${rest%%$'\t'*} pat=${rest#*$'\t'}
   for b in "$A" "$B" "$A" "$B"; do
-    # Warm-up; a search that matches nothing exits 1, as rg does, so only its exit is ignored.
+    # Warm-up; a search that matches nothing exits 1, as rg does, so 1 is allowed and any
+    # other failure stops the run.
+    rc=0
     # shellcheck disable=SC2086
-    taskset -c 0 "$b/scout" --index-dir "$I" search --freshness off --threads 1 $flags -- "$pat" < /dev/null > /dev/null || true
+    taskset -c 0 "$b/scout" --index-dir "$I" search --freshness off --threads 1 $flags -- "$pat" < /dev/null > /dev/null || rc=$?
+    [ "$rc" -le 1 ] || { echo "$name: warm-up exited $rc" >&2; exit 1; }
     # shellcheck disable=SC2086
     n=$(taskset -c 0 "$PERF" stat -x, -r 9 -e instructions:u "$b/scout" --index-dir "$I" search --freshness off --threads 1 \
       $flags -- "$pat" < /dev/null 2>&1 > /dev/null | awk -F, '$3 == "instructions:u" { print $1 }')
