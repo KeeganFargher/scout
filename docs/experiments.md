@@ -69,6 +69,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E52 | `prefetch` joins by E50's balance for a query whose content bytes cost 1.5x its reads (estimated for the whole query while planning), by E42's 32 KiB gaps otherwise                                                                                                                                                         | —                                                     | —           | **kept** (cold 0.949, 0.947 and 0.950 per rep; held out: `small_vector` 0.775, `const_auto_ref` 0.901; no query over 5% slower cold; warm 1.022, the estimate costs 4–7% of a broad warm search, E53's target)                                                                                                                                                                                                             |
 | E53 | Planning and read-ahead look a candidate's size up with a new `Shard::size`, not `meta`, which checked the path's UTF-8 on every lookup                                                                                                                                                                                      | —                                                     | —           | **rejected** (warm search alone 0.965 and 0.957, `crbug_regex` and `files_mode` ~6% faster; but cold 1.068, `llvm_regex` 1.38 and `selective_long` 1.37 slower in both reps: path pages were first read during verification, behind its read-ahead)                                                                                                                                                                        |
 | E54 | E53, plus `prefetch` queuing each block's paths after its content                                                                                                                                                                                                                                                            | —                                                     | —           | **rejected** (warm search alone 0.979 and 0.966; cold 1.085, worse than E53: `llvm_regex` 1.50, `selective_symbol` 1.38, `smart_case` 1.23, the broad queries 3–8% slower; cold-io: 4–21% more reads)                                                                                                                                                                                                                      |
+| E55 | E53's `Shard::size` after planning only (`want`, `queue_block`); `chunk_repo` keeps `meta`, whose path read faults the paths section in while planning                                                                                                                                                                       | —                                                     | —           | **rejected** (warm search alone 0.986 and 0.979 against ≤ 0.98 in both passes; cold 0.978 with identical reads, no query slower)                                                                                                                                                                                                                                                                                           |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2012,6 +2013,29 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   read-around covering the paths of many candidates, while the disk was otherwise idle;
   that, not reading them early as such, is what the small queries depended on. E55 keeps
   `meta` where it does that (`chunk_repo`, during planning) and uses `size` only after it.
+
+### E55: the size lookup after planning only
+
+- Why: E54 showed the small cold queries depend on `chunk_repo`'s `meta` faulting the
+  paths in while planning. So keep it there, with a comment saying why, and use E53's
+  `size` only in `want` (twice a candidate with E52's estimate) and `queue_block`.
+- Rule set before the run (`run-e55.sh`), against E52: search-ms geomean ≤ 0.98 in both
+  passes and no query over 1.045 in both; cold pooled ≤ 1.01 (E51's cold A/A) and no query
+  over 10% slower cold in both reps.
+- Results ([search-ms](../bench/results/E55-size-after-planning/search-ms.txt),
+  [serve-ab](../bench/results/E55-size-after-planning/ab-4G/summary.txt), cold-io for
+  [base](../bench/results/E55-size-after-planning/cold-io-base.txt) and
+  [E55](../bench/results/E55-size-after-planning/cold-io-size.txt)):
+  - Warm, search alone: **0.986** and 0.979; `crbug_regex` 0.970 and 0.964, `files_mode`
+    0.976 and 0.940; worst `smart_case` 1.013 in one pass.
+  - Cold 0.978, no query slower in both reps; cold-io reads identical to E52's (its
+    paths are read where they were).
+  - **Rejected**: the first pass misses ≤ 0.98 by 0.006. The rule is held as set; the
+    ~2% warm it shows is about twice the A/A's pass noise, too small to keep a port method
+    for on this evidence.
+- What is left of E52's warm cost (4–7% on broad searches) is the estimate's per-candidate
+  `want` and `stored`, run serially within each repo. Not tried: folding the estimate into
+  `chunk_repo`'s own pass over the candidates.
 
 ### Probe: what `anchored`'s anchors cost
 
