@@ -2329,7 +2329,9 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   far stays under the price of verifying the current candidates, as E22. An absent
   trigram still empties the AND before anything is decoded.
 - Held-out set, [queries-andor.tsv](../bench/queries-andor.tsv): eight such regexes, each
-  planned as an AND with an OR part, chosen by their plan and before any timing.
+  planned as an AND with an OR part. Not wholly held out: `andor_crbug` is the probe that
+  prompted the change, and the build before's stage times for all eight were printed while
+  choosing them by their plan; E62's were not.
 - Rule, committed before the run ([run-e62.sh](../bench/harness/run-e62.sh), fa90caa):
   held-out warm `search-ms.sh` at 2 CPUs ≤ 0.95 in both passes; instructions retired on
   every warm query of `queries-search-ms.tsv` within +0.1% (E61's bound); cold, both on a
@@ -2342,10 +2344,10 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
     `andor_expect` 0.873 and 0.881; `andor_crbug_digits` 0.930 and 1.013, `andor_include`
     0.988 and 0.986.
   - Instructions ([ratios](../bench/results/E62-and-prices-or/instructions-ratio.txt)): every query 0.992–1.000 of the
-    build before, the same in both passes; `files_mode` 0.992, `smart_case` 0.992. Their
-    plans are trigram-only ANDs and ORs, so fewer instructions there come from the walk
-    itself (one stable sort of priced parts, no separate list of decoded lists); not
-    profiled further.
+    build before, the same in both passes; `files_mode` 0.992, `smart_case` 0.992. Every
+    query of both suites plans as a trigram-only AND or a top-level OR and has the same
+    candidates on both builds (`--stats`), so no different list is decoded; where the
+    0.8% goes is not known.
   - Cold on a t3.medium's caps ([summary](../bench/results/E62-and-prices-or/ab-tclass/summary.txt),
     [reps](../bench/results/E62-and-prices-or/ab-tclass/reps.txt)): the 18 **0.998**, none over 10% slower in both reps;
     held-out **0.887**: `andor_crbug` 0.667, `andor_cast` 0.709, `andor_delegate` 0.914,
@@ -2359,9 +2361,14 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   0.666); on the t-class caps, bound by bytes, it barely does (0.984, 0.989). E22's price
   is per postings decoded and knows neither volume; pricing a candidate by the volume's
   bytes per read (as E60 does for the read join) is the next step it points to.
-- **Kept**. Output is the build before's on every query in every stage (`search-ms.sh` and
-  `serve-ab.sh` compare it), and the change only leaves candidates in, which verification
-  removes, so the rg parity gate is not rerun (as E50).
+- `serve-ab.sh`'s 2-rep warm passes, over the 26 queries: 0.958 on gp3, 0.935 on the
+  t-class caps; on gp3 `literal_common` 1.074 and `ident_regex` 1.092, inside the ±5% a rep
+  of that pass moves (E51's A/A), on queries whose candidates do not change.
+- Parity with rg ([parity](../bench/results/E62-and-prices-or/parity/)): `parity-e30.sh`
+  on the bench corpus, raw and lz4 at 1 and 12 CPUs, and `scout-bench` over chromium +
+  llvm-project with the 18 served queries and the held-out eight: ALL OK in every run.
+- **Kept**. Output is the build before's on every query in every stage and rg's in every
+  parity run; the change only leaves candidates in, which verification removes.
 
 ### Probe: what `anchored`'s anchors cost
 

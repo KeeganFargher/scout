@@ -1284,7 +1284,7 @@ fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
             // Every part is priced before any is decoded, an OR or nested AND as well as a
             // trigram (E62): decoding a part only to drop a few candidates a rarer part left
             // costs more than verifying them, whatever the part is. Before E62 every
-            // non-trigram part was decoded whole first, so `(TODO|FIXME).*crbug\.com/4012`
+            // non-trigram part was decoded whole first, so `(TODO|FIXME|HACK).*crbug\.com/4012`
             // read all three long lists to drop 50 of 609 candidates.
             let mut priced = Vec::with_capacity(parts.len());
             for p in parts {
@@ -1900,7 +1900,9 @@ mod tests {
         assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
         assert_eq!(shard.reads(), (vec![], vec![t(b"ghi")]));
         // The same OR under an AND the filter lets through: its branches are still asked,
-        // and only the one it lets through is counted to price the OR (E62).
+        // and only the one it lets through is counted to price the OR (E62). ghi is the
+        // AND's own trigram as well as the OR's branch here, so it is counted and decoded
+        // once for each.
         let q = Query::And(vec![Query::Tri(t(b"ghi")), q]);
         assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
         assert_eq!(shard.reads(), (vec![t(b"ghi"), t(b"ghi")], vec![t(b"ghi"), t(b"ghi")]));
@@ -1968,7 +1970,35 @@ mod tests {
             HashMap::from([(t(b"tod"), vec![4]), (t(b"fix"), vec![9]), (t(b"cru"), (0..long).collect::<Vec<_>>())]);
         let shard = ListShard::new(lists, vec![]);
         assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![4, 9]));
-        assert_eq!(shard.reads().1, vec![t(b"tod"), t(b"fix")]);
+        // Both branches are counted to price the OR, then the trigram for its own price;
+        // the trigram's long list is never decoded.
+        assert_eq!(shard.reads(), (vec![t(b"tod"), t(b"fix"), t(b"cru")], vec![t(b"tod"), t(b"fix")]));
+    }
+
+    #[test]
+    fn a_priced_and_stays_a_superset_with_nested_parts_and_no_constraint() {
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        let tri = |b: &[u8; 3]| Query::Tri(t(b));
+        let lists = HashMap::from([
+            (t(b"abc"), vec![1, 2, 3, 4]),
+            (t(b"bcd"), vec![2, 3, 4]),
+            (t(b"cde"), vec![3, 4, 5]),
+            (t(b"xyz"), vec![9]),
+        ]);
+        let shard = ListShard::new(lists, vec![]);
+        // A part with no constraint decodes nothing and drops nothing: the AND is its other
+        // part's list.
+        let q = Query::And(vec![Query::All, tri(b"abc")]);
+        assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![1, 2, 3, 4]));
+        // Nothing but parts with no constraint: every unit, as before E62.
+        assert_eq!(candidates(&shard, &Query::And(vec![Query::All, Query::All])).unwrap(), None);
+        // An AND under an OR under an AND: ((abc & bcd) | xyz) & cde. All lists are short, so
+        // all are decoded and the result is the true one, [3, 4]; whatever the budget skips
+        // it may only add to that.
+        let q = Query::And(vec![Query::Or(vec![Query::And(vec![tri(b"abc"), tri(b"bcd")]), tri(b"xyz")]), tri(b"cde")]);
+        let got = candidates(&shard, &q).unwrap().unwrap();
+        assert!([3, 4].iter().all(|u| got.contains(u)), "{got:?}");
+        assert_eq!(got, vec![3, 4]);
     }
 
     /// Only maps units to docs.
