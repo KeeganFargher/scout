@@ -1,0 +1,4 @@
+listening on http://127.0.0.1:18500
+sync: 0 reindexed, 0 removed, 0 failed, 3 repos in catalog, 0.4s
+Terminated
+ebs cpus=2 mem=4G mbps=125 iops=3000 rc=143 cgroup_peak_mib=1895 oom_kills=0 io: rbytes=6575837184 wbytes=31154176 rios=120581 wios=5 dbytes=0 dios=0

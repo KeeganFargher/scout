@@ -76,6 +76,7 @@ Timings on Windows are noisy (±15% run to run), so only clear wins are kept.
 | E59 | `prefetch` joins gaps of up to 16 KiB instead of 32, measured on a t-class volume (43 MB/s, 2000 IOPS) and on gp3                                                                                                                                                                                                            | —                                                     | —           | **rejected as a constant** (t-class cold 0.906 and 0.910 per rep; gp3 cold 1.094 and 1.090, 8 queries over 10% slower in both reps): the gap is the volume's to set (E60)                                                                                                                                                                                                                                                  |
 | E60 | The read join from the volume's caps: `--read-mbps` and `--read-iops` (gp3's 125 and 3000 by default) give the largest power of two at or under its bytes per read, instead of a constant 32 KiB                                                                                                                             | —                                                     | —           | **rejected, retested as E61** (warm `search-ms` at 2 CPUs 1.020 and 1.003 on a quiet box, `files_mode` 1.059 and 1.054; t-class cold 0.902 and 0.903 per rep with its caps given; gp3 default 1.008 cold, the same bytes read)                                                                                                                                                                                             |
 | E61 | E60 retested warm, then its shipped build (flags on `search` and `serve` only) certified on every stage                                                                                                                                                                                                                      | —                                                     | —           | **kept** on instructions retired, a criterion adopted after its warm rule failed: one build passed every warm stage, the next failed at 1 CPU (1.000 and 1.013); the shipped build, rules committed before it ran: every query +0.003% to +0.087% instructions, gp3 cold 1.000, t-class cold 0.898 (0.895 and 0.901)                                                                                                       |
+| E62 | An AND prices every part, an OR or nested AND as well as a trigram, and decodes cheapest first under E22's budget, instead of decoding every non-trigram part whole first                                                                                                                                                    | —                                                     | —           | **kept** (held-out ANDs with an OR part, warm 0.886 and 0.906; cold 0.887 on a t3.medium's caps and 0.796 on gp3's, `andor_crbug` 0.667 and 0.722; the 18 served queries cold 0.998 and 0.995; warm instructions 0.992–1.000)                                                                                                                                                                                              |
 
 Bench memory columns (from E4): _peak WS_ includes touched mmap pages, which are shared and
 evictable; _peak private_ is the commit the process really needs, and is the number that has
@@ -2310,6 +2311,57 @@ limit per scope); the HTTP client runs on CPUs outside the server's set.
   cannot tell 1% of layout from 1% of cost. Each binary that is kept runs its rule itself.
   And every cold measurement before E60 ran at gp3's caps while the box this targets is
   capped by its instance: later experiments measure on the t-class caps too.
+
+### E62: an AND prices its OR parts
+
+- Why: a research shortlist (pg_fts 1.15, "ranked `rare & (apple | banana)`", 3.6 → 0.2 ms)
+  suggested driving an AND from its rarest part and skipping segments that lack a required
+  term. scout did both for trigrams already (E22's budget, E24's filter), but an AND's
+  other parts were each decoded whole before any trigram was weighed. Probe, warm, 2 CPUs:
+  `(TODO|FIXME|HACK).*crbug\.com/4012` spent 14.4 ms decoding postings against 4.3 ms for
+  `crbug\.com/4012` alone, its three long lists dropping 50 of 609 candidates. No query
+  of `queries-big.tsv` or `queries-search-ms.tsv` has such an AND: the realistic ones are
+  an alternation and a rare literal joined by `.*` or `\w*`.
+- Change (`candidates` in `scout-core/src/search.rs`): every part is priced before any is
+  decoded, a trigram at its count plus `LIST_COST_POSTINGS`, an OR or nested AND at the sum
+  over every list it may decode (`decode_cost`, an upper bound; branches the filter
+  rejects cost nothing). Then cheapest first, a part is decoded only while all decoding so
+  far stays under the price of verifying the current candidates, as E22. An absent
+  trigram still empties the AND before anything is decoded.
+- Held-out set, [queries-andor.tsv](../bench/queries-andor.tsv): eight such regexes, each
+  planned as an AND with an OR part, chosen by their plan and before any timing.
+- Rule, committed before the run ([run-e62.sh](../bench/harness/run-e62.sh), fa90caa):
+  held-out warm `search-ms.sh` at 2 CPUs ≤ 0.95 in both passes; instructions retired on
+  every warm query of `queries-search-ms.tsv` within +0.1% (E61's bound); cold, both on a
+  t3.medium's caps (both arms told them) and on gp3's, over the 18 served queries plus the
+  held-out set: the 18 ≤ 1.01 with none over 10% slower in both reps, the held-out ≤ 0.97.
+  `search-ms.sh` also checks that both binaries print the same output on every query.
+- Results ([verdict](../bench/results/E62-and-prices-or/verdict.txt)), every stage passed:
+  - Held-out warm ([search-ms](../bench/results/E62-and-prices-or/search-ms-andor-2.txt)): **0.886 and 0.906**.
+    `andor_crbug` 0.685 and 0.743 (26.8 → 18.4 ms), `andor_cast` 0.852 and 0.841,
+    `andor_expect` 0.873 and 0.881; `andor_crbug_digits` 0.930 and 1.013, `andor_include`
+    0.988 and 0.986.
+  - Instructions ([ratios](../bench/results/E62-and-prices-or/instructions-ratio.txt)): every query 0.992–1.000 of the
+    build before, the same in both passes; `files_mode` 0.992, `smart_case` 0.992. Their
+    plans are trigram-only ANDs and ORs, so fewer instructions there come from the walk
+    itself (one stable sort of priced parts, no separate list of decoded lists); not
+    profiled further.
+  - Cold on a t3.medium's caps ([summary](../bench/results/E62-and-prices-or/ab-tclass/summary.txt),
+    [reps](../bench/results/E62-and-prices-or/ab-tclass/reps.txt)): the 18 **0.998**, none over 10% slower in both reps;
+    held-out **0.887**: `andor_crbug` 0.667, `andor_cast` 0.709, `andor_delegate` 0.914,
+    the rest 0.955–0.989.
+  - Cold on gp3's caps ([summary](../bench/results/E62-and-prices-or/ab-gp3/summary.txt), [reps](../bench/results/E62-and-prices-or/ab-gp3/reps.txt)):
+    the 18 **0.995**, none over 10% slower in both; held-out **0.796**: `andor_cast` 0.616,
+    `andor_expect` 0.666, `andor_crbug` 0.722, `andor_check` 0.761.
+- The trade, visible in MiB read: leaving an OR undecoded keeps candidates it would have
+  dropped, so `andor_check` and `andor_expect` read more content cold (20 → 29 and 22 →
+  31 MiB) in fewer posting-list reads. On gp3, bound by reads per second, that wins (0.761,
+  0.666); on the t-class caps, bound by bytes, it barely does (0.984, 0.989). E22's price
+  is per postings decoded and knows neither volume; pricing a candidate by the volume's
+  bytes per read (as E60 does for the read join) is the next step it points to.
+- **Kept**. Output is the build before's on every query in every stage (`search-ms.sh` and
+  `serve-ab.sh` compare it), and the change only leaves candidates in, which verification
+  removes, so the rg parity gate is not rerun (as E50).
 
 ### Probe: what `anchored`'s anchors cost
 

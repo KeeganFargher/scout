@@ -1,0 +1,8 @@
+andor_crbug 26.80 18.35 26.50 19.68
+andor_crbug_digits 86.59 80.53 82.41 83.49
+andor_delegate 112.23 107.17 111.95 106.58
+andor_check 27.15 24.05 27.33 24.48
+andor_cast 14.16 12.06 14.30 12.03
+andor_include 108.13 106.80 107.01 105.54
+andor_parse 79.36 76.09 78.83 76.29
+andor_expect 32.44 28.31 32.57 28.69

@@ -1,0 +1,62 @@
+## warm.json: warm, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 27 | 27 | 0.0 | 0 |
+| literal_common | 183 | 183 | 0.0 | 0 |
+| literal_none | 1 | 1 | 0.0 | 0 |
+| literal_long | 275 | 275 | 0.0 | 0 |
+| ident_regex | 105 | 105 | 0.0 | 0 |
+| alternation | 269 | 269 | 0.0 | 0 |
+| crbug_regex | 81 | 81 | 0.0 | 0 |
+| case_insensitive | 146 | 146 | 0.0 | 0 |
+| smart_case | 37 | 37 | 0.0 | 0 |
+| word | 141 | 141 | 0.0 | 0 |
+| anchored | 250 | 250 | 0.0 | 0 |
+| date_regex | 419 | 419 | 0.0 | 0 |
+| count_mode | 64 | 64 | 0.0 | 0 |
+| files_mode | 56 | 56 | 0.0 | 0 |
+| llvm_regex | 14 | 14 | 0.0 | 0 |
+| rare_regex | 43 | 43 | 0.0 | 0 |
+| selective_long | 8 | 8 | 0.0 | 0 |
+| selective_symbol | 10 | 10 | 0.0 | 0 |
+| andor_crbug | 18 | 18 | 0.0 | 0 |
+| andor_crbug_digits | 69 | 69 | 0.0 | 0 |
+| andor_delegate | 90 | 90 | 0.0 | 0 |
+| andor_check | 17 | 17 | 0.0 | 0 |
+| andor_cast | 11 | 11 | 0.0 | 0 |
+| andor_include | 92 | 92 | 0.0 | 0 |
+| andor_parse | 61 | 61 | 0.0 | 0 |
+| andor_expect | 21 | 21 | 0.0 | 0 |
+geomean p50 50 ms; 26 of 26 under 1 s
+
+## cold.json: cold, 1 rounds, read_ahead_kb 128
+| query | p50 ms | p90 ms | read MiB | major faults |
+|---|---:|---:|---:|---:|
+| literal_ident | 555 | 555 | 64.3 | 417 |
+| literal_common | 3729 | 3729 | 421.5 | 606 |
+| literal_none | 38 | 38 | 9.0 | 36 |
+| literal_long | 5079 | 5079 | 580.4 | 555 |
+| ident_regex | 2319 | 2319 | 296.0 | 373 |
+| alternation | 5736 | 5736 | 693.9 | 413 |
+| crbug_regex | 1955 | 1955 | 233.5 | 469 |
+| case_insensitive | 2667 | 2667 | 311.7 | 357 |
+| smart_case | 459 | 459 | 46.2 | 406 |
+| word | 3497 | 3497 | 422.9 | 174 |
+| anchored | 3331 | 3331 | 405.7 | 353 |
+| date_regex | 2033 | 2033 | 248.5 | 74 |
+| count_mode | 1844 | 1844 | 218.1 | 326 |
+| files_mode | 2008 | 2008 | 252.6 | 396 |
+| llvm_regex | 172 | 172 | 28.9 | 176 |
+| rare_regex | 1234 | 1234 | 110.3 | 291 |
+| selective_long | 150 | 150 | 24.5 | 253 |
+| selective_symbol | 131 | 131 | 32.9 | 253 |
+| andor_crbug | 366 | 366 | 23.0 | 839 |
+| andor_crbug_digits | 1620 | 1620 | 137.5 | 827 |
+| andor_delegate | 1576 | 1576 | 147.7 | 1154 |
+| andor_check | 359 | 359 | 20.4 | 746 |
+| andor_cast | 249 | 249 | 19.2 | 472 |
+| andor_include | 1751 | 1751 | 197.9 | 563 |
+| andor_parse | 1148 | 1148 | 92.3 | 903 |
+| andor_expect | 354 | 354 | 22.4 | 547 |
+geomean p50 952 ms; 10 of 26 under 1 s
+

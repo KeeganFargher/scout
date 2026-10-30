@@ -1,0 +1,7 @@
+alternation 0.99973 0.99973
+crbug_regex 0.99717 0.99718
+date_regex 1.00000 1.00000
+dcheck 0.99913 0.99914
+files_mode 0.99176 0.99177
+literal_common 0.99820 0.99821
+smart_case 0.99227 0.99225

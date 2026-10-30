@@ -1,0 +1,4 @@
+1 held-out warm: geomean 0.886 0.906: pass
+2 instructions: pass
+3 t-class: the 18 0.998, over 10% slower in both: none; held-out 0.887 (cast 0.709 check 0.984 crbug 0.667 crbug_digits 0.955 delegate 0.914 expect 0.989 include 0.976 parse 0.976): pass
+3 gp3: the 18 0.995, over 10% slower in both: none; held-out 0.796 (cast 0.616 check 0.761 crbug 0.722 crbug_digits 0.899 delegate 0.918 expect 0.666 include 0.948 parse 0.916): pass
