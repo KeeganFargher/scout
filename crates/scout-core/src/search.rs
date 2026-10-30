@@ -17,7 +17,6 @@ use termcolor::NoColor;
 use crate::indexer::UNIT_TARGET;
 use crate::ports::{DocId, Extent, RepoSource, Shard, UnitId, Want};
 use crate::query::{PlanCase, Query, analyze};
-use crate::trigram::Trigram;
 use crate::{Error, Result};
 
 mod bounded;
@@ -1282,49 +1281,51 @@ fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
         // The filter let the whole AND through, so it let every part through too: nothing
         // left to ask it here.
         Query::And(parts) => {
-            let mut lists = Vec::with_capacity(parts.len());
-            let mut tris: Vec<Trigram> = Vec::new();
+            // Every part is priced before any is decoded, an OR or nested AND as well as a
+            // trigram (E62): decoding a part only to drop a few candidates a rarer part left
+            // costs more than verifying them, whatever the part is. Before E62 every
+            // non-trigram part was decoded whole first, so `(TODO|FIXME).*crbug\.com/4012`
+            // read all three long lists to drop 50 of 609 candidates.
+            let mut priced = Vec::with_capacity(parts.len());
             for p in parts {
-                if let Query::Tri(t) = p {
-                    tris.push(*t);
-                    continue;
-                }
-                if let Some(l) = candidates(shard, p)? {
-                    if l.is_empty() {
-                        return Ok(Some(l));
+                let cost = match p {
+                    Query::Tri(t) => {
+                        let n = shard.count(*t)?;
+                        // An absent trigram empties the AND before anything is decoded.
+                        if n == 0 {
+                            return Ok(Some(Vec::new()));
+                        }
+                        u64::from(n) + LIST_COST_POSTINGS
                     }
-                    lists.push(l);
-                }
+                    other => decode_cost(shard, other)?,
+                };
+                priced.push((cost, p));
             }
-            let Some(counted) = count_trigrams(shard, &tris)? else {
-                return Ok(Some(Vec::new()));
-            };
-            let mut rest = counted.iter();
+            // Stable: equal prices keep the plan's order.
+            priced.sort_by_key(|&(cost, _)| cost);
+            let mut acc: Option<Vec<UnitId>> = None;
             let mut spent = 0u64;
-            if let Some(&(n, t)) = rest.next() {
-                lists.push(shard.postings(t)?);
-                spent = u64::from(n) + LIST_COST_POSTINGS;
-            }
-            lists.sort_unstable_by_key(Vec::len);
-            let mut it = lists.into_iter();
-            let Some(first) = it.next() else {
-                return Ok(None);
-            };
-            let mut acc = it.fold(first, |acc, l| intersect(&acc, &l));
-            // Rarest first, a further list is decoded only while all decoding so far, it
+            // Cheapest first, a further part is decoded only while all decoding so far, it
             // included, stays under the price of verifying every current candidate (E22):
             // once few candidates remain, reading a long list to drop some of them costs
-            // more than checking them. Counts only grow along the walk and the candidates
-            // only shrink, so the first list over budget ends it.
-            for &(n, t) in rest {
-                let cost = u64::from(n) + LIST_COST_POSTINGS;
-                if acc.is_empty() || spent + cost > acc.len() as u64 * VERIFY_COST_POSTINGS {
+            // more than checking them. Prices only grow along the walk and the candidates
+            // only shrink, so the first part over budget ends it. The cheapest part is
+            // always read: until one is, there are no candidates to weigh against.
+            for (cost, p) in priced {
+                if let Some(a) = &acc
+                    && (a.is_empty() || spent + cost > a.len() as u64 * VERIFY_COST_POSTINGS)
+                {
                     break;
                 }
-                acc = intersect(&acc, &shard.postings(t)?);
+                if let Some(l) = candidates(shard, p)? {
+                    acc = Some(match acc {
+                        None => l,
+                        Some(a) => intersect(&a, &l),
+                    });
+                }
                 spent += cost;
             }
-            Ok(Some(acc))
+            Ok(acc)
         }
         Query::Or(parts) => {
             let mut acc: Vec<UnitId> = Vec::new();
@@ -1355,21 +1356,23 @@ fn candidates(shard: &dyn Shard, query: &Query) -> Result<Option<Vec<UnitId>>> {
 const VERIFY_COST_POSTINGS: u64 = 4096;
 const LIST_COST_POSTINGS: u64 = 512;
 
-/// `tris` with their unit counts, rarest first; `None` when one is absent from the shard,
-/// which empties the AND without decoding anything. Every trigram is counted: counting
-/// only those the shard before ranked rarest (E31) saved no cold reads and cost
-/// candidates.
-fn count_trigrams(shard: &dyn Shard, tris: &[Trigram]) -> Result<Option<Vec<(u32, Trigram)>>> {
-    let mut counted = Vec::with_capacity(tris.len());
-    for &t in tris {
-        let n = shard.count(t)?;
-        if n == 0 {
-            return Ok(None);
+/// What decoding a non-trigram part of an AND would cost, in E22's postings: the sum, over
+/// every list it may decode, of the list's count and `LIST_COST_POSTINGS`. An upper bound,
+/// since a nested AND stops early; a branch the filter rejects is not read, so costs
+/// nothing, as [`candidates`] skips it. Every trigram is counted: counting only those the
+/// shard before ranked rarest (E31) saved no cold reads and cost candidates.
+fn decode_cost(shard: &dyn Shard, query: &Query) -> Result<u64> {
+    match query {
+        Query::All => Ok(0),
+        Query::Tri(t) => Ok(u64::from(shard.count(*t)?) + LIST_COST_POSTINGS),
+        Query::And(parts) | Query::Or(parts) => {
+            let mut cost = 0u64;
+            for p in parts.iter().filter(|p| may_match(shard, p)) {
+                cost += decode_cost(shard, p)?;
+            }
+            Ok(cost)
         }
-        counted.push((n, t));
     }
-    counted.sort_unstable();
-    Ok(Some(counted))
 }
 
 /// Set operations on sorted id lists; used for both unit and doc ids.
@@ -1417,6 +1420,7 @@ fn union(a: &[u32], b: &[u32]) -> Vec<u32> {
 mod tests {
     use super::*;
     use crate::ports::BlockVisitor;
+    use crate::trigram::Trigram;
 
     /// gp3's `read_join` (E42), for every test repo and read-ahead.
     const JOIN: usize = 32 << 10;
@@ -1578,8 +1582,16 @@ mod tests {
                 name: format!("r{r}"),
                 source: Box::new(MemSource(format!("/r{r}"))),
                 shards: vec![Box::new(MemShard(
-                    (0..5).map(|d| (format!("d{d}.txt"), b"needle
-".to_vec())).collect(),
+                    (0..5)
+                        .map(|d| {
+                            (
+                                format!("d{d}.txt"),
+                                b"needle
+"
+                                .to_vec(),
+                            )
+                        })
+                        .collect(),
                     std::sync::Arc::clone(seen),
                 ))],
                 snapshot: None,
@@ -1887,10 +1899,11 @@ mod tests {
         let q = Query::Or(vec![and(&[b"abc", b"xyz"]), Query::Tri(t(b"ghi")), Query::Tri(t(b"uvw"))]);
         assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
         assert_eq!(shard.reads(), (vec![], vec![t(b"ghi")]));
-        // The same OR under an AND the filter lets through: its branches are still asked.
+        // The same OR under an AND the filter lets through: its branches are still asked,
+        // and only the one it lets through is counted to price the OR (E62).
         let q = Query::And(vec![Query::Tri(t(b"ghi")), q]);
         assert_eq!(shard_units(&shard, &q).unwrap(), (Some(vec![7]), false));
-        assert_eq!(shard.reads(), (vec![t(b"ghi")], vec![t(b"ghi"), t(b"ghi")]));
+        assert_eq!(shard.reads(), (vec![t(b"ghi"), t(b"ghi")], vec![t(b"ghi"), t(b"ghi")]));
         // What the filter lets through is planned as before.
         assert_eq!(shard_units(&shard, &and(&[b"abc", b"def"])).unwrap(), (Some(vec![2]), false));
         assert_eq!(shard.reads(), (vec![t(b"abc"), t(b"def")], vec![t(b"abc"), t(b"def")]));
@@ -1932,6 +1945,30 @@ mod tests {
             Query::And(vec![Query::Or(vec![Query::Tri(t(b"def")), Query::Tri(t(b"xyz"))]), Query::Tri(t(b"abc"))]);
         // abc is the AND's only trigram, so it is decoded however long: the rarest is always read.
         assert_eq!(candidates(&shard, &mixed).unwrap(), Some(vec![5, 11, 40]));
+    }
+
+    #[test]
+    fn an_and_prices_its_or_parts_and_leaves_a_costly_one_undecoded() {
+        let t = |b: &[u8; 3]| Trigram::from_bytes(b[0], b[1], b[2]);
+        let long = 2 * VERIFY_COST_POSTINGS as u32;
+        let lists = HashMap::from([
+            (t(b"tod"), (0..long).collect::<Vec<_>>()),
+            (t(b"fix"), (long..2 * long).collect()),
+            (t(b"cru"), vec![4, 8, long + 3]),
+        ]);
+        let shard = ListShard::new(lists, vec![]);
+        // (tod | fix) & cru, as `(TODO|FIXME).*crbug`: cru leaves 3 candidates, and the OR's
+        // two long lists cost more to decode than verifying them, so neither is read. Each
+        // of the 3 is in one of them, so the superset equals the full result here.
+        let q = Query::And(vec![Query::Or(vec![Query::Tri(t(b"tod")), Query::Tri(t(b"fix"))]), Query::Tri(t(b"cru"))]);
+        assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![4, 8, long + 3]));
+        assert_eq!(shard.reads().1, vec![t(b"cru")]);
+        // An OR cheaper than the trigram drives the AND instead.
+        let lists =
+            HashMap::from([(t(b"tod"), vec![4]), (t(b"fix"), vec![9]), (t(b"cru"), (0..long).collect::<Vec<_>>())]);
+        let shard = ListShard::new(lists, vec![]);
+        assert_eq!(candidates(&shard, &q).unwrap(), Some(vec![4, 9]));
+        assert_eq!(shard.reads().1, vec![t(b"tod"), t(b"fix")]);
     }
 
     /// Only maps units to docs.

@@ -1,0 +1,10 @@
+# E62's held-out set: regexes whose plan is an AND with an OR part (none in queries-big.tsv or
+# queries-search-ms.tsv is), which E62 prices instead of decoding whole.
+andor_crbug		(TODO|FIXME|HACK).*crbug\.com/4012
+andor_crbug_digits		(TODO|FIXME|HACK).*crbug\.com/40\d{4}
+andor_delegate		(Render|Navigation)\w*Delegate\w*Observer
+andor_check		(DCHECK|CHECK)\(.*kMaxNumberOf
+andor_cast		(cast|isa)<\w+>\(.*getAsCXXRecordDecl
+andor_include		#include "(base|content)/\w+/browser_\w+\.h"
+andor_parse		(int|bool|void) \w+ParseAttribute\w*\(
+andor_expect		(EXPECT|ASSERT)_\w+\(.*kWebRtc
